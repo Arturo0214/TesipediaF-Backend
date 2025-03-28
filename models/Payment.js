@@ -21,10 +21,31 @@ const paymentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pendiente', 'exitoso', 'fallido'],
+    enum: ['pendiente', 'completed', 'failed', 'cancelled', 'refunded'],
     default: 'pendiente',
   },
-  transactionId: String,
+  transactionId: {
+    type: String,
+    required: true,
+  },
+  // Campos específicos de PayPal
+  paypalOrderId: {
+    type: String,
+  },
+  paypalCaptureId: {
+    type: String,
+  },
+  // Campos para reembolsos
+  refundId: {
+    type: String,
+  },
+  refundReason: {
+    type: String,
+  },
+  refundStatus: {
+    type: String,
+    enum: ['pending', 'completed', 'failed', 'cancelled'],
+  },
 }, {
   timestamps: true,
 });

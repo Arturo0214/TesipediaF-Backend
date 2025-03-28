@@ -1,18 +1,40 @@
 import express from 'express';
+import { protect } from '../middleware/auth.js';
 import {
-  registerUser,
-  loginUser,
-  requestPasswordReset,
-  resetPassword,
+    register,
+    login,
+    logout,
+    getProfile,
+    updateProfile,
+    changePassword,
+    forgotPassword,
+    resetPassword,
+    verifyEmail,
+    resendVerificationEmail,
+    googleAuth,
+    googleCallback
 } from '../controllers/authController.js';
-import { authLimiter } from '../middleware/rateLimiter.js';
+
 
 const router = express.Router();
 
-// Limitar acceso a rutas sensibles
-router.post('/login', authLimiter, loginUser);
-router.post('/register', authLimiter, registerUser);
-router.post('/forgot-password', authLimiter, requestPasswordReset);
-router.post('/reset-password/:token', authLimiter, resetPassword);
+// Rutas públicas
+router.post('/register', register);
+router.post('/login', login);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
+router.get('/verify-email/:token', verifyEmail);
+router.post('/resend-verification', resendVerificationEmail);
 
-export default router;
+// Rutas de Google OAuth
+router.get('/google', googleAuth);
+router.get('/google/callback', googleCallback);
+
+// Rutas protegidas
+router.use(protect);
+router.post('/logout', logout);
+router.get('/profile', getProfile);
+router.put('/profile', updateProfile);
+router.put('/change-password', changePassword);
+
+export default router; 

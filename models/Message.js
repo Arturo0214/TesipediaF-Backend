@@ -3,8 +3,7 @@ import mongoose from 'mongoose';
 const messageSchema = new mongoose.Schema(
   {
     sender: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      type: mongoose.Schema.Types.Mixed, // Puede ser ObjectId o String (publicId)
       required: true,
     },
     receiver: {
@@ -29,6 +28,14 @@ const messageSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isPublic: {
+      type: Boolean,
+      default: false,
+    },
+    senderName: {
+      type: String,
+      required: true,
+    }
   },
   { timestamps: true }
 );

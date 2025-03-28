@@ -1,28 +1,34 @@
-// routes/quoteRoutes.js
 import express from 'express';
+import { protect, admin } from '../middleware/auth.js';
 import {
-  createQuote,
-  getQuoteByPublicId,
-  getMyQuotes,
-  linkQuoteToUser,
+    createQuote,
+    getQuoteByPublicId,
+    getMyQuotes,
+    linkQuoteToUser,
+    getQuotes,
+    getQuoteById,
+    updateQuote,
+    deleteQuote,
+    searchQuotes
 } from '../controllers/quoteController.js';
-
-import { protect } from '../middleware/authMiddleware.js';
-import { quoteLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Crear una cotización pública
-router.post('/', quoteLimiter, createQuote);
+// Public routes
+router.post('/', createQuote);
+router.get('/public/:publicId', getQuoteByPublicId);
 
-// Ver cotización sin estar logueado (por publicId)
-router.get('/:publicId', getQuoteByPublicId);
+// Protected routes
+router.use(protect);
+router.get('/my-quotes', getMyQuotes);
+router.post('/link/:publicId', linkQuoteToUser);
 
-// Obtener mis cotizaciones (logueado)
-router.get('/my/list', protect, getMyQuotes);
+// Admin routes
+router.use(admin);
+router.get('/', getQuotes);
+router.get('/search', searchQuotes);
+router.get('/:id', getQuoteById);
+router.put('/:id', updateQuote);
+router.delete('/:id', deleteQuote);
 
-// Asociar cotización existente a cuenta logueada
-router.patch('/:publicId/link-user', protect, linkQuoteToUser);
-
-export default router;
-
+export default router; 

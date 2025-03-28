@@ -1,9 +1,28 @@
 import express from 'express';
-import { trackVisit } from '../controllers/visitController.js';
-import { visitLimiter } from '../middleware/rateLimiter.js';
+import { protect, admin } from '../middleware/auth.js';
+import {
+    trackVisit,
+    getVisitStats,
+    getVisitHistory,
+    getVisitById,
+    deleteVisit,
+    getVisitAnalytics
+} from '../controllers/visitController.js';
 
 const router = express.Router();
 
-router.post('/track', visitLimiter, trackVisit);
+// Public routes
+router.post('/track', trackVisit);
 
-export default router;
+// Protected routes (admin only)
+router.use(protect);
+router.use(admin);
+
+// Visit management
+router.get('/stats', getVisitStats);
+router.get('/history', getVisitHistory);
+router.get('/analytics', getVisitAnalytics);
+router.get('/:id', getVisitById);
+router.delete('/:id', deleteVisit);
+
+export default router; 

@@ -1,28 +1,28 @@
 import express from 'express';
+import { protect, admin } from '../middleware/auth.js';
 import {
-  getAdminNotifications,
-  getMyNotifications,
-  markNotificationAsRead,
-  markAsRead,
-  markAllAsRead,
-  deleteNotification,
+    getAdminNotifications,
+    markNotificationAsRead,
+    getMyNotifications,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification,
+    getNotificationStats
 } from '../controllers/notificationController.js';
-
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// 🛡️ Rutas protegidas
+// Protected routes
 router.use(protect);
-
-// 🔔 Notificaciones para el usuario autenticado
-router.get('/', getMyNotifications);
-router.patch('/:id/read', markAsRead);
-router.patch('/read-all', markAllAsRead);
+router.get('/my-notifications', getMyNotifications);
+router.post('/:id/read', markAsRead);
+router.post('/mark-all-read', markAllAsRead);
 router.delete('/:id', deleteNotification);
+router.get('/stats', getNotificationStats);
 
-// 🔔 Notificaciones del administrador (requiere ser el SUPER_ADMIN_ID)
-router.get('/admin/all', adminOnly, getAdminNotifications);
-router.patch('/admin/:id/read', adminOnly, markNotificationAsRead);
+// Admin routes
+router.use(admin);
+router.get('/admin', getAdminNotifications);
+router.post('/admin/:id/read', markNotificationAsRead);
 
-export default router;
+export default router; 

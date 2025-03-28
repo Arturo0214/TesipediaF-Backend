@@ -50,7 +50,7 @@ export const createQuote = asyncHandler(async (req, res) => {
       email,
     },
   });
-  
+
   res.status(201).json({
     message: 'Cotización creada exitosamente',
     quote: {
@@ -95,4 +95,71 @@ export const linkQuoteToUser = asyncHandler(async (req, res) => {
   await quote.save();
 
   res.json({ message: 'Cotización vinculada correctamente', quote });
+});
+
+// 📋 Obtener todas las cotizaciones (admin)
+export const getQuotes = asyncHandler(async (req, res) => {
+  const quotes = await Quote.find({}).populate('user', 'name email');
+  res.json(quotes);
+});
+
+// 🔍 Obtener cotización por ID (admin)
+export const getQuoteById = asyncHandler(async (req, res) => {
+  const quote = await Quote.findById(req.params.id).populate('user', 'name email');
+  if (quote) {
+    res.json(quote);
+  } else {
+    res.status(404);
+    throw new Error('Cotización no encontrada');
+  }
+});
+
+// 🔄 Actualizar cotización (admin)
+export const updateQuote = asyncHandler(async (req, res) => {
+  const quote = await Quote.findById(req.params.id);
+
+  if (quote) {
+    quote.taskType = req.body.taskType || quote.taskType;
+    quote.studyArea = req.body.studyArea || quote.studyArea;
+    quote.educationLevel = req.body.educationLevel || quote.educationLevel;
+    quote.taskTitle = req.body.taskTitle || quote.taskTitle;
+    quote.requirements = req.body.requirements || quote.requirements;
+    quote.pages = req.body.pages || quote.pages;
+    quote.dueDate = req.body.dueDate || quote.dueDate;
+    quote.email = req.body.email || quote.email;
+    quote.whatsApp = req.body.whatsApp || quote.whatsApp;
+    quote.status = req.body.status || quote.status;
+
+    const updatedQuote = await quote.save();
+    res.json(updatedQuote);
+  } else {
+    res.status(404);
+    throw new Error('Cotización no encontrada');
+  }
+});
+
+// ❌ Eliminar cotización (admin)
+export const deleteQuote = asyncHandler(async (req, res) => {
+  const quote = await Quote.findById(req.params.id);
+
+  if (quote) {
+    await quote.deleteOne();
+    res.json({ message: 'Cotización eliminada correctamente' });
+  } else {
+    res.status(404);
+    throw new Error('Cotización no encontrada');
+  }
+});
+
+// 🔍 Buscar cotizaciones
+export const searchQuotes = asyncHandler(async (req, res) => {
+  const { query } = req.query;
+  const quotes = await Quote.find({
+    $or: [
+      { taskTitle: { $regex: query, $options: 'i' } },
+      { studyArea: { $regex: query, $options: 'i' } },
+      { taskType: { $regex: query, $options: 'i' } },
+    ],
+  }).populate('user', 'name email');
+  res.json(quotes);
 });

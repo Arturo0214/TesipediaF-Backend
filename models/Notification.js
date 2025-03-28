@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 
+const NOTIFICATION_TYPES = ['visita', 'cotizacion', 'pedido', 'entrega', 'mensaje', 'pago'];
+
 const notificationSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -8,7 +10,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['visita', 'cotizacion', 'pedido', 'entrega', 'mensaje'],
+    enum: NOTIFICATION_TYPES,
     required: true,
   },
   message: {
