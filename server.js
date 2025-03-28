@@ -7,10 +7,12 @@ import morgan from 'morgan';
 import helmet from 'helmet';
 import setCookie from './middleware/setCookie.js'
 import connectDB from './config/db.js';
-
-import { Server } from 'socket.io';
+import { validateRequest } from './middleware/validateRequest.js';
+import { configureSocket } from './sockets/socketConfig.js';
 import { chatSocket } from './sockets/chatSocket.js';
+import { notificationSocket } from './sockets/notificationSocket.js';
 import { generalLimiter } from './middleware/rateLimiter.js';
+import { globalErrorHandler } from './middleware/asyncErrors.js';
 
 // Rutas (a implementar)
 import authRoutes from './routes/authRoutes.js';
@@ -23,10 +25,11 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
-// import paymentRoutes from './routes/paymentRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
+import paypalRoutes from './routes/paypalRoutes.js';
 
 // Middlewares
-import { notFound, errorHandler } from './middleware/errorHandler.js';
+import { notFound } from './middleware/errorHandler.js';
 
 // Configurar variables de entorno
 dotenv.config();
@@ -46,6 +49,7 @@ app.use(setCookie);
 app.use(morgan('dev'));
 app.use(helmet());
 app.use(generalLimiter);
+app.use(validateRequest);
 
 // Rutas base
 app.use('/auth', authRoutes);
@@ -58,25 +62,30 @@ app.use('/upload', uploadRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/chat', chatRoutes);
 app.use('/notifications', notificationRoutes);
-// app.use('/xxpayments', paymentRoutes);
+app.use('/payments', paymentRoutes);
+app.use('/paypal', paypalRoutes);
 
 // Middlewares de error
 app.use(notFound);
-app.use(errorHandler);
+app.use(globalErrorHandler);
 
 // Puerto
 const PORT = process.env.PORT || 8000;
 
-// Iniciar servidor
-app.listen(PORT, () => {
+// Create HTTP server
+const server = http.createServer(app);
+
+// Initialize Socket.IO with configuration
+const io = configureSocket(server);
+
+// Make io accessible to routes
+app.set('io', io);
+
+// Initialize socket functionality
+chatSocket(io);
+notificationSocket(io);
+
+// Start server
+server.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
-
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL,
-    credentials: true,
-  },
-});
-chatSocket(io);

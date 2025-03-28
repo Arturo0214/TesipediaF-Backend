@@ -1,35 +1,42 @@
-// routes/orderRoutes.js
 import express from 'express';
+import { protect, admin } from '../middleware/auth.js';
 import {
-  createOrder,
-  getMyOrders,
-  getOrderById,
-  markAsPaid,
-  uploadDeliveryFile,
-  createOrderFromQuote,
+    createOrder,
+    getOrders,
+    getOrderById,
+    updateOrder,
+    deleteOrder,
+    getMyOrders,
+    updateOrderStatus,
+    uploadOrderFile,
+    deleteOrderFile,
+    getOrderFiles,
+    getOrderHistory,
+    getOrderAnalytics
 } from '../controllers/orderController.js';
-
-import { protect } from '../middleware/authMiddleware.js';
-import { orderLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Crear un pedido manualmente
-router.post('/', protect, orderLimiter, createOrder);
+// Protected routes
+router.use(protect);
+router.post('/', createOrder);
+router.get('/my-orders', getMyOrders);
+router.get('/:id', getOrderById);
+router.put('/:id', updateOrder);
+router.delete('/:id', deleteOrder);
+router.put('/:id/status', updateOrderStatus);
 
-// Crear un pedido desde una cotización pública (requiere que ya esté vinculada al usuario)
-router.post('/from-quote/:publicId', protect, orderLimiter, createOrderFromQuote);
+// File management
+router.post('/:id/files', uploadOrderFile);
+router.delete('/:id/files/:fileId', deleteOrderFile);
+router.get('/:id/files', getOrderFiles);
 
-// Ver todos mis pedidos
-router.get('/my', protect, getMyOrders);
+// Order history and analytics
+router.get('/:id/history', getOrderHistory);
+router.get('/:id/analytics', getOrderAnalytics);
 
-// Ver un pedido específico
-router.get('/:id', protect, getOrderById);
+// Admin routes
+router.use(admin);
+router.get('/', getOrders);
 
-// Marcar como pagado
-router.patch('/:id/pay', protect, markAsPaid);
-
-// Subir archivo de entrega
-router.post('/:id/deliver', protect, uploadDeliveryFile);
-
-export default router;
+export default router; 

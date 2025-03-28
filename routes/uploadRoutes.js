@@ -1,12 +1,29 @@
 import express from 'express';
-import upload from '../middleware/uploadMiddleware.js';
-import { uploadFiles } from '../controllers/uploadController.js';
-import { protect } from '../middleware/authMiddleware.js';
-import { uploadLimiter } from '../middleware/rateLimiter.js';
+import { protect } from '../middleware/auth.js';
+import {
+    uploadFile,
+    deleteFile,
+    getFileInfo,
+    getFileUrl,
+    uploadMultipleFiles,
+    getUploadHistory,
+    getUploadStats
+} from '../controllers/uploadController.js';
 
 const router = express.Router();
 
-// 📤 Subida protegida
-router.post('/', protect, uploadLimiter, upload.array('files', 5), uploadFiles);
+// All routes require authentication
+router.use(protect);
 
-export default router;
+// File management
+router.post('/', uploadFile);
+router.post('/multiple', uploadMultipleFiles);
+router.delete('/:id', deleteFile);
+router.get('/:id/info', getFileInfo);
+router.get('/:id/url', getFileUrl);
+
+// Upload history and stats
+router.get('/history', getUploadHistory);
+router.get('/stats', getUploadStats);
+
+export default router; 

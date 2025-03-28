@@ -1,136 +1,240 @@
 import asyncHandler from 'express-async-handler';
+import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import generateToken from '../utils/generateToken.js';
-import emailSender from '../utils/emailSender.js';
-import crypto from 'crypto';
-import bcrypt from 'bcryptjs';
+import sendEmail from '../utils/emailSender.js'; // ✅ corregido aquí
 
-
-export const registerUser = asyncHandler(async (req, res) => {
+// 📌 Registrar un nuevo usuario
+const register = asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
 
   const userExists = await User.findOne({ email });
   if (userExists) {
     res.status(400);
-    throw new Error('Este correo ya está registrado');
+    throw new Error('El usuario ya existe');
   }
 
   const user = await User.create({ name, email, password });
 
   if (user) {
+    const verificationToken = generateToken(user._id, '24h');
+    user.verificationToken = verificationToken;
+    await user.save();
+
+    await sendEmail({
+      to: user.email,
+      subject: 'Verifica tu cuenta',
+      text: `Por favor verifica tu cuenta haciendo clic en el siguiente enlace: ${process.env.FRONTEND_URL}/verify-email/${verificationToken}`,
+    });
+
     res.status(201).json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token: generateToken(user),
+      token: generateToken(user._id),
     });
   } else {
     res.status(400);
-    throw new Error('No se pudo registrar el usuario');
+    throw new Error('Datos de usuario inválidos');
   }
 });
 
-export const loginUser = asyncHandler(async (req, res) => {
+// 🔑 Login
+const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email }).select('+password');
+  const user = await User.findOne({ email });
 
   if (user && (await user.matchPassword(password))) {
+    if (!user.isVerified) {
+      res.status(401);
+      throw new Error('Por favor verifica tu cuenta primero');
+    }
+
     res.json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
-      token: generateToken(user),
+      token: generateToken(user._id),
     });
   } else {
     res.status(401);
-    throw new Error('Correo o contraseña inválidos');
+    throw new Error('Email o contraseña incorrectos');
   }
 });
 
-export const requestPasswordReset = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-
-    if (!email || typeof email !== "string") {
-        res.status(400);
-        throw new Error("El correo electrónico es obligatorio y debe ser un texto válido.");
-    }
-
-    const user = await User.findOne({ email: email.trim() });
-
-    if (!user) {
-        res.status(404);
-        throw new Error("No se encontró una cuenta con este correo.");
-    }
-
-    // Generar un token seguro
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-
-    // Guardar el token en la base de datos con una expiración de 1 hora
-    user.resetPasswordToken = hashedToken;
-    user.resetPasswordExpires = Date.now() + 3600000;
-
-    await user.save();
-
-    // **Aquí cambiamos la URL para que apunte al FRONTEND**
-    const resetUrl = `${process.env.CLIENT_URL}reset-password/${resetToken}`;
-
-    console.log("🔗 Enlace de restablecimiento generado:", resetUrl); // Verifica en la consola
-
-    // **Nuevo diseño del correo en HTML**
-    const message = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
-            <h2 style="color: #2575fc; text-align: center;">🔒 Restablecimiento de Contraseña</h2>
-            <p style="font-size: 16px;">Hola <strong>${user.name}</strong>,</p>
-            <p style="font-size: 16px;">Hemos recibido una solicitud para restablecer tu contraseña.</p>
-            <p style="font-size: 16px;">Haz clic en el siguiente botón para crear una nueva contraseña:</p>
-            <div style="text-align: center; margin: 20px 0;">
-                <a href="${resetUrl}" 
-                   style="background-color: #2575fc; color: white; padding: 12px 20px; text-decoration: none; font-size: 16px; border-radius: 5px; display: inline-block;">
-                   Restablecer Contraseña
-                </a>
-            </div>
-            <p style="font-size: 14px; color: #666;">Si no solicitaste este cambio, ignora este mensaje.</p>
-            <p style="font-size: 14px; color: #666;">Este enlace expirará en 1 hora.</p>
-            <hr>
-            <p style="font-size: 12px; text-align: center; color: #888;">© 2025 Mi Aplicación | Todos los derechos reservados</p>
-        </div>
-    `;
-
-    await emailSender(user.email, "🔒 Restablecimiento de Contraseña", message);
-
-    res.status(200).json({ message: "Se ha enviado un enlace de restablecimiento a tu correo." });
+// 🔒 Logout
+const logout = asyncHandler(async (req, res) => {
+  res.cookie('jwt', '', {
+    httpOnly: true,
+    expires: new Date(0),
+  });
+  res.status(200).json({ message: 'Sesión cerrada exitosamente' });
 });
 
-export const resetPassword = asyncHandler(async (req, res) => {
-    console.log("🔹 Solicitud recibida en /users/reset-password/:token"); // Depuración
+// 👤 Perfil
+const getProfile = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (user) {
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
+  } else {
+    res.status(404);
+    throw new Error('Usuario no encontrado');
+  }
+});
 
-    const { token } = req.params;
-    const { password } = req.body;
+// 🔄 Actualizar perfil
+const updateProfile = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
 
-    console.log("🔹 Token recibido:", token);
-    console.log("🔹 Nueva contraseña:", password);
+  if (user) {
+    user.name = req.body.name || user.name;
+    user.email = req.body.email || user.email;
 
-    if (!token || !password) {
-        res.status(400).json({ message: "Token y nueva contraseña requeridos." });
-        return;
-    }
+    const updatedUser = await user.save();
 
-    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-    const user = await User.findOne({ resetPasswordToken: hashedToken, resetPasswordExpires: { $gt: Date.now() } });
+    res.json({
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+    });
+  } else {
+    res.status(404);
+    throw new Error('Usuario no encontrado');
+  }
+});
 
-    if (!user) {
-        res.status(400).json({ message: "El token no es válido o ha expirado." });
-        return;
-    }
+// 🔐 Cambiar contraseña
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const user = await User.findById(req.user._id);
 
-    user.password = await bcrypt.hash(password, 10);
+  if (user && (await user.matchPassword(currentPassword))) {
+    user.password = newPassword;
+    await user.save();
+    res.json({ message: 'Contraseña actualizada exitosamente' });
+  } else {
+    res.status(401);
+    throw new Error('Contraseña actual incorrecta');
+  }
+});
+
+// 🔑 Forgot Password
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+
+  if (user) {
+    const resetToken = generateToken(user._id, '1h');
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpire = Date.now() + 3600000;
+    await user.save();
+
+    await sendEmail({
+      to: user.email,
+      subject: 'Recuperación de contraseña',
+      text: `Para recuperar tu contraseña, haz clic en el siguiente enlace: ${process.env.FRONTEND_URL}/reset-password/${resetToken}`,
+    });
+  }
+
+  res.json({ message: 'Si el email existe, recibirás instrucciones para recuperar tu contraseña' });
+});
+
+// 🔁 Reset password
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, password } = req.body;
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const user = await User.findOne({
+    _id: decoded.id,
+    resetPasswordToken: token,
+    resetPasswordExpire: { $gt: Date.now() },
+  });
+
+  if (user) {
+    user.password = password;
     user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save();
+    res.json({ message: 'Contraseña restablecida exitosamente' });
+  } else {
+    res.status(400);
+    throw new Error('Token inválido o expirado');
+  }
+});
+
+// ✅ Verificación de email
+const verifyEmail = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const user = await User.findOne({
+    _id: decoded.id,
+    verificationToken: token,
+  });
+
+  if (user) {
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
+    res.json({ message: 'Email verificado exitosamente' });
+  } else {
+    res.status(400);
+    throw new Error('Token de verificación inválido');
+  }
+});
+
+// 🔄 Reenviar verificación
+const resendVerificationEmail = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+
+  if (user && !user.isVerified) {
+    const verificationToken = generateToken(user._id, '24h');
+    user.verificationToken = verificationToken;
     await user.save();
 
-    res.status(200).json({ message: "Contraseña actualizada correctamente." });
+    await sendEmail({
+      to: user.email,
+      subject: 'Verifica tu cuenta',
+      text: `Por favor verifica tu cuenta haciendo clic en el siguiente enlace: ${process.env.FRONTEND_URL}/verify-email/${verificationToken}`,
+    });
+
+    res.json({ message: 'Email de verificación reenviado' });
+  } else {
+    res.status(400);
+    throw new Error('Usuario no encontrado o ya verificado');
+  }
 });
+
+// Google OAuth (placeholder)
+const googleAuth = asyncHandler(async (req, res) => {
+  res.json({ message: 'Google auth endpoint' });
+});
+
+const googleCallback = asyncHandler(async (req, res) => {
+  res.json({ message: 'Google callback endpoint' });
+});
+
+export {
+  register,
+  login,
+  logout,
+  getProfile,
+  updateProfile,
+  changePassword,
+  forgotPassword,
+  resetPassword,
+  verifyEmail,
+  resendVerificationEmail,
+  googleAuth,
+  googleCallback,
+};

@@ -1,27 +1,32 @@
 import nodemailer from 'nodemailer';
 
-const emailSender = async (to, subject, html) => {
+const sendEmail = async ({ to, subject, text, html }) => {
   try {
     const transporter = nodemailer.createTransport({
-      service: 'gmail', // o "outlook", "yahoo", etc.
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      secure: process.env.EMAIL_SECURE === 'true',
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },
     });
 
-    await transporter.sendMail({
-      from: `"Tesipedia" <${process.env.EMAIL_FROM}>`,
+    const mailOptions = {
+      from: process.env.EMAIL_FROM,
       to,
       subject,
+      text,
       html,
-    });
+    };
 
-    console.log(`📩 Correo enviado a ${to}`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Email enviado:', info.messageId);
+    return info;
   } catch (error) {
-    console.error('❌ Error al enviar el correo:', error.message);
-    throw new Error('No se pudo enviar el correo');
+    console.error('Error al enviar email:', error);
+    throw new Error('Error al enviar email');
   }
 };
 
-export default emailSender;
+export default sendEmail;

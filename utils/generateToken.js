@@ -1,12 +1,11 @@
-// utils/generateToken.js
 import jwt from 'jsonwebtoken';
 
-const generateToken = (user) => {
-  return jwt.sign(
-    { id: user._id, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
-  );
+const generateToken = (user, expiresIn = '30d') => {
+  const payload = typeof user === 'object'
+    ? { id: user._id, role: user.role }
+    : { id: user }; // permite pasar solo el ID también
+
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
 };
 
 export default generateToken;

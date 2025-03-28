@@ -1,28 +1,40 @@
 import express from 'express';
+import { protect, admin } from '../middleware/auth.js';
 import {
-  sendMessage,
-  getMessagesByOrder,
-  markMessagesAsRead,
+    generatePublicId,
+    sendMessage,
+    getMessagesByOrder,
+    markMessagesAsRead,
+    getMessages,
+    getMessageById,
+    updateMessage,
+    deleteMessage,
+    searchMessages,
+    markAsRead,
+    getConversations,
+    getAuthenticatedConversations
 } from '../controllers/chatController.js';
-
-import { protect } from '../middleware/authMiddleware.js';
-import multer from 'multer';
 
 const router = express.Router();
 
-// 📦 Configuración básica de multer
-const storage = multer.diskStorage({});
-const upload = multer({ storage });
+// Public routes
+router.post('/public-id', generatePublicId);
+router.post('/send', sendMessage);
 
+// Protected routes
 router.use(protect);
+router.get('/order/:orderId', getMessagesByOrder);
+router.post('/mark-read', markMessagesAsRead);
+router.get('/conversations', getConversations);
+router.get('/authenticated-conversations', getAuthenticatedConversations);
+router.post('/:id/read', markAsRead);
 
-// 📤 Enviar mensaje (con archivo opcional)
-router.post('/', upload.single('file'), sendMessage);
+// Admin routes
+router.use(admin);
+router.get('/', getMessages);
+router.get('/search', searchMessages);
+router.get('/:id', getMessageById);
+router.put('/:id', updateMessage);
+router.delete('/:id', deleteMessage);
 
-// 📬 Obtener mensajes de un pedido
-router.get('/:orderId', getMessagesByOrder);
-
-// ✅ Marcar como leídos
-router.patch('/:orderId/read', markMessagesAsRead);
-
-export default router;
+export default router; 

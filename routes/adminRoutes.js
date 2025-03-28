@@ -1,34 +1,42 @@
 import express from 'express';
+import { protect, admin } from '../middleware/auth.js';
 import {
-  getAllUsers,
-  deleteUser,
-  toggleActiveStatus,
-  getAllOrders,
-  assignOrderToWriter,
-  getStats,
-  getAllVisits
+    getAllUsers,
+    deleteUser,
+    toggleActiveStatus,
+    getAllOrders,
+    assignOrderToWriter,
+    getStats,
+    getAllVisits,
+    getDashboard,
+    searchAdmin,
+    getOrderById,
+    updateOrder
 } from '../controllers/adminController.js';
-
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// 🔐 Todas las rutas protegidas por login + rol admin
-router.use(protect, adminOnly);
+// All routes require admin authentication
+router.use(protect);
+router.use(admin);
 
-// 👥 Usuarios
+// User management
 router.get('/users', getAllUsers);
 router.delete('/users/:id', deleteUser);
-router.patch('/users/:id/status', toggleActiveStatus);
+router.put('/users/:id/toggle-active', toggleActiveStatus);
 
-// 📦 Pedidos
+// Order management
 router.get('/orders', getAllOrders);
-router.patch('/orders/:id/assign', assignOrderToWriter);
+router.get('/orders/:id', getOrderById);
+router.put('/orders/:id', updateOrder);
+router.post('/orders/:id/assign', assignOrderToWriter);
 
-// 📊 Estadísticas
+// Statistics and dashboard
 router.get('/stats', getStats);
+router.get('/dashboard', getDashboard);
+router.get('/visits', getAllVisits);
 
-// Visitas
-router.get('/visits', getAllVisits)
+// Search functionality
+router.get('/search', searchAdmin);
 
-export default router;
+export default router; 

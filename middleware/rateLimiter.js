@@ -11,18 +11,32 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-export const quoteLimiter = rateLimit({
-    windowMs: 10 * 60 * 1000,
-    max: 5,
-    message: {
-      message: 'Has creado muchas cotizaciones recientemente. Intenta más tarde.',
-    },
+// 🔄 Recuperación de contraseña
+export const passwordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 3, // 3 intentos por hora
+  message: {
+    message: 'Demasiados intentos de recuperación de contraseña. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// 🔁 3. Limita peticiones generales desde una IP (opcional global)
+// 📝 Cotizaciones
+export const quoteLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutos
+  max: 5, // 5 cotizaciones
+  message: {
+    message: 'Has creado muchas cotizaciones recientemente. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 🔁 Limita peticiones generales desde una IP
 export const generalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minuto
-  max: 100,
+  max: 100, // 100 peticiones por minuto
   message: {
     message: '⚠️ Demasiadas solicitudes. Reduce la velocidad.',
   },
@@ -32,8 +46,8 @@ export const generalLimiter = rateLimit({
 
 // 📤 Subida de archivos
 export const uploadLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 10,
+  windowMs: 10 * 60 * 1000, // 10 minutos
+  max: 10, // 10 subidas
   message: {
     message: '📤 Límite de subidas alcanzado. Espera antes de intentar otra vez.',
   },
@@ -43,8 +57,8 @@ export const uploadLimiter = rateLimit({
 
 // 💳 Intentos de pago
 export const paymentLimiter = rateLimit({
-  windowMs: 30 * 60 * 1000,
-  max: 5,
+  windowMs: 30 * 60 * 1000, // 30 minutos
+  max: 5, // 5 intentos
   message: {
     message: '💳 Demasiados intentos de pago. Intenta más tarde.',
   },
@@ -55,7 +69,7 @@ export const paymentLimiter = rateLimit({
 // 🌍 Visitas anónimas (IP)
 export const visitLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hora
-  max: 100,
+  max: 100, // 100 visitas por hora
   message: {
     message: '🌐 Límite de visitas alcanzado desde esta IP. Intenta después.',
   },
@@ -63,11 +77,100 @@ export const visitLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// 📦 Pedidos
 export const orderLimiter = rateLimit({
   windowMs: 30 * 60 * 1000, // 30 minutos
-  max: 5, // Máximo 5 pedidos por usuario/IP en ese periodo
+  max: 5, // 5 pedidos
   message: {
     message: '📦 Has alcanzado el límite de creación de pedidos. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 🔔 Notificaciones
+export const notificationLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 30, // 30 peticiones
+  message: {
+    message: '🔔 Demasiadas solicitudes de notificaciones. Reduce la velocidad.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 💬 Chat y mensajes
+export const chatLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 50, // 50 mensajes
+  message: {
+    message: '💬 Demasiados mensajes. Reduce la velocidad.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 🔍 Búsquedas
+export const searchLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 20, // 20 búsquedas
+  message: {
+    message: '🔍 Demasiadas búsquedas. Reduce la velocidad.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 📝 Comentarios y reseñas
+export const commentLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 10, // 10 comentarios
+  message: {
+    message: '📝 Has alcanzado el límite de comentarios. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 👤 Perfil y configuración
+export const profileLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 20, // 20 actualizaciones
+  message: {
+    message: '👤 Demasiadas actualizaciones de perfil. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 📱 Verificación de teléfono/email
+export const verificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 3, // 3 intentos
+  message: {
+    message: '📱 Demasiados intentos de verificación. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 🔒 Cambio de contraseña
+export const changePasswordLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 horas
+  max: 3, // 3 intentos
+  message: {
+    message: '🔒 Demasiados intentos de cambio de contraseña. Intenta más tarde.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 📊 Reportes y denuncias
+export const reportLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 horas
+  max: 5, // 5 reportes
+  message: {
+    message: '📊 Has alcanzado el límite de reportes. Intenta más tarde.',
   },
   standardHeaders: true,
   legacyHeaders: false,
