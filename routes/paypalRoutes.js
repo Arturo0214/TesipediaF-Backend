@@ -1,24 +1,19 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
 import {
-    createPayPalOrder,
-    capturePayPalPayment,
-    refundPayPalPayment,
-    getPayPalRefundStatus
+  createPayPalOrder,
+  capturePayPalPayment,
+  refundPayPalPayment,
+  getPayPalRefundStatus,
 } from '../controllers/paypalController.js';
 
 const router = express.Router();
 
-// Rutas públicas (webhooks)
-router.post('/capture', capturePayPalPayment);
+router.use(protect); // Solo autenticación, no admin
 
-// Rutas protegidas
-router.use(protect);
-router.post('/create-order', createPayPalOrder);
+router.post('/create', createPayPalOrder);         // ✅ Usuarios normales pueden crear orden
+router.post('/capture', capturePayPalPayment);     // ✅ Usuarios normales capturan
+router.post('/refund/:id', refundPayPalPayment);   // ✅ Puedes aquí luego usar admin si quieres
+router.get('/refund-status/:id', getPayPalRefundStatus);
 
-// Rutas de admin
-router.use(admin);
-router.post('/:id/refund', refundPayPalPayment);
-router.get('/:id/refund-status', getPayPalRefundStatus);
-
-export default router; 
+export default router;

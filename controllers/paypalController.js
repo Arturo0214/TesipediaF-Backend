@@ -1,9 +1,11 @@
 import asyncHandler from 'express-async-handler';
 import checkoutNodeJssdk from '@paypal/checkout-server-sdk';
+const Orders = checkoutNodeJssdk.orders;
+
 import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
 import Notification from '../models/Notification.js';
-import emailSender from '../utils/emailSender.js'; // asegúrate de usar la versión corregida
+import emailSender from '../utils/emailSender.js';
 
 const Environment = process.env.NODE_ENV === 'production'
   ? checkoutNodeJssdk.core.LiveEnvironment
@@ -23,31 +25,29 @@ export const createPayPalOrder = asyncHandler(async (req, res) => {
         throw new Error('Pedido no encontrado');
     }
 
-    const request = {
-        intent: 'CAPTURE',
-        purchase_units: [{
-            amount: {
-                currency_code: 'MXN',
-                value: order.price.toString()
-            },
-            description: order.title,
-            custom_id: order._id.toString()
-        }],
-        application_context: {
-            brand_name: 'Tesipedia',
-            landing_page: 'NO_PREFERENCE',
-            user_action: 'PAY_NOW',
-            return_url: `${process.env.CLIENT_URL}/pago-paypal-exitoso`,
-            cancel_url: `${process.env.CLIENT_URL}/pago-paypal-cancelado`
-        }
-    };
+    const request = new Orders.OrdersCreateRequest();
+    request.prefer('return=representation');
+    request.requestBody({
+      intent: 'CAPTURE',
+      purchase_units: [{
+        amount: {
+          currency_code: 'MXN',
+          value: order.price.toString()
+        },
+        description: order.title,
+        custom_id: order._id.toString()
+      }],
+      application_context: {
+        brand_name: 'Tesipedia',
+        landing_page: 'NO_PREFERENCE',
+        user_action: 'PAY_NOW',
+        return_url: `${process.env.CLIENT_URL}/pago-paypal-exitoso`,
+        cancel_url: `${process.env.CLIENT_URL}/pago-paypal-cancelado`
+      }
+    });
 
     try {
-        const paypalOrder = await client.execute({
-            path: '/v2/checkout/orders',
-            method: 'POST',
-            body: request
-        });
+        const paypalOrder = await client.execute(request);
 
         // Guardar el intento de pago
         await Payment.create({

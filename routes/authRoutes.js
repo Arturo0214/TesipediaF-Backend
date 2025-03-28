@@ -9,8 +9,6 @@ import {
     changePassword,
     forgotPassword,
     resetPassword,
-    verifyEmail,
-    resendVerificationEmail,
     googleAuth,
     googleCallback
 } from '../controllers/authController.js';
@@ -23,8 +21,6 @@ router.post('/register', register);
 router.post('/login', login);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
-router.get('/verify-email/:token', verifyEmail);
-router.post('/resend-verification', resendVerificationEmail);
 
 // Rutas de Google OAuth
 router.get('/google', googleAuth);
