@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
     trackVisit,
     getVisitStats,
@@ -16,7 +16,7 @@ router.post('/track', trackVisit);
 
 // Protected routes (admin only)
 router.use(protect);
-router.use(admin);
+router.use(adminOnly);
 
 // Visit management
 router.get('/stats', getVisitStats);

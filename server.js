@@ -43,7 +43,13 @@ const app = express();
 // Middlewares globales
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors({ origin: true, credentials: true }));
+
+// Configuración de CORS
+app.use(cors({
+  origin: process.env.CLIENT_URL, // Asegúrate de que esta variable esté configurada correctamente
+  credentials: true, // Permitir cookies
+}));
+
 app.use(cookieParser());
 app.use(setCookie);
 app.use(morgan('dev'));

@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect } from '../middleware/auth.js';
+import { protect } from '../middleware/authMiddleware.js';
 import {
     register,
     login,
@@ -21,6 +21,7 @@ router.post('/register', register);
 router.post('/login', login);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
+router.post('/logout', logout);
 
 // Rutas de Google OAuth
 router.get('/google', googleAuth);
@@ -28,9 +29,8 @@ router.get('/google/callback', googleCallback);
 
 // Rutas protegidas
 router.use(protect);
-router.post('/logout', logout);
 router.get('/profile', getProfile);
-router.put('/profile', updateProfile);
+router.put('/profile-update', updateProfile);
 router.put('/change-password', changePassword);
 
 export default router; 

@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
     getAdminNotifications,
     markNotificationAsRead,
@@ -21,7 +21,7 @@ router.delete('/:id', deleteNotification);
 router.get('/stats', getNotificationStats);
 
 // Admin routes
-router.use(admin);
+router.use(adminOnly);
 router.get('/admin', getAdminNotifications);
 router.post('/admin/:id/read', markNotificationAsRead);
 

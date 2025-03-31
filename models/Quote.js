@@ -14,10 +14,20 @@ const quoteSchema = new mongoose.Schema(
     },
     taskType: {
       type: String,
-      enum: ['Tesis', 'Tesina', 'Artículo', 'Ensayo'],
+      enum: ['Tesis', 'Tesina', 'Artículo', 'Ensayo', 'Proyecto de investigación', 'Otros'],
       required: true,
     },
     studyArea: {
+      type: String,
+      enum: [
+        'Área 1: Ciencias Físico-Matemáticas y de las Ingenierías',
+        'Área 2: Ciencias Biológicas, Químicas y de la Salud',
+        'Área 3: Ciencias Sociales',
+        'Área 4: Humanidades y Artes'
+      ],
+      required: true,
+    },
+    career: {
       type: String,
       required: true,
     },
@@ -28,24 +38,45 @@ const quoteSchema = new mongoose.Schema(
     },
     taskTitle: {
       type: String,
+      minlength: [5, 'El título debe tener al menos 5 caracteres'],
     },
     requirements: {
-      text: String,
-      file: String,
+      text: {
+        type: String,
+        minlength: [10, 'La descripción debe tener al menos 10 caracteres'],
+      },
+      file: {
+        filename: String,
+        originalname: String,
+        mimetype: String,
+        path: String,
+        size: Number,
+      },
     },
     pages: {
-      type: Number, // unificamos nombre con Order
+      type: Number,
       required: true,
+      min: [1, 'Debe tener al menos una página'],
     },
     dueDate: {
       type: Date,
       required: true,
+      validate: {
+        validator: (date) => date > new Date(),
+        message: 'La fecha debe ser futura',
+      },
     },
     email: {
       type: String,
       required: true,
+      match: [/^\S+@\S+\.\S+$/, 'Correo no válido'],
     },
-    whatsApp: {
+    name: {
+      type: String,
+      required: true,
+      minlength: [3, 'El nombre debe tener al menos 3 caracteres'],
+    },
+    phone: {
       type: String,
     },
     estimatedPrice: {
