@@ -1,5 +1,4 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
 import {
     createQuote,
     getQuoteByPublicId,
@@ -11,24 +10,25 @@ import {
     deleteQuote,
     searchQuotes
 } from '../controllers/quoteController.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import upload from '../middleware/multer.js';
+import { uploadLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Public routes
-router.post('/', createQuote);
+// Pública
+router.post('/', uploadLimiter, upload.single('file'), createQuote);
 router.get('/public/:publicId', getQuoteByPublicId);
+router.put('/link/:publicId', protect, linkQuoteToUser);
 
-// Protected routes
-router.use(protect);
-router.get('/my-quotes', getMyQuotes);
-router.post('/link/:publicId', linkQuoteToUser);
+// Privadas
+router.get('/my-quotes', protect, getMyQuotes);
 
-// Admin routes
-router.use(admin);
-router.get('/', getQuotes);
-router.get('/search', searchQuotes);
-router.get('/:id', getQuoteById);
-router.put('/:id', updateQuote);
-router.delete('/:id', deleteQuote);
+// Admin
+router.get('/', protect, adminOnly, getQuotes);
+router.get('/search', protect, adminOnly, searchQuotes);
+router.get('/:id', protect, adminOnly, getQuoteById);
+router.put('/:id', protect, adminOnly, updateQuote);
+router.delete('/:id', protect, adminOnly, deleteQuote);
 
-export default router; 
+export default router;

@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
     getAllUsers,
     deleteUser,
@@ -18,7 +18,7 @@ const router = express.Router();
 
 // All routes require admin authentication
 router.use(protect);
-router.use(admin);
+router.use(adminOnly);
 
 // User management
 router.get('/users', getAllUsers);

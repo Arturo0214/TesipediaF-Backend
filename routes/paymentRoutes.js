@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
     createStripeSession,
     getPayments,
@@ -33,7 +33,7 @@ router.post('/:id/refund', refundPayment);
 router.get('/:id/refund-status', getRefundStatus);
 
 // Admin routes
-router.use(admin);
+router.use(adminOnly);
 router.get('/', getPayments);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);

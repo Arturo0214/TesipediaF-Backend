@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly, writerOnly } from '../middleware/authMiddleware.js';
 import {
     getUsers,
     getUserById,
@@ -18,9 +18,11 @@ router.use(protect);
 router.get('/profile', getUserProfile);
 router.put('/profile', updateUserProfile);
 
+// Writer routes
+router.use(writerOnly);
 
 // Admin routes
-router.use(admin);
+router.use(adminOnly);
 router.get('/', getUsers);
 router.get('/:id', getUserById);
 router.put('/:id', updateUser);

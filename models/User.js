@@ -19,7 +19,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, 'La contraseña es obligatoria'],
       minlength: 6,
-      select: false, // no se devuelve por defecto
+      select: false,
     },
     role: {
       type: String,
@@ -30,11 +30,14 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    resetPasswordToken: String,              // 🆕 Token hashed
+    resetPasswordExpires: Date,              // 🆕 Fecha de expiración
   },
   {
     timestamps: true,
   }
 );
+
 
 // 🔐 Encriptar contraseña antes de guardar
 userSchema.pre('save', async function (next) {

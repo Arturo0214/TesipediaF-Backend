@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
     generatePublicId,
     sendMessage,
@@ -30,7 +30,7 @@ router.get('/authenticated-conversations', getAuthenticatedConversations);
 router.post('/:id/read', markAsRead);
 
 // Admin routes
-router.use(admin);
+router.use(adminOnly);
 router.get('/', getMessages);
 router.get('/search', searchMessages);
 router.get('/:id', getMessageById);

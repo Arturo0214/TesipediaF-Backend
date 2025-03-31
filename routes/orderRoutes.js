@@ -1,6 +1,6 @@
 import express from 'express';
 import upload from '../middleware/multer.js';
-import { protect, admin } from '../middleware/auth.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
   createOrder,
   createOrderFromQuote,
@@ -41,6 +41,6 @@ router.get('/:id/history', getOrderHistory); // Historial
 router.get('/:id/analytics', getOrderAnalytics); // Analytics
 
 // 🔒 Rutas solo para administradores
-router.get('/', admin, getOrders); // Listar todos los pedidos (solo admin)
+router.get('/', adminOnly, getOrders); // Listar todos los pedidos (solo admin)
 
 export default router;
