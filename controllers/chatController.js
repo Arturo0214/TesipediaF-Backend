@@ -1,63 +1,106 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
+import crypto from 'crypto';
 import Message from '../models/Message.js';
 import Notification from '../models/Notification.js';
+import Order from '../models/Order.js';
+import cloudinary from '../config/cloudinary.js';
 import User from '../models/User.js';
-import crypto from 'crypto';
-import mongoose from 'mongoose';
+import Visit from '../models/Visit.js';
+import getGeoFromIP from '../utils/geoLookup.js';
 
-// 🔑 Generar ID público único
+const DEFAULT_ADMIN_ID = process.env.SUPER_ADMIN_ID
+
 export const generatePublicId = asyncHandler(async (req, res) => {
-  // Generar un ID único usando crypto
   const publicId = crypto.randomBytes(16).toString('hex');
-
-  res.json({
-    publicId,
-    message: 'ID público generado exitosamente'
-  });
+  res.json({ publicId, message: 'ID público generado exitosamente' });
 });
 
-// 📤 Enviar mensaje (con o sin archivo)
 export const sendMessage = asyncHandler(async (req, res) => {
   const { receiver, text, orderId, name, email, publicId } = req.body;
+  const clientIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-  // Validar que el receiver sea un ObjectId válido
-  if (!mongoose.Types.ObjectId.isValid(receiver)) {
-    res.status(400);
-    throw new Error('ID de receptor no válido');
+  let geoData = null;
+  try {
+    geoData = await getGeoFromIP(clientIP);
+  } catch (error) {
+    console.error('Error obteniendo datos geográficos:', error.message);
   }
 
-  // Si el usuario está autenticado, usar su ID como sender
-  // Si no, usar el publicId como identificador
-  let sender;
-  let senderName;
-  let isPublic = false;
+  let sender, senderName, isPublic = false, finalReceiver;
 
-  if (req.user) {
+  // Si hay publicId, es un mensaje público
+  if (publicId) {
+    sender = publicId;
+    senderName = name || 'Usuario Anónimo';
+    isPublic = true;
+    finalReceiver = DEFAULT_ADMIN_ID; // 🚀 Siempre va para el admin
+  }
+  else if (req.user) {
     // Usuario autenticado
     sender = req.user._id;
     senderName = req.user.name;
     isPublic = false;
-  } else {
-    // Usuario no autenticado
-    if (!publicId) {
-      res.status(400);
-      throw new Error('Se requiere un identificador público para enviar mensajes sin autenticación');
+
+    if (req.user.role === 'admin') {
+      if (!receiver || !mongoose.Types.ObjectId.isValid(receiver)) {
+        res.status(400);
+        throw new Error('ID de receptor inválido para admin');
+      }
+      finalReceiver = receiver;
     }
-    sender = publicId;
-    senderName = name || 'Usuario Anónimo';
-    isPublic = true;
+    else if (req.user.role === 'writer') {
+      if (!receiver || !mongoose.Types.ObjectId.isValid(receiver)) {
+        res.status(400);
+        throw new Error('ID de receptor inválido para writer');
+      }
+      if (receiver !== DEFAULT_ADMIN_ID && orderId) {
+        // Solo si hay orderId validamos
+        const order = await Order.findOne({ _id: orderId, writer: req.user._id, client: receiver });
+        if (!order) {
+          throw new Error('No autorizado para enviar mensaje a este usuario');
+        }
+      }
+      finalReceiver = receiver;
+    }
+    else {
+      res.status(403);
+      throw new Error('No autorizado');
+    }
+  }
+  else {
+    res.status(401);
+    throw new Error('No autorizado: se requiere publicId o autenticación');
+  }
+
+  if (!finalReceiver || !mongoose.Types.ObjectId.isValid(finalReceiver)) {
+    res.status(400);
+    throw new Error('No se pudo determinar el receptor');
   }
 
   const newMessage = new Message({
     sender,
-    receiver: new mongoose.Types.ObjectId(receiver),
-    orderId: orderId ? new mongoose.Types.ObjectId(orderId) : null,
+    receiver: new mongoose.Types.ObjectId(finalReceiver),
+    orderId: orderId && mongoose.Types.ObjectId.isValid(orderId) ? new mongoose.Types.ObjectId(orderId) : null, // 🔥 Aquí ya no trona si orderId no existe
     text,
     isPublic,
-    senderName
+    senderName,
+    senderIP: clientIP,
+    geoLocation: geoData ? {
+      city: geoData.city,
+      region: geoData.region,
+      country: geoData.country,
+      org: geoData.org,
+      coordinates: geoData.loc
+    } : null
   });
 
-  // Si hay archivo adjunto (req.file viene de multer)
+  if (isPublic) {
+    const oneDayLater = new Date();
+    oneDayLater.setDate(oneDayLater.getDate() + 1);
+    newMessage.expiresAt = oneDayLater;
+  }
+
   if (req.file) {
     newMessage.attachment = {
       url: req.file.path,
@@ -67,34 +110,89 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   const savedMessage = await newMessage.save();
 
-  // 🔔 Crear notificación con nombre del remitente
   await Notification.create({
-    user: new mongoose.Types.ObjectId(receiver),
+    user: new mongoose.Types.ObjectId(finalReceiver),
     type: 'mensaje',
     message: `Nuevo mensaje de ${senderName}`,
     data: {
-      orderId: orderId ? new mongoose.Types.ObjectId(orderId) : null,
+      orderId: savedMessage.orderId, // ahora puede ser null
       sender: sender.toString(),
-      isPublic
+      isPublic,
     },
   });
 
   res.status(201).json(savedMessage);
 });
 
-// 📬 Obtener todos los mensajes de un pedido (cliente/admin/redactor)
+
+// 📬 Obtener mensajes por OrderId o conversación directa
 export const getMessagesByOrder = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
+  const userId = req.user?._id;
+  const publicId = req.query.publicId; // viene de ?publicId=xxx
 
-  const messages = await Message.find({ orderId })
+  let query = {};
+
+  if (publicId) {
+    // 🚀 Prioridad máxima al publicId
+    query = {
+      sender: publicId,
+      isPublic: true,
+    };
+  } else if (orderId && orderId !== 'null') {
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      res.status(400);
+      throw new Error('ID de pedido inválido');
+    }
+    query = { orderId: new mongoose.Types.ObjectId(orderId) };
+  } else if (userId) {
+    query = {
+      $or: [{ sender: userId }, { receiver: userId }],
+    };
+  } else {
+    res.status(400);
+    throw new Error('Se requiere ID de usuario, pedido o ID público');
+  }
+
+  const messages = await Message.find(query)
     .populate('sender', 'name role')
     .populate('receiver', 'name role')
-    .sort({ createdAt: 1 }); // orden cronológico
+    .sort({ createdAt: 1 });
 
   res.json(messages);
 });
 
-// ✅ Marcar todos los mensajes como leídos por el receptor actual
+// 📬 Obtener mensajes públicos por PublicId
+export const getPublicMessagesByPublicId = asyncHandler(async (req, res) => {
+  const { publicId } = req.params;
+
+  if (!publicId || typeof publicId !== 'string') {
+    res.status(400);
+    throw new Error('ID público inválido');
+  }
+
+  const messages = await Message.find({ sender: publicId, isPublic: true })
+    .sort({ createdAt: 1 });
+
+  res.json(messages);
+});
+
+// 📬 Obtener mensajes públicos por OrderId
+export const getPublicMessagesByOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+    res.status(400);
+    throw new Error('ID de pedido inválido');
+  }
+
+  const messages = await Message.find({ orderId, isPublic: true })
+    .sort({ createdAt: 1 });
+
+  res.json(messages);
+});
+
+// ✅ Marcar todos los mensajes como leídos
 export const markMessagesAsRead = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   const userId = req.user._id;
@@ -113,68 +211,82 @@ export const getMessages = asyncHandler(async (req, res) => {
     .populate('sender', 'name email role')
     .populate('receiver', 'name email role')
     .sort({ createdAt: -1 });
+
   res.json(messages);
 });
 
-// 🔍 Obtener mensaje por ID (admin)
+// 🔍 Obtener mensaje por ID
 export const getMessageById = asyncHandler(async (req, res) => {
   const message = await Message.findById(req.params.id)
     .populate('sender', 'name email role')
     .populate('receiver', 'name email role');
 
-  if (message) {
-    res.json(message);
-  } else {
+  if (!message) {
     res.status(404);
     throw new Error('Mensaje no encontrado');
   }
+
+  res.json(message);
 });
 
-// 🔄 Actualizar mensaje (admin)
+// 🔄 Actualizar mensaje
 export const updateMessage = asyncHandler(async (req, res) => {
   const message = await Message.findById(req.params.id);
 
-  if (message) {
-    message.text = req.body.text || message.text;
-    message.isRead = req.body.isRead !== undefined ? req.body.isRead : message.isRead;
-
-    const updatedMessage = await message.save();
-    res.json(updatedMessage);
-  } else {
+  if (!message) {
     res.status(404);
     throw new Error('Mensaje no encontrado');
   }
+
+  message.text = req.body.text || message.text;
+  message.isRead = req.body.isRead !== undefined ? req.body.isRead : message.isRead;
+
+  const updatedMessage = await message.save();
+  res.json(updatedMessage);
 });
 
-// ❌ Eliminar mensaje (admin)
+// ❌ Eliminar mensaje (y archivo adjunto si existe)
 export const deleteMessage = asyncHandler(async (req, res) => {
   const message = await Message.findById(req.params.id);
 
-  if (message) {
-    await message.deleteOne();
-    res.json({ message: 'Mensaje eliminado correctamente' });
-  } else {
+  if (!message) {
     res.status(404);
     throw new Error('Mensaje no encontrado');
   }
+
+  if (message.attachment && message.attachment.publicId) {
+    try {
+      await cloudinary.uploader.destroy(message.attachment.publicId, {
+        resource_type: 'auto'
+      });
+      console.log(`Archivo ${message.attachment.publicId} eliminado de Cloudinary`);
+    } catch (error) {
+      console.error('Error eliminando archivo de Cloudinary:', error.message);
+    }
+  }
+
+  await message.deleteOne();
+  res.json({ message: 'Mensaje eliminado correctamente' });
 });
 
 // 🔍 Buscar mensajes
 export const searchMessages = asyncHandler(async (req, res) => {
   const { query } = req.query;
+
   const messages = await Message.find({
     $or: [
       { text: { $regex: query, $options: 'i' } },
-      { 'attachment.fileName': { $regex: query, $options: 'i' } },
-    ],
+      { 'attachment.fileName': { $regex: query, $options: 'i' } }
+    ]
   })
     .populate('sender', 'name email role')
     .populate('receiver', 'name email role')
     .sort({ createdAt: -1 });
+
   res.json(messages);
 });
 
-// ✅ Marcar mensaje como leído
+// ✅ Marcar un mensaje como leído
 export const markAsRead = asyncHandler(async (req, res) => {
   const message = await Message.findById(req.params.id);
 
@@ -194,16 +306,12 @@ export const markAsRead = asyncHandler(async (req, res) => {
   res.json({ message: 'Mensaje marcado como leído', message });
 });
 
-// 💬 Obtener todas las conversaciones (admin)
+// 💬 Obtener todas las conversaciones
 export const getConversations = asyncHandler(async (req, res) => {
-  // Obtener todos los mensajes donde el admin es el receptor
-  const messages = await Message.find({ receiver: req.user._id })
-    .sort({ createdAt: -1 });
+  const messages = await Message.find({ receiver: req.user._id }).sort({ createdAt: -1 });
 
-  // Agrupar mensajes por remitente
   const conversations = messages.reduce((acc, message) => {
     const senderId = message.sender.toString();
-
     if (!acc[senderId]) {
       acc[senderId] = {
         senderId,
@@ -225,28 +333,17 @@ export const getConversations = asyncHandler(async (req, res) => {
     return acc;
   }, {});
 
-  // Convertir a array y ordenar por fecha del último mensaje
-  const conversationsArray = Object.values(conversations).sort(
-    (a, b) => b.lastMessageDate - a.lastMessageDate
-  );
-
-  res.json(conversationsArray);
+  res.json(Object.values(conversations).sort((a, b) => b.lastMessageDate - a.lastMessageDate));
 });
 
-// 💬 Obtener conversaciones con usuarios autenticados (admin)
+// 💬 Obtener conversaciones autenticadas
 export const getAuthenticatedConversations = asyncHandler(async (req, res) => {
-  // Obtener todos los mensajes donde el admin es el receptor y no son públicos
-  const messages = await Message.find({
-    receiver: req.user._id,
-    isPublic: false
-  })
+  const messages = await Message.find({ receiver: req.user._id, isPublic: false })
     .populate('sender', 'name email role')
     .sort({ createdAt: -1 });
 
-  // Agrupar mensajes por remitente
   const conversations = messages.reduce((acc, message) => {
     const senderId = message.sender._id.toString();
-
     if (!acc[senderId]) {
       acc[senderId] = {
         senderId,
@@ -269,27 +366,15 @@ export const getAuthenticatedConversations = asyncHandler(async (req, res) => {
     return acc;
   }, {});
 
-  // Convertir a array y ordenar por fecha del último mensaje
-  const conversationsArray = Object.values(conversations).sort(
-    (a, b) => b.lastMessageDate - a.lastMessageDate
-  );
-
-  res.json(conversationsArray);
+  res.json(Object.values(conversations).sort((a, b) => b.lastMessageDate - a.lastMessageDate));
 });
 
-// 💬 Obtener conversaciones con usuarios no autenticados (admin)
+// 💬 Obtener conversaciones públicas
 export const getPublicConversations = asyncHandler(async (req, res) => {
-  // Obtener todos los mensajes donde el admin es el receptor y son públicos
-  const messages = await Message.find({
-    receiver: req.user._id,
-    isPublic: true
-  })
-    .sort({ createdAt: -1 });
+  const messages = await Message.find({ receiver: req.user._id, isPublic: true }).sort({ createdAt: -1 });
 
-  // Agrupar mensajes por remitente (publicId)
   const conversations = messages.reduce((acc, message) => {
     const senderId = message.sender.toString();
-
     if (!acc[senderId]) {
       acc[senderId] = {
         senderId,
@@ -310,10 +395,35 @@ export const getPublicConversations = asyncHandler(async (req, res) => {
     return acc;
   }, {});
 
-  // Convertir a array y ordenar por fecha del último mensaje
-  const conversationsArray = Object.values(conversations).sort(
-    (a, b) => b.lastMessageDate - a.lastMessageDate
-  );
+  res.json(Object.values(conversations).sort((a, b) => b.lastMessageDate - a.lastMessageDate));
+});
 
-  res.json(conversationsArray);
+// 📈 Tracking de visitas
+export const trackVisit = asyncHandler(async (req, res) => {
+  const clientIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+  let geoData = null;
+  try {
+    geoData = await getGeoFromIP(clientIP);
+  } catch (error) {
+    console.error('Error obteniendo geo datos:', error.message);
+  }
+
+  const visit = new Visit({
+    ip: clientIP,
+    userAgent: req.headers['user-agent'],
+    referrer: req.headers.referer || 'Direct',
+    path: req.body.path || '/',
+    geoLocation: geoData ? {
+      city: geoData.city,
+      region: geoData.region,
+      country: geoData.country,
+      org: geoData.org,
+      coordinates: geoData.loc
+    } : null
+  });
+
+  await visit.save();
+
+  res.status(201).json({ success: true, message: 'Visita registrada correctamente' });
 });

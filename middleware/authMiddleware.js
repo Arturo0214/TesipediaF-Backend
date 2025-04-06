@@ -1,24 +1,55 @@
+// authMiddleware.js
 import jwt from 'jsonwebtoken';
-import asyncHandler from 'express-async-handler';
 import User from '../models/User.js';
+import asyncHandler from 'express-async-handler';
 
+// Protege rutas normales
 export const protect = asyncHandler(async (req, res, next) => {
-  const token = req.cookies.jwt;
+    let token;
 
-  if (!token) {
-    res.status(401);
-    throw new Error('No autorizado, token no presente');
-  }
+    if (req.cookies && req.cookies.token) {
+        token = req.cookies.token;
+    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
+    if (!token) {
+        res.status(401);
+        throw new Error('No autorizado, token no presente');
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = await User.findById(decoded.id).select('-password');
+        next();
+    } catch (error) {
+        console.error(error);
+        res.status(401);
+        throw new Error('No autorizado, token inválido');
+    }
+});
+
+// Protege solo si hay token (sino, deja pasar)
+export const optionalAuth = asyncHandler(async (req, res, next) => {
+    let token;
+
+    if (req.cookies && req.cookies.token) {
+        token = req.cookies.token;
+    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (token) {
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = await User.findById(decoded.id).select('-password');
+        } catch (error) {
+            console.error('Token inválido pero continuamos sin usuario:', error.message);
+            // No tiramos error, solo seguimos sin req.user
+        }
+    }
+
     next();
-  } catch (error) {
-    console.error('🔐 Error al verificar el token:', error.message);
-    res.status(401);
-    throw new Error('Token inválido o mal formado');
-  }
 });
 
 export const adminOnly = (req, res, next) => {

@@ -3,12 +3,11 @@ import mongoose from 'mongoose';
 const messageSchema = new mongoose.Schema(
   {
     sender: {
-      type: mongoose.Schema.Types.Mixed, // Puede ser ObjectId o String (publicId)
+      type: mongoose.Schema.Types.Mixed, // Puede ser ObjectId (usuario) o String (publicId)
       required: true,
     },
     receiver: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      type: mongoose.Schema.Types.Mixed, // Puede ser ObjectId (usuario) o String (orderId)
       required: true,
     },
     orderId: {
@@ -21,8 +20,8 @@ const messageSchema = new mongoose.Schema(
       trim: true,
     },
     attachment: {
-      url: String,      // URL del archivo en Cloudinary u otro servicio
-      fileName: String, // nombre original del archivo
+      url: String,      // URL del archivo (ej: Cloudinary)
+      fileName: String, // Nombre original del archivo
     },
     isRead: {
       type: Boolean,
@@ -35,10 +34,32 @@ const messageSchema = new mongoose.Schema(
     senderName: {
       type: String,
       required: true,
+    },
+    senderIP: {         // 🔥 IP del remitente
+      type: String,
+      default: null,
+    },
+    geoLocation: {      // 🔥 Información geográfica
+      city: String,
+      region: String,
+      country: String,
+      org: String,
+      coordinates: {    // 🔥 Coordenadas (latitud,longitud)
+        type: String,
+        default: null
+      }
+    },
+    expiresAt: {                 // 🔥 Nuevo campo para expiración
+      type: Date,
+      default: null,             // Solo se llena si es un mensaje público
     }
   },
-  { timestamps: true }
+  { timestamps: true } // createdAt y updatedAt automáticos
 );
 
+// 🔥 TTL index: si expiresAt tiene valor, Mongo elimina el mensaje después de la fecha
+messageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 const Message = mongoose.model('Message', messageSchema);
+
 export default Message;

@@ -13,32 +13,60 @@ export const chatSocket = (io) => {
     // 👉 Enviar mensaje en tiempo real
     socket.on('sendMessage', async (data) => {
       try {
-        const { sender, receiver, orderId, text, attachment } = data;
+        console.log('Datos recibidos:', data);
+        const { text, receiver, attachment, publicId, name } = data;
+
+        // Determinar el sender y receiver
+        const sender = socket.user._id;
+        const senderName = socket.user.isPublic ? 'Usuario Anónimo' : socket.user.name;
+
+        // Para usuarios públicos, el receiver es el ID del admin
+        const finalReceiver = socket.user.isPublic ? process.env.DEFAULT_ADMIN_ID : receiver;
+
+        if (!finalReceiver) {
+          console.error('Error: No se pudo determinar el receptor');
+          socket.emit('error', { message: 'No se pudo determinar el receptor del mensaje' });
+          return;
+        }
+
+        console.log('Creando mensaje con:', {
+          sender,
+          receiver: finalReceiver,
+          text,
+          isPublic: socket.user.isPublic,
+          senderName,
+          orderId: data.orderId || null
+        });
 
         // Create new message
         const newMessage = await Message.create({
           sender,
-          receiver,
-          orderId,
+          receiver: finalReceiver,
+          orderId: data.orderId || null,
           text,
           attachment,
+          isPublic: socket.user.isPublic,
+          senderName,
           isRead: false
         });
 
-        // Populate sender information
-        await newMessage.populate('sender', 'name email');
+        // Si el usuario es autenticado, poblar la información del sender
+        if (!socket.user.isPublic) {
+          await newMessage.populate('sender', 'name email');
+        }
 
-        // Emit to specific room based on orderId or direct message
-        const room = orderId || `direct:${[sender, receiver].sort().join(':')}`;
-        io.to(room).emit('newMessage', newMessage);
-
-        // Emit to receiver's personal room for notifications
-        io.to(`user:${receiver}`).emit('messageReceived', newMessage);
-
-        console.log(`📤 Mensaje enviado en la sala ${room}`);
+        // Emitir el mensaje a la sala correspondiente
+        if (data.orderId) {
+          io.to(data.orderId).emit('newMessage', newMessage);
+          console.log(`📤 Mensaje enviado en la sala ${data.orderId}`);
+        } else {
+          // Para mensajes públicos, emitir al admin
+          io.to(`user:${finalReceiver}`).emit('newMessage', newMessage);
+          console.log(`📤 Mensaje público enviado al admin ${finalReceiver}`);
+        }
       } catch (error) {
         console.error('Error sending message:', error);
-        socket.emit('error', { message: 'Error sending message' });
+        socket.emit('error', { message: 'Error al enviar el mensaje' });
       }
     });
 
@@ -48,27 +76,26 @@ export const chatSocket = (io) => {
         const message = await Message.findById(messageId);
 
         if (!message) {
-          socket.emit('error', { message: 'Message not found' });
+          socket.emit('error', { message: 'Mensaje no encontrado' });
           return;
         }
 
-        // Verify the user is the receiver
+        // Verificar si el usuario es el receptor
         if (message.receiver.toString() !== socket.user._id.toString()) {
-          socket.emit('error', { message: 'Unauthorized' });
+          socket.emit('error', { message: 'No autorizado' });
           return;
         }
 
         message.isRead = true;
         await message.save();
 
-        // Notify sender that message was read
-        const room = message.orderId || `direct:${[message.sender, message.receiver].sort().join(':')}`;
-        io.to(room).emit('messageRead', { messageId });
+        // Notificar al remitente que el mensaje fue leído
+        io.to(message.receiver.toString()).emit('messageRead', { messageId });
 
         console.log(`📖 Mensaje ${messageId} marcado como leído`);
       } catch (error) {
         console.error('Error marking message as read:', error);
-        socket.emit('error', { message: 'Error marking message as read' });
+        socket.emit('error', { message: 'Error al marcar como leído' });
       }
     });
 
@@ -77,6 +104,7 @@ export const chatSocket = (io) => {
       const { orderId, isTyping } = data;
       socket.to(orderId).emit('userTyping', {
         userId: socket.user._id,
+        name: socket.user.name,
         isTyping
       });
     });
