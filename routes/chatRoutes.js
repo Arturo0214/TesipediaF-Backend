@@ -1,6 +1,6 @@
 import express from 'express';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
-import upload from '../middleware/uploadMiddleware.js'; // 🚀 Importar tu upload middleware
+import upload from '../middleware/uploadMiddleware.js';
 import {
     generatePublicId,
     sendMessage,
@@ -16,41 +16,45 @@ import {
     markAsRead,
     getConversations,
     getAuthenticatedConversations,
-    getPublicConversations
+    getPublicConversations,
+    trackVisit,
+    getDirectMessages,
+    deleteConversation
 } from '../controllers/chatController.js';
 
 const router = express.Router();
 
-// 🔓 Public routes (sin protección de token)
+// 🔓 Rutas completamente públicas (sin ningún tipo de autenticación)
 router.post('/public-id', generatePublicId);
-router.post('/send', optionalAuth, upload.single('attachment'), sendMessage); // 🛡️ optionalAuth aquí
+router.get('/public-id', generatePublicId);
 router.get('/public/conversation/:publicId', getPublicMessagesByPublicId);
-router.get('/public/:orderId', getPublicMessagesByOrder);
-// Order-specific routes (solo para usuarios autenticados)
-router.get('/order/:orderId', (req, res, next) => {
-    if (req.params.orderId === 'null') {
-        // No sobrescribimos el publicId si existe
-        return getMessagesByOrder(req, res, next);
-    }
-    return getMessagesByOrder(req, res, next);
-});
+router.post('/track-visit', trackVisit);
 
-// 🔒 Protected routes (requieren token)
-router.use(protect);
+// 🔄 Rutas que pueden ser públicas o autenticadas
+router.post('/send', optionalAuth, upload.single('attachment'), sendMessage);
 
-
+// 🔒 Rutas que requieren autenticación
+router.use('/order', protect);
+router.get('/order/:orderId', getMessagesByOrder);
 router.post('/order/:orderId/mark-read', markMessagesAsRead);
 
-// Conversation routes (solo para usuarios autenticados)
-router.get('/conversations', getConversations);
-router.get('/authenticated-conversations', getAuthenticatedConversations);
-router.get('/public-conversations', getPublicConversations);
-router.post('/:id/read', markAsRead);
+// 💬 Rutas de conversaciones (requieren autenticación)
+router.get('/conversations', protect, getConversations);
+router.get('/authenticated-conversations', protect, getAuthenticatedConversations);
+router.get('/public-conversations', protect, getPublicConversations);
+router.get('/direct/:userId', protect, getDirectMessages);
 
-// 🛡️ Admin routes (requieren ser admin)
-router.use(adminOnly);
+// ✅ Rutas de marcado de mensajes
+router.post('/:id/read', protect, markAsRead);
 
-router.get('/', getMessages); // Obtener todos los mensajes (admin)
+// 👑 Rutas de administrador
+router.use(protect, adminOnly);
+
+// IMPORTANTE: Primero colocamos las rutas más específicas
+router.delete('/conversations/:conversationId', deleteConversation);
+
+// Después las rutas con comodines
+router.get('/', getMessages);
 router.get('/search', searchMessages);
 router.get('/:id', getMessageById);
 router.put('/:id', updateMessage);

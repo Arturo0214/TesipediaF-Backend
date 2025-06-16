@@ -1,40 +1,54 @@
-import asyncHandler from 'express-async-handler';
 import Notification from '../models/Notification.js';
+import asyncHandler from 'express-async-handler';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
-// 🔔 Obtener notificaciones del SUPER ADMIN con paginación
-export const getAdminNotifications = asyncHandler(async (req, res) => {
-  if (req.user._id.toString() !== SUPER_ADMIN_ID) {
-    res.status(403);
-    throw new Error('Acceso denegado');
-  }
+// @desc    Crear una nueva notificación
+// @route   POST /api/notifications
+// @access  Private
+export const createNotification = asyncHandler(async (req, res) => {
+  const { user, type, message, priority, isRead } = req.body;
 
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 20;
-  const skip = (page - 1) * limit;
-
-  const [notifications, total] = await Promise.all([
-    Notification.find({ user: SUPER_ADMIN_ID })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('user', 'name email'),
-    Notification.countDocuments({ user: SUPER_ADMIN_ID })
-  ]);
-
-  res.json({
-    notifications,
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
-    }
+  const notification = await Notification.create({
+    user,
+    type,
+    message,
+    priority,
+    isRead: isRead || false
   });
+
+  res.status(201).json(notification);
 });
 
-// ✅ Marcar una notificación del SUPER ADMIN como leída
+// @desc    Obtener notificaciones del usuario
+// @route   GET /api/notifications
+// @access  Private
+export const getMyNotifications = asyncHandler(async (req, res) => {
+  const notifications = await Notification.find({ user: req.user._id })
+    .sort({ createdAt: -1 });
+
+  res.json(notifications);
+});
+
+// @desc    Obtener todas las notificaciones (admin)
+// @route   GET /api/notifications/admin
+// @access  Private/Admin
+export const getAdminNotifications = asyncHandler(async (req, res) => {
+  if (!req.user.isAdmin) {
+    res.status(403);
+    throw new Error('No autorizado');
+  }
+
+  const notifications = await Notification.find()
+    .populate('user', 'name email')
+    .sort({ createdAt: -1 });
+
+  res.json(notifications);
+});
+
+// @desc    Marcar notificación como leída
+// @route   PATCH /api/notifications/:id/read
+// @access  Private
 export const markNotificationAsRead = asyncHandler(async (req, res) => {
   const notification = await Notification.findById(req.params.id);
 
@@ -43,7 +57,7 @@ export const markNotificationAsRead = asyncHandler(async (req, res) => {
     throw new Error('Notificación no encontrada');
   }
 
-  if (notification.user?.toString() !== SUPER_ADMIN_ID) {
+  if (notification.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
     res.status(403);
     throw new Error('No autorizado');
   }
@@ -51,125 +65,47 @@ export const markNotificationAsRead = asyncHandler(async (req, res) => {
   notification.isRead = true;
   await notification.save();
 
-  // Emitir evento de socket si está disponible
-  if (req.app.get('io')) {
-    req.app.get('io').to(`notifications:${SUPER_ADMIN_ID}`).emit('notificationRead', {
-      notificationId: notification._id,
-      isRead: true
-    });
-  }
-
-  res.json({ message: 'Notificación marcada como leída' });
+  res.json(notification);
 });
 
-// 📬 Obtener notificaciones del usuario autenticado con paginación y filtros
-export const getMyNotifications = asyncHandler(async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 20;
-  const skip = (page - 1) * limit;
-  const isRead = req.query.isRead === 'true' ? true : req.query.isRead === 'false' ? false : undefined;
-
-  const query = { user: req.user._id };
-  if (isRead !== undefined) {
-    query.isRead = isRead;
-  }
-
-  const [notifications, total] = await Promise.all([
-    Notification.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('user', 'name email'),
-    Notification.countDocuments(query)
-  ]);
-
-  res.json({
-    notifications,
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
-    }
-  });
-});
-
-// ✅ Marcar una notificación del usuario autenticado como leída
-export const markAsRead = asyncHandler(async (req, res) => {
-  const notification = await Notification.findById(req.params.id);
-
-  if (!notification || !notification.user?.equals(req.user._id)) {
-    res.status(404);
-    throw new Error('Notificación no encontrada o acceso no autorizado');
-  }
-
-  notification.isRead = true;
-  await notification.save();
-
-  // Emitir evento de socket si está disponible
-  if (req.app.get('io')) {
-    req.app.get('io').to(`notifications:${req.user._id}`).emit('notificationRead', {
-      notificationId: notification._id,
-      isRead: true
-    });
-  }
-
-  res.json({ message: 'Notificación marcada como leída' });
-});
-
-// 📦 Marcar todas como leídas para el usuario autenticado
-export const markAllAsRead = asyncHandler(async (req, res) => {
-  const result = await Notification.updateMany(
+// @desc    Marcar todas las notificaciones como leídas
+// @route   PATCH /api/notifications/mark-all-read
+// @access  Private
+export const markAllNotificationsAsRead = asyncHandler(async (req, res) => {
+  await Notification.updateMany(
     { user: req.user._id, isRead: false },
-    { $set: { isRead: true } }
+    { isRead: true }
   );
 
-  // Emitir evento de socket si está disponible
-  if (req.app.get('io')) {
-    req.app.get('io').to(`notifications:${req.user._id}`).emit('allNotificationsRead');
-  }
-
-  res.json({
-    message: 'Todas las notificaciones marcadas como leídas',
-    modifiedCount: result.modifiedCount
-  });
+  res.json({ message: 'Todas las notificaciones han sido marcadas como leídas' });
 });
 
-// ❌ Eliminar una notificación del usuario autenticado
+// @desc    Eliminar una notificación
+// @route   DELETE /api/notifications/:id
+// @access  Private
 export const deleteNotification = asyncHandler(async (req, res) => {
   const notification = await Notification.findById(req.params.id);
 
-  if (!notification || !notification.user?.equals(req.user._id)) {
+  if (!notification) {
     res.status(404);
-    throw new Error('Notificación no encontrada o acceso no autorizado');
+    throw new Error('Notificación no encontrada');
   }
 
-  await notification.deleteOne();
-
-  // Emitir evento de socket si está disponible
-  if (req.app.get('io')) {
-    req.app.get('io').to(`notifications:${req.user._id}`).emit('notificationDeleted', {
-      notificationId: notification._id
-    });
+  if (notification.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
+    res.status(403);
+    throw new Error('No autorizado');
   }
 
+  await notification.remove();
   res.json({ message: 'Notificación eliminada' });
 });
 
-// 📊 Obtener estadísticas de notificaciones
+// @desc    Obtener estadísticas de notificaciones
+// @route   GET /api/notifications/stats
+// @access  Private
 export const getNotificationStats = asyncHandler(async (req, res) => {
-  const stats = await Notification.aggregate([
-    { $match: { user: req.user._id } },
-    {
-      $group: {
-        _id: '$isRead',
-        count: { $sum: 1 }
-      }
-    }
-  ]);
-
-  const total = stats.reduce((acc, curr) => acc + curr.count, 0);
-  const unread = stats.find(s => s._id === false)?.count || 0;
+  const total = await Notification.countDocuments({ user: req.user._id });
+  const unread = await Notification.countDocuments({ user: req.user._id, isRead: false });
 
   res.json({
     total,

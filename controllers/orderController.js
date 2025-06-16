@@ -114,6 +114,37 @@ export const getOrders = asyncHandler(async (req, res) => {
   res.json(orders);
 });
 
+// 📋 Obtener todos los pedidos (admin) con paginación
+export const getAllOrders = asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const keyword = req.query.keyword
+    ? {
+      $or: [
+        { title: { $regex: req.query.keyword, $options: 'i' } },
+        { status: { $regex: req.query.keyword, $options: 'i' } },
+      ],
+    }
+    : {};
+
+  const count = await Order.countDocuments({ ...keyword });
+  const orders = await Order.find({ ...keyword })
+    .populate('user', 'name email')
+    .populate('assignedTo', 'name email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+  res.json({
+    orders,
+    page,
+    pages: Math.ceil(count / limit),
+    total: count,
+  });
+});
+
 // 🔎 Obtener un pedido por ID (si es del usuario o redactor asignado)
 export const getOrderById = asyncHandler(async (req, res) => {
   const order = await Order.findById(req.params.id)
@@ -450,4 +481,69 @@ export const getOrderAnalytics = asyncHandler(async (req, res) => {
   };
 
   res.json(analytics);
+});
+
+// 🚫 Cancelar pedido
+export const cancelOrder = asyncHandler(async (req, res) => {
+  const order = await Order.findById(req.params.id);
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Pedido no encontrado');
+  }
+
+  // Verificar si el usuario es el propietario del pedido o un administrador
+  if (!order.user.equals(req.user._id) && req.user.role !== 'admin') {
+    res.status(403);
+    throw new Error('No tienes permiso para cancelar este pedido');
+  }
+
+  // Verificar si el pedido ya está completado o cancelado
+  if (order.status === 'completed') {
+    res.status(400);
+    throw new Error('No se puede cancelar un pedido ya completado');
+  }
+
+  if (order.status === 'cancelled') {
+    res.status(400);
+    throw new Error('Este pedido ya está cancelado');
+  }
+
+  // Actualizar estado a cancelado
+  order.status = 'cancelled';
+  order.cancellationReason = req.body.reason || 'Cancelado por el usuario';
+  order.cancelledAt = new Date();
+
+  const updatedOrder = await order.save();
+
+  // Crear notificación para el usuario si un admin cancela el pedido
+  if (req.user.role === 'admin' && !order.user.equals(req.user._id)) {
+    await Notification.create({
+      user: order.user,
+      type: 'pedido',
+      message: `❌ Tu pedido "${order.title}" ha sido cancelado`,
+      data: {
+        orderId: order._id,
+      },
+    });
+  }
+
+  // Crear notificación para administradores si un usuario cancela su pedido
+  if (order.user.equals(req.user._id)) {
+    await Notification.create({
+      user: SUPER_ADMIN_ID,
+      type: 'pedido',
+      message: `❌ El usuario ${req.user.name} ha cancelado su pedido "${order.title}"`,
+      data: {
+        orderId: order._id,
+        userId: req.user._id,
+        reason: req.body.reason || 'No especificada',
+      },
+    });
+  }
+
+  res.json({
+    message: 'Pedido cancelado exitosamente',
+    order: updatedOrder,
+  });
 });

@@ -82,6 +82,24 @@ const quoteSchema = new mongoose.Schema(
     estimatedPrice: {
       type: Number,
     },
+    priceDetails: {
+      basePrice: {
+        type: Number,
+        required: true
+      },
+      urgencyCharge: {
+        type: Number,
+        default: 0
+      },
+      cashDiscount: {
+        type: Number,
+        default: 0
+      },
+      finalPrice: {
+        type: Number,
+        required: true
+      }
+    },
     convertedToOrder: {
       type: Boolean,
       default: false,

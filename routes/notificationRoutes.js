@@ -1,28 +1,43 @@
 import express from 'express';
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
+    createNotification,
+    getMyNotifications,
     getAdminNotifications,
     markNotificationAsRead,
-    getMyNotifications,
-    markAsRead,
-    markAllAsRead,
+    markAllNotificationsAsRead,
     deleteNotification,
-    getNotificationStats
+    getNotificationStats,
 } from '../controllers/notificationController.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import Notification from '../models/Notification.js';
+import asyncHandler from 'express-async-handler';
 
 const router = express.Router();
 
-// Protected routes
+// ✅ Todas las rutas están protegidas
 router.use(protect);
-router.get('/my-notifications', getMyNotifications);
-router.post('/:id/read', markAsRead);
-router.post('/mark-all-read', markAllAsRead);
+
+// 🔔 Crear una nueva notificación
+router.post('/', createNotification);
+
+// 🔔 Obtener mis notificaciones
+router.get('/', getMyNotifications);
+
+// 🔔 Marcar una notificación como leída
+router.patch('/:id/read', markNotificationAsRead);
+router.post('/:id/read', markNotificationAsRead);
+
+// 🔔 Marcar todas como leídas
+router.patch('/mark-all-read', markAllNotificationsAsRead);
+router.post('/mark-all-read', markAllNotificationsAsRead);
+
+// 🔔 Eliminar una notificación
 router.delete('/:id', deleteNotification);
+
+// 🔔 Obtener estadísticas de notificaciones
 router.get('/stats', getNotificationStats);
 
-// Admin routes
-router.use(adminOnly);
-router.get('/admin', getAdminNotifications);
-router.post('/admin/:id/read', markNotificationAsRead);
+// 🔔 Obtener notificaciones del admin (solo para SUPER ADMIN)
+router.get('/admin', adminOnly, getAdminNotifications);
 
-export default router; 
+export default router;

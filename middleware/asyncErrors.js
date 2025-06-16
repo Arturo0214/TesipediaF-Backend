@@ -11,6 +11,10 @@ export const asyncErrorHandler = (fn) => {
 export const globalErrorHandler = (err, req, res, next) => {
     console.error('Error:', err);
 
+    // Si el error tiene un código de estado definido, usarlo
+    const statusCode = err.statusCode || 500;
+    const message = err.message || 'Error interno del servidor';
+
     // Errores de validación de Mongoose
     if (err.name === 'ValidationError') {
         const errors = Object.values(err.errors).map(error => error.message);
@@ -92,9 +96,9 @@ export const globalErrorHandler = (err, req, res, next) => {
     }
 
     // Error por defecto
-    res.status(err.status || 500).json({
+    return res.status(statusCode).json({
         success: false,
-        message: err.message || 'Error interno del servidor',
-        error: process.env.NODE_ENV === 'development' ? err : 'Error interno del servidor'
+        message: message,
+        error: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
 }; 

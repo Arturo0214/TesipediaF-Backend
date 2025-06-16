@@ -20,10 +20,11 @@ const register = asyncHandler(async (req, res) => {
     const token = generateToken(user);
 
     res.cookie('jwt', token, {
-      httpOnly: true,
+      httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'lax',
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
+      path: '/',
     });
 
     res.status(201).json({
@@ -51,10 +52,11 @@ const login = asyncHandler(async (req, res) => {
   const token = generateToken(user);
 
   res.cookie('jwt', token, {
-    httpOnly: true,
+    httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
+    path: '/',
   });
 
   res.status(200).json({
@@ -132,18 +134,54 @@ const changePassword = asyncHandler(async (req, res) => {
 // 🔐 Forgot Password
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
+  console.log(`📧 Solicitud de recuperación para email: "${email}"`);
 
   if (!email || typeof email !== "string") {
+    console.log(`❌ Email inválido: "${email}"`);
     res.status(400);
     throw new Error("El correo electrónico es obligatorio y debe ser un texto válido.");
   }
 
-  const user = await User.findOne({ email: email.trim() });
+  const normalizedEmail = email.trim().toLowerCase();
+  console.log(`🔍 Buscando usuario con email normalizado: "${normalizedEmail}"`);
+
+  // Primero buscar con case-sensitive
+  let user = await User.findOne({ email: normalizedEmail });
+
+  // Si no se encuentra, intentar buscar con case-insensitive
+  if (!user) {
+    console.log(`⚠️ No se encontró exactamente, buscando case-insensitive`);
+    user = await User.findOne({
+      email: { $regex: new RegExp(`^${normalizedEmail}$`, 'i') }
+    });
+  }
+
+  // Otra alternativa - listar todos los correos y comparar
+  if (!user) {
+    console.log(`⚠️ Buscando en todos los usuarios...`);
+    const allUsers = await User.find({}, 'email name');
+    console.log(`ℹ️ Usuarios en la base de datos:`, allUsers.map(u => ({ id: u._id, email: u.email, name: u.name })));
+
+    // Intentar encontrar una coincidencia aproximada
+    const possibleMatch = allUsers.find(u =>
+      u.email && normalizedEmail &&
+      u.email.toLowerCase().includes(normalizedEmail) ||
+      normalizedEmail.includes(u.email.toLowerCase())
+    );
+
+    if (possibleMatch) {
+      console.log(`✅ Se encontró coincidencia aproximada: ${possibleMatch.email}`);
+      user = possibleMatch;
+    }
+  }
 
   if (!user) {
+    console.log(`❌ No se encontró usuario para: "${normalizedEmail}"`);
     res.status(404);
     throw new Error("No se encontró una cuenta con este correo.");
   }
+
+  console.log(`✅ Usuario encontrado: ${user._id} | ${user.email}`);
 
   const resetToken = crypto.randomBytes(32).toString("hex");
   const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
@@ -152,7 +190,8 @@ const forgotPassword = asyncHandler(async (req, res) => {
   user.resetPasswordExpires = Date.now() + 3600000;
   await user.save();
 
-  const resetUrl = `${process.env.CLIENT_URL}reset-password/${resetToken}`;
+  const resetUrl = `${process.env.CLIENT_URL}/auth/reset-password/${resetToken}`;
+  console.log(`🔗 URL de restablecimiento: ${resetUrl}`);
 
   // ✅ Responde inmediatamente al frontend
   res.status(200).json({
@@ -181,15 +220,15 @@ const forgotPassword = asyncHandler(async (req, res) => {
         </div>
       `;
 
-      await sendEmail({
+      const emailResult = await sendEmail({
         to: user.email,
         subject: "🔒 Restablecimiento de Contraseña",
         html: message
       });
 
-      console.log("📩 Email enviado a:", user.email);
+      console.log(`📩 Email enviado a: ${user.email} | ID: ${emailResult.messageId || 'desconocido'}`);
     } catch (error) {
-      console.error("❌ Error al enviar email de recuperación:", error.message);
+      console.error(`❌ Error al enviar email de recuperación: ${error.message}`, error);
       // Opcional: guardar log en BD
     }
   });
@@ -198,6 +237,11 @@ const forgotPassword = asyncHandler(async (req, res) => {
 // 🔁 Reset password
 const resetPassword = asyncHandler(async (req, res) => {
   const { token, password } = req.body;
+
+  if (!token || !password) {
+    res.status(400);
+    throw new Error('Token y contraseña son requeridos');
+  }
 
   const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
@@ -211,13 +255,37 @@ const resetPassword = asyncHandler(async (req, res) => {
     throw new Error('Token inválido o expirado');
   }
 
+  // Actualizar la contraseña
   user.password = password;
   user.resetPasswordToken = undefined;
   user.resetPasswordExpires = undefined;
-
   await user.save();
 
-  res.json({ message: 'Contraseña restablecida exitosamente' });
+  // Enviar email de confirmación
+  const message = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #2575fc; text-align: center;">✅ Contraseña Actualizada</h2>
+        <p style="font-size: 16px;">Hola <strong>${user.name}</strong>,</p>
+        <p style="font-size: 16px;">Tu contraseña ha sido actualizada exitosamente.</p>
+        <p style="font-size: 16px;">Si no realizaste este cambio, por favor contacta a soporte inmediatamente.</p>
+        <hr>
+        <p style="font-size: 12px; text-align: center; color: #888;">© 2025 Tesipedia | Todos los derechos reservados</p>
+    </div>
+  `;
+
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: "✅ Contraseña Actualizada",
+      html: message
+    });
+  } catch (error) {
+    console.error('Error al enviar email de confirmación:', error);
+  }
+
+  res.status(200).json({
+    message: 'Contraseña actualizada exitosamente'
+  });
 });
 
 // Google OAuth (placeholder)
@@ -229,6 +297,56 @@ const googleCallback = asyncHandler(async (req, res) => {
   res.json({ message: 'Google callback endpoint' });
 });
 
+// 🔍 Validar token de restablecimiento
+const validateResetToken = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  console.log('🔍 Validando token:', token);
+
+  if (!token) {
+    console.log('❌ Token no proporcionado');
+    res.status(400);
+    throw new Error('Token es requerido');
+  }
+
+  try {
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    console.log('🔑 Token hasheado:', hashedToken);
+
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    console.log('👤 Usuario encontrado:', user ? 'Sí' : 'No');
+    if (user) {
+      console.log('✅ Token válido para usuario:', user.email);
+    }
+
+    if (!user) {
+      console.log('❌ Token inválido o expirado');
+      res.status(400);
+      throw new Error('Token inválido o expirado');
+    }
+
+    // Verificar si el token ha expirado
+    if (user.resetPasswordExpires < Date.now()) {
+      console.log('⏰ Token expirado');
+      res.status(400);
+      throw new Error('El token ha expirado');
+    }
+
+    console.log('✅ Token validado exitosamente');
+    res.status(200).json({
+      valid: true,
+      message: 'Token válido'
+    });
+  } catch (error) {
+    console.error('❌ Error al validar token:', error);
+    res.status(500);
+    throw new Error('Error al validar el token: ' + error.message);
+  }
+});
+
 export {
   register,
   login,
@@ -238,6 +356,7 @@ export {
   changePassword,
   forgotPassword,
   resetPassword,
+  validateResetToken,
   googleAuth,
   googleCallback,
 };

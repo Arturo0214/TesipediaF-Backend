@@ -1,37 +1,46 @@
 import asyncHandler from 'express-async-handler';
 import stripe from '../config/stripe.js';
 import Order from '../models/Order.js';
+import mongoose from 'mongoose';
 import Payment from '../models/Payment.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
+import GuestPayment from '../models/guestPayment.js';
+import { generateTrackingToken } from '../utils/tokenGenerator.js';
+import jwt from 'jsonwebtoken';
+import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPaymentStatusFromGuest } from './guestPaymentController.js';
+
 
 // 💳 Crear sesión de pago con Stripe
 export const createStripeSession = asyncHandler(async (req, res) => {
   const { orderId } = req.body;
+  const order = await Order.findById(orderId).populate('user', 'name email');
 
-  const order = await Order.findById(orderId);
   if (!order) {
     res.status(404);
-    throw new Error('Pedido no encontrado');
+    throw new Error('Orden no encontrada');
   }
 
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
-    line_items: [{
-      price_data: {
-        currency: 'mxn',
-        product_data: {
-          name: order.title,
+    line_items: [
+      {
+        price_data: {
+          currency: 'mxn',
+          product_data: {
+            name: order.title,
+            description: order.description
+          },
+          unit_amount: Math.round(order.price * 100)
         },
-        unit_amount: Math.round(order.price * 100), // Stripe usa centavos
-      },
-      quantity: 1,
-    }],
+        quantity: 1
+      }
+    ],
     mode: 'payment',
-    success_url: `${process.env.CLIENT_URL}/pago-exitoso`,
-    cancel_url: `${process.env.CLIENT_URL}/pago-cancelado`,
+    success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
     metadata: {
-      orderId: order._id.toString(),
+      orderId: order._id.toString()
     }
   });
 
@@ -44,86 +53,136 @@ export const createStripeSession = asyncHandler(async (req, res) => {
     status: 'pendiente',
   });
 
-  res.status(200).json({ url: session.url });
+  res.json({ url: session.url });
 });
 
 // 🔔 Webhook de Stripe
 export const stripeWebhook = asyncHandler(async (req, res) => {
-  const event = req.body;
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+    console.log(`✅ Webhook recibido: ${event.type}`);
+  } catch (err) {
+    console.error('❌ Error verificando webhook:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
   if (event.type === 'checkout.session.completed') {
-    const orderId = event.data.object.metadata?.orderId;
-
-    if (!orderId) {
-      return res.status(400).json({ message: 'Falta el orderId en metadata' });
-    }
-
-    const order = await Order.findById(orderId).populate('user', 'name email');
-    if (!order) {
-      return res.status(404).json({ message: 'Pedido no encontrado' });
-    }
-
-    // Actualizar estado del pedido
-    order.isPaid = true;
-    order.paymentDate = new Date();
-    order.status = 'paid';
-    await order.save();
-
-    // Actualizar estado del pago
-    const payment = await Payment.findOne({ order: orderId });
-    if (payment) {
-      payment.status = 'completed';
-      await payment.save();
-    }
-
-    // 🔔 Crear notificación para el cliente
-    await Notification.create({
-      user: order.user._id,
-      type: 'pago',
-      message: `💰 Pago confirmado para el pedido "${order.title}"`,
-      data: {
-        orderId: order._id,
-        amount: order.price,
-      },
+    const session = event.data.object;
+    console.log(`🔍 Procesando evento checkout.session.completed:`, {
+      orderId: session.metadata?.orderId,
+      trackingToken: session.metadata?.trackingToken
     });
 
-    // 📧 Enviar email de confirmación al cliente
-    const emailMessage = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
-        <h2 style="color: #2575fc; text-align: center;">✅ Pago Confirmado</h2>
-        <p style="font-size: 16px;">Hola <strong>${order.user.name}</strong>,</p>
-        <p style="font-size: 16px;">Tu pago ha sido confirmado exitosamente.</p>
-        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-          <p style="margin: 5px 0;"><strong>Detalles del pedido:</strong></p>
-          <p style="margin: 5px 0;">Título: ${order.title}</p>
-          <p style="margin: 5px 0;">Monto: $${order.price.toFixed(2)} MXN</p>
-          <p style="margin: 5px 0;">Fecha: ${new Date().toLocaleDateString()}</p>
+    if (session.metadata?.orderId) {
+      // 🛒 PAGO NORMAL (orden existente)
+      const orderId = session.metadata.orderId;
+      const order = await Order.findById(orderId).populate('user', 'name email');
+
+      if (!order) {
+        console.error(`❌ Pedido no encontrado: ${orderId}`);
+        return res.status(404).json({ message: 'Pedido no encontrado' });
+      }
+
+      order.isPaid = true;
+      order.paymentDate = new Date();
+      order.status = 'paid';
+      await order.save();
+      console.log(`✅ Estado del pedido actualizado a 'paid'`);
+
+      const payment = await Payment.findOne({ order: orderId });
+      if (payment) {
+        payment.status = 'completed';
+        await payment.save();
+        console.log(`✅ Estado del pago actualizado a 'completed'`);
+      }
+
+      // Notificaciones
+      await Notification.create({
+        user: order.user._id,
+        type: 'pago',
+        message: `💰 Pago confirmado para el pedido "${order.title}"`,
+        data: {
+          orderId: order._id,
+          amount: order.price,
+        },
+      });
+
+      await Notification.create({
+        user: process.env.SUPER_ADMIN_ID,
+        type: 'pago',
+        message: `💰 Nuevo pago confirmado de ${order.user.name}`,
+        data: {
+          orderId: order._id,
+          userId: order.user._id,
+          amount: order.price,
+        },
+      });
+
+      // Email
+      const emailMessage = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+          <h2 style="color: #2575fc; text-align: center;">✅ Pago Confirmado</h2>
+          <p style="font-size: 16px;">Hola <strong>${order.user.name}</strong>,</p>
+          <p style="font-size: 16px;">Tu pago ha sido confirmado exitosamente.</p>
+          <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p><strong>Detalles del pedido:</strong></p>
+            <p>Título: ${order.title}</p>
+            <p>Monto: $${order.price.toFixed(2)} MXN</p>
+            <p>Fecha: ${new Date().toLocaleDateString()}</p>
+          </div>
+          <p>Puedes ver el estado de tu pedido en tu panel de control.</p>
+          <hr>
+          <p style="font-size: 12px; text-align: center; color: #888;">© 2025 Tesipedia | Todos los derechos reservados</p>
         </div>
-        <p style="font-size: 16px;">Puedes ver el estado de tu pedido en tu panel de control.</p>
-        <hr>
-        <p style="font-size: 12px; text-align: center; color: #888;">© 2025 Tesipedia | Todos los derechos reservados</p>
-      </div>
-    `;
+      `;
 
-    await emailSender(
-      order.user.email,
-      '✅ Pago Confirmado - Tesipedia',
-      emailMessage
-    );
+      await emailSender(
+        order.user.email,
+        '✅ Pago Confirmado - Tesipedia',
+        emailMessage
+      );
+    } else if (session.metadata?.trackingToken) {
+      // 🎯 PAGO DE INVITADO
+      const trackingToken = session.metadata.trackingToken;
 
-    // 🔔 Crear notificación para el admin
-    await Notification.create({
-      user: process.env.SUPER_ADMIN_ID,
-      type: 'pago',
-      message: `💰 Nuevo pago confirmado de ${order.user.name}`,
-      data: {
-        orderId: order._id,
-        userId: order.user._id,
-        amount: order.price,
-      },
-    });
+      console.log('🔍 Buscando pago de invitado por trackingToken:', trackingToken);
+      const guestPayment = await GuestPayment.findOne({ trackingToken });
 
-    return res.status(200).json({ message: '✅ Pedido marcado como pagado' });
+      if (!guestPayment) {
+        console.error('❌ Pago de invitado no encontrado por trackingToken:', trackingToken);
+        return res.status(404).json({ message: 'Pago de invitado no encontrado' });
+      }
+
+      console.log('✅ Pago de invitado encontrado:', {
+        id: guestPayment._id,
+        status: guestPayment.paymentStatus,
+        amount: guestPayment.amount
+      });
+
+      guestPayment.paymentStatus = 'completed';   // ✅ Cambia status a completed
+      guestPayment.paymentDetails = {
+        ...guestPayment.paymentDetails,
+        sessionId: session.id,
+        stripeEvent: session
+      };
+      await guestPayment.save();
+
+      console.log('✅ Pago de invitado confirmado y actualizado:', {
+        id: guestPayment._id,
+        status: guestPayment.paymentStatus,
+        amount: guestPayment.amount
+      });
+    } else {
+      console.error('❌ No se encontró orderId ni trackingToken en metadata');
+      return res.status(400).json({ message: 'No se encontró orderId ni trackingToken en metadata' });
+    }
   }
 
   res.status(200).json({ received: true });
@@ -364,4 +423,27 @@ export const getRefundStatus = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Error al obtener el estado del reembolso: ' + error.message);
   }
+});
+
+// Crear pago de invitado
+export const createGuestPayment = asyncHandler(async (req, res) => {
+  // Redirigir a la función del guestPaymentController
+  return createGuestPaymentSession(req, res);
+});
+
+// Verificar estado del pago
+export const checkPaymentStatus = asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+  res.json({
+    status: session.payment_status,
+    paymentIntent: session.payment_intent
+  });
+});
+
+
+export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
+  // Redirigir a la función del guestPaymentController
+  return checkGuestPaymentStatusFromGuest(req, res);
 });

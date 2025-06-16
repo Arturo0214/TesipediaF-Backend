@@ -1,4 +1,5 @@
 import Message from '../models/Message.js';
+import Notification from '../models/Notification.js';
 
 export const chatSocket = (io) => {
   io.on('connection', (socket) => {
@@ -18,7 +19,7 @@ export const chatSocket = (io) => {
 
         // Determinar el sender y receiver
         const sender = socket.user._id;
-        const senderName = socket.user.isPublic ? 'Usuario Anónimo' : socket.user.name;
+        const senderName = socket.user.isPublic ? (name || 'Usuario Anónimo') : socket.user.name;
 
         // Para usuarios públicos, el receiver es el ID del admin
         const finalReceiver = socket.user.isPublic ? process.env.DEFAULT_ADMIN_ID : receiver;
@@ -50,20 +51,50 @@ export const chatSocket = (io) => {
           isRead: false
         });
 
+        // Create notification for the receiver
+        await Notification.create({
+          user: finalReceiver,
+          type: 'mensaje',
+          message: `Nuevo mensaje de ${senderName}`,
+          data: {
+            orderId: data.orderId || null,
+            sender: sender.toString(),
+            isPublic: socket.user.isPublic,
+          },
+        });
+
         // Si el usuario es autenticado, poblar la información del sender
         if (!socket.user.isPublic) {
           await newMessage.populate('sender', 'name email');
         }
 
-        // Emitir el mensaje a la sala correspondiente
+        // Emitir el mensaje a las salas correspondientes
         if (data.orderId) {
+          // Para mensajes de pedidos
           io.to(data.orderId).emit('newMessage', newMessage);
           console.log(`📤 Mensaje enviado en la sala ${data.orderId}`);
+        } else if (socket.user.isPublic) {
+          // Para mensajes públicos
+          io.to(`public:${sender}`).emit('newMessage', newMessage); // Enviar al usuario público
+          io.to(`user:${finalReceiver}`).emit('newMessage', newMessage); // Enviar al admin
+          console.log(`📤 Mensaje público enviado entre ${sender} y ${finalReceiver}`);
         } else {
-          // Para mensajes públicos, emitir al admin
+          // Para mensajes directos
+          io.to(`user:${sender}`).emit('newMessage', newMessage);
           io.to(`user:${finalReceiver}`).emit('newMessage', newMessage);
-          console.log(`📤 Mensaje público enviado al admin ${finalReceiver}`);
+          console.log(`📤 Mensaje directo enviado entre ${sender} y ${finalReceiver}`);
         }
+
+        // Emitir notificación al receptor
+        io.to(`notifications:${finalReceiver}`).emit('newNotification', {
+          type: 'mensaje',
+          message: `Nuevo mensaje de ${senderName}`,
+          data: {
+            orderId: data.orderId || null,
+            sender: sender.toString(),
+            isPublic: socket.user.isPublic,
+          },
+        });
       } catch (error) {
         console.error('Error sending message:', error);
         socket.emit('error', { message: 'Error al enviar el mensaje' });
@@ -90,7 +121,11 @@ export const chatSocket = (io) => {
         await message.save();
 
         // Notificar al remitente que el mensaje fue leído
-        io.to(message.receiver.toString()).emit('messageRead', { messageId });
+        if (message.isPublic) {
+          io.to(`public:${message.sender}`).emit('messageRead', { messageId });
+        } else {
+          io.to(`user:${message.sender}`).emit('messageRead', { messageId });
+        }
 
         console.log(`📖 Mensaje ${messageId} marcado como leído`);
       } catch (error) {
@@ -102,11 +137,13 @@ export const chatSocket = (io) => {
     // 👉 Indicador de escritura
     socket.on('typing', (data) => {
       const { orderId, isTyping } = data;
-      socket.to(orderId).emit('userTyping', {
-        userId: socket.user._id,
-        name: socket.user.name,
-        isTyping
-      });
+      if (orderId) {
+        socket.to(orderId).emit('userTyping', {
+          userId: socket.user._id,
+          name: socket.user.name,
+          isTyping
+        });
+      }
     });
 
     // 👉 Desconexión

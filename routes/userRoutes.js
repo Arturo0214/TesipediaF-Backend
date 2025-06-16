@@ -18,16 +18,12 @@ router.use(protect);
 router.get('/profile', getUserProfile);
 router.put('/profile', updateUserProfile);
 
-// Writer routes
-router.use(writerOnly);
-
 // Admin routes
-router.use(adminOnly);
-router.get('/', getUsers);
-router.get('/:id', getUserById);
-router.put('/:id', updateUser);
-router.delete('/:id', deleteUser);
-router.put('/:id/role', updateUserRole);
-router.put('/:id/status', updateUserStatus);
+router.get('/', adminOnly, getUsers);
+router.get('/:id', adminOnly, getUserById);
+router.put('/:id', adminOnly, updateUser);
+router.delete('/:id', adminOnly, deleteUser);
+router.put('/:id/role', adminOnly, updateUserRole);
+router.put('/:id/status', adminOnly, updateUserStatus);
 
 export default router; 

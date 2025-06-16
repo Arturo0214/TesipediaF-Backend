@@ -13,7 +13,10 @@ import {
     getPaymentHistory,
     getPaymentStats,
     refundPayment,
-    getRefundStatus
+    getRefundStatus,
+    createGuestPayment,
+    checkPaymentStatus,
+    checkGuestPaymentStatus
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -23,6 +26,10 @@ router.get('/success', handlePaymentSuccess);
 router.get('/failure', handlePaymentFailure);
 router.get('/cancel', handlePaymentCancel);
 
+// Rutas públicas
+router.post('/guest-payment', createGuestPayment);
+router.get('/guest-status/:trackingToken', checkGuestPaymentStatus);
+
 // Protected routes
 router.use(protect);
 router.post('/create-session', createStripeSession);
@@ -31,6 +38,7 @@ router.get('/history', getPaymentHistory);
 router.get('/stats', getPaymentStats);
 router.post('/:id/refund', refundPayment);
 router.get('/:id/refund-status', getRefundStatus);
+router.get('/status/:sessionId', checkPaymentStatus);
 
 // Admin routes
 router.use(adminOnly);

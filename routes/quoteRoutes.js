@@ -8,7 +8,10 @@ import {
     getQuoteById,
     updateQuote,
     deleteQuote,
-    searchQuotes
+    searchQuotes,
+    processGuestPayment,
+    checkGuestPaymentStatus,
+    updatePublicQuote
 } from '../controllers/quoteController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -19,7 +22,12 @@ const router = express.Router();
 // Pública
 router.post('/', uploadLimiter, upload.single('file'), createQuote);
 router.get('/public/:publicId', getQuoteByPublicId);
+router.put('/public/:publicId', updatePublicQuote);
 router.put('/link/:publicId', protect, linkQuoteToUser);
+
+// Rutas públicas para pago como invitado
+router.post('/process-guest-payment', processGuestPayment);
+router.get('/check-guest-payment/:trackingToken', checkGuestPaymentStatus);
 
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);

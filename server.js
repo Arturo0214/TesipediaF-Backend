@@ -22,14 +22,14 @@ import quoteRoutes from './routes/quoteRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import visitRoutes from './routes/visitRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
-import webhookRoutes from './routes/webhookRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import paypalRoutes from './routes/paypalRoutes.js';
+import webhookRoutes from './routes/webhookRoutes.js';
 
 // Middlewares
-import { notFound } from './middleware/errorHandler.js';
+import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
 // Configurar variables de entorno
 dotenv.config();
@@ -41,19 +41,44 @@ connectDB();
 const app = express();
 
 // Middlewares globales
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Configuración de CORS
-app.use(cors({
-  origin: process.env.CLIENT_URL, // Asegúrate de que esta variable esté configurada correctamente
-  credentials: true, // Permitir cookies
-}));
-
+app.use(helmet());
+app.use(morgan('dev'));
 app.use(cookieParser());
 app.use(setCookie);
-app.use(morgan('dev'));
-app.use(helmet());
+
+// Configuración de CORS
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Permitir solicitudes sin origin (como las de Postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'La política CORS para este sitio no permite acceso desde el origen especificado.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma', 'Expires']
+}));
+
+// Middleware para parsear JSON (excepto para webhooks de Stripe)
+app.use((req, res, next) => {
+  if (req.originalUrl === '/webhook/stripe') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
+app.use(express.urlencoded({ extended: true }));
 app.use(generalLimiter);
 app.use(validateRequest);
 
@@ -65,17 +90,17 @@ app.use('/quotes', quoteRoutes);
 app.use('/orders', orderRoutes);
 app.use('/visits', visitRoutes);
 app.use('/upload', uploadRoutes);
-app.use('/webhook', webhookRoutes);
 app.use('/chat', chatRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/payments', paymentRoutes);
 app.use('/paypal', paypalRoutes);
+app.use('/webhook', webhookRoutes);
 
 // Middlewares de error
 app.use(notFound);
-app.use(globalErrorHandler);
+app.use(errorHandler);
 
-// Puerto
+// 🔢 Puerto
 const PORT = process.env.PORT || 8000;
 
 // Create HTTP server
