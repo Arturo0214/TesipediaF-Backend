@@ -6,13 +6,12 @@ import Payment from '../models/Payment.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
 
-const Environment = process.env.NODE_ENV === 'production'
-    ? paypal.core.LiveEnvironment
-    : paypal.core.SandboxEnvironment;
+// Configurar el cliente de PayPal
+const environment = process.env.NODE_ENV === 'production'
+    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
+    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
 
-const client = new paypal.core.PayPalHttpClient(
-    new Environment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-);
+const client = new paypal.core.PayPalHttpClient(environment);
 
 // 💳 Crear orden de pago con PayPal
 export const createPayPalOrder = asyncHandler(async (req, res) => {
