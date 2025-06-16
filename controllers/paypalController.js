@@ -1,6 +1,5 @@
 import asyncHandler from 'express-async-handler';
-import checkoutNodeJssdk from '@paypal/checkout-server-sdk';
-const Orders = checkoutNodeJssdk.orders;
+import paypal from '@paypal/paypal-server-sdk';
 
 import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
@@ -8,11 +7,11 @@ import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
 
 const Environment = process.env.NODE_ENV === 'production'
-  ? checkoutNodeJssdk.core.LiveEnvironment
-  : checkoutNodeJssdk.core.SandboxEnvironment;
+    ? paypal.core.LiveEnvironment
+    : paypal.core.SandboxEnvironment;
 
-const client = new checkoutNodeJssdk.core.PayPalHttpClient(
-  new Environment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
+const client = new paypal.core.PayPalHttpClient(
+    new Environment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
 );
 
 // 💳 Crear orden de pago con PayPal
@@ -25,25 +24,25 @@ export const createPayPalOrder = asyncHandler(async (req, res) => {
         throw new Error('Pedido no encontrado');
     }
 
-    const request = new Orders.OrdersCreateRequest();
+    const request = new paypal.orders.OrdersCreateRequest();
     request.prefer('return=representation');
     request.requestBody({
-      intent: 'CAPTURE',
-      purchase_units: [{
-        amount: {
-          currency_code: 'MXN',
-          value: order.price.toString()
-        },
-        description: order.title,
-        custom_id: order._id.toString()
-      }],
-      application_context: {
-        brand_name: 'Tesipedia',
-        landing_page: 'NO_PREFERENCE',
-        user_action: 'PAY_NOW',
-        return_url: `${process.env.CLIENT_URL}/pago-paypal-exitoso`,
-        cancel_url: `${process.env.CLIENT_URL}/pago-paypal-cancelado`
-      }
+        intent: 'CAPTURE',
+        purchase_units: [{
+            amount: {
+                currency_code: 'MXN',
+                value: order.price.toString()
+            },
+            description: order.title,
+            custom_id: order._id.toString()
+        }],
+        application_context: {
+            brand_name: 'Tesipedia',
+            landing_page: 'NO_PREFERENCE',
+            user_action: 'PAY_NOW',
+            return_url: `${process.env.CLIENT_URL}/pago-paypal-exitoso`,
+            cancel_url: `${process.env.CLIENT_URL}/pago-paypal-cancelado`
+        }
     });
 
     try {
