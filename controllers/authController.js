@@ -51,19 +51,17 @@ const login = asyncHandler(async (req, res) => {
 
   const token = generateToken(user);
 
-  res.cookie('jwt', token, {
-    httpOnly: false,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
-    path: '/',
-  });
+  // Establecer la cookie de manera más explícita
+  res.setHeader('Set-Cookie', [
+    `jwt=${token}; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=${30 * 24 * 60 * 60}; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
+  ]);
 
   res.status(200).json({
     _id: user._id,
     name: user.name,
     email: user.email,
     role: user.role,
+    token
   });
 });
 

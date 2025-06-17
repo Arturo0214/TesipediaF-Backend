@@ -5,8 +5,9 @@ const setCookieIfNotExists = (req, res, next) => {
     res.cookie('cookieId', uuidv4(), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Lax',
+      sameSite: 'none',
       maxAge: 1000 * 60 * 60 * 24 * 30, // 30 días
+      domain: process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'
     });
   }
 
