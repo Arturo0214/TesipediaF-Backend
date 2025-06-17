@@ -67,10 +67,9 @@ const login = asyncHandler(async (req, res) => {
 
 // 🔒 Logout
 const logout = asyncHandler(async (req, res) => {
-  res.cookie('jwt', '', {
-    httpOnly: true,
-    expires: new Date(0),
-  });
+  res.setHeader('Set-Cookie', [
+    `jwt=; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=0; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
+  ]);
 
   res.status(200).json({ message: 'Sesión cerrada exitosamente' });
 });
