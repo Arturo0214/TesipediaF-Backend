@@ -128,7 +128,8 @@ export const createQuote = asyncHandler(async (req, res) => {
       urgencyCharge: priceDetails.cargoUrgencia,
       cashDiscount: priceDetails.descuentoEfectivo,
       finalPrice: priceDetails.precioTotal
-    }
+    },
+    status: 'pending',
   });
 
   await Notification.create({
@@ -226,7 +227,7 @@ export const updateQuote = asyncHandler(async (req, res) => {
   quote.email = req.body.email || quote.email;
   quote.name = req.body.name || quote.name;
   quote.phone = req.body.phone || quote.phone;
-  quote.status = req.body.status || quote.status;
+  if (req.body.status) quote.status = req.body.status;
 
   // Recalcular el precio si alguno de los campos relevantes cambió
   if (
@@ -418,6 +419,7 @@ export const updatePublicQuote = asyncHandler(async (req, res) => {
   quote.email = req.body.email || quote.email;
   quote.name = req.body.name || quote.name;
   quote.phone = req.body.phone || quote.phone;
+  if (req.body.status) quote.status = req.body.status;
 
   // Recalcular el precio si alguno de los campos relevantes cambió
   if (
