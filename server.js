@@ -50,16 +50,14 @@ app.use(setCookie);
 
 // Configuración de CORS
 const allowedOrigins = [
-  process.env.CLIENT_URL,
   'http://localhost:5173',
-  'http://localhost:3000',
   'https://tesipedia.com',
   'https://www.tesipedia.com'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Permitir solicitudes sin origin (como las de Postman)
+    // Permitir solicitudes sin origen (como las de Postman)
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.indexOf(origin) === -1) {
@@ -69,20 +67,24 @@ app.use(cors({
     return callback(null, true);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma', 'Expires']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
 
-// Agregar trust proxy para rate limiter
-app.set('trust proxy', 1);
-
+// Middleware para headers CORS
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:5173');
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
 });
+
+// Agregar trust proxy para rate limiter
+app.set('trust proxy', 1);
 
 app.use(generalLimiter);
 app.use(validateRequest);
