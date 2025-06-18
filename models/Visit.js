@@ -23,7 +23,7 @@ const visitSchema = new mongoose.Schema(
       region: String,
       country: String,
       org: String,
-      coordinates: {
+      location: {
         type: String,
         default: null
       }

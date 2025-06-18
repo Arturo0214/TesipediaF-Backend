@@ -18,11 +18,13 @@ export const trackVisit = asyncHandler(async (req, res) => {
     userAgent,
     path,
     cookieId,
-    city: geo?.city,
-    region: geo?.region,
-    country: geo?.country,
-    org: geo?.org,
-    location: geo?.loc,
+    geoLocation: {
+      city: geo?.city,
+      region: geo?.region,
+      country: geo?.country,
+      org: geo?.org,
+      location: geo?.loc,
+    },
   });
 
   await Notification.create({
@@ -100,7 +102,7 @@ export const getVisitStats = asyncHandler(async (req, res) => {
   res.json({
     totalVisits: total,
     visitsToday: todayCount,
-    });
+  });
 });
 
 export const getVisitHistory = asyncHandler(async (req, res) => {
