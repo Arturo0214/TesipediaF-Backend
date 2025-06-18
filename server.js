@@ -41,6 +41,8 @@ connectDB();
 const app = express();
 
 // Middlewares globales
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(cookieParser());
@@ -71,16 +73,17 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma', 'Expires']
 }));
 
-// Middleware para parsear JSON (excepto para webhooks de Stripe)
+// Agregar trust proxy para rate limiter
+app.set('trust proxy', 1);
+
 app.use((req, res, next) => {
-  if (req.originalUrl === '/webhook/stripe') {
-    next();
-  } else {
-    express.json()(req, res, next);
-  }
+  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:5173');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  next();
 });
 
-app.use(express.urlencoded({ extended: true }));
 app.use(generalLimiter);
 app.use(validateRequest);
 
