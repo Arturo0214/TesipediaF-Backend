@@ -90,8 +90,6 @@ messageSchema.virtual('conversationId').get(function () {
 messageSchema.set('toJSON', { virtuals: true });
 messageSchema.set('toObject', { virtuals: true });
 
-messageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
 const Message = mongoose.model('Message', messageSchema);
 
 export default Message;

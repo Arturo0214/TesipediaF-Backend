@@ -99,8 +99,9 @@ export const sendMessage = asyncHandler(async (req, res) => {
   console.log('🧩 conversationId generado/utilizado:', conversationId);
 
   const messageData = {
-    sender: typeof sender === 'string' ? sender : new mongoose.Types.ObjectId(sender),
+    sender,
     receiver: finalReceiver,
+    orderId: orderId && mongoose.Types.ObjectId.isValid(orderId) ? new mongoose.Types.ObjectId(orderId) : null,
     text,
     isPublic,
     senderName,
@@ -115,10 +116,6 @@ export const sendMessage = asyncHandler(async (req, res) => {
     } : null,
   };
 
-  if (orderId && mongoose.Types.ObjectId.isValid(orderId)) {
-    messageData.orderId = new mongoose.Types.ObjectId(orderId);
-  }
-
   if (req.file) {
     messageData.attachment = {
       url: req.file.path,
@@ -127,12 +124,6 @@ export const sendMessage = asyncHandler(async (req, res) => {
   }
 
   const newMessage = new Message(messageData);
-
-  if (isPublic) {
-    const oneDayLater = new Date();
-    oneDayLater.setDate(oneDayLater.getDate() + 1);
-    newMessage.expiresAt = oneDayLater;
-  }
 
   const savedMessage = await newMessage.save();
   console.log('💾 Mensaje guardado:', savedMessage);
