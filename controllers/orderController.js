@@ -65,9 +65,20 @@ export const createOrderFromQuote = asyncHandler(async (req, res) => {
     throw new Error('No autorizado para convertir esta cotización');
   }
 
+  // If quote is already converted, find and return the existing order
   if (quote.convertedToOrder) {
-    res.status(400);
-    throw new Error('Esta cotización ya fue convertida en pedido');
+    const existingOrder = await Order.findOne({ quoteId: quote._id });
+    if (!existingOrder) {
+      // This shouldn't happen, but if it does, we should fix the inconsistency
+      quote.convertedToOrder = false;
+      await quote.save();
+    } else {
+      return res.status(200).json({
+        message: 'Orden existente recuperada',
+        order: existingOrder,
+        isExisting: true
+      });
+    }
   }
 
   // Transform the data to match the Order model schema
