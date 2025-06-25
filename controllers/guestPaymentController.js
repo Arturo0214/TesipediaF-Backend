@@ -53,6 +53,11 @@ export const createGuestPaymentSession = asyncHandler(async (req, res) => {
     const trackingToken = crypto.randomBytes(32).toString('hex');
     console.log(`🔑 Token de seguimiento generado: ${trackingToken}`);
 
+    // Obtener la URL base del cliente
+    const clientUrl = process.env.NODE_ENV === 'production'
+        ? 'https://tesipedia.com'
+        : (req.headers.origin || process.env.CLIENT_URL || 'http://localhost:5173');
+
     try {
         // Verificar si el correo ya está registrado
         const userExists = await User.findOne({ email: correo });
@@ -78,9 +83,9 @@ export const createGuestPaymentSession = asyncHandler(async (req, res) => {
                 quantity: 1,
             }],
             mode: 'payment',
-            success_url: `${process.env.CLIENT_URL}/payment/success?tracking_token=${trackingToken}`,
-            cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
-            customer_email: correo, // Añadir el correo del cliente para prefilling
+            success_url: `${clientUrl}/payment/success?tracking_token=${trackingToken}`,
+            cancel_url: `${clientUrl}/payment/cancel`,
+            customer_email: correo,
             metadata: {
                 trackingToken,
                 quoteId: quote._id.toString(),
@@ -107,18 +112,16 @@ export const createGuestPaymentSession = asyncHandler(async (req, res) => {
                 sessionCreatedAt: new Date()
             }
         });
-        console.log(`✅ Registro de pago de invitado creado: ${guestPayment._id}`);
 
-        // Responder al frontend
         res.status(200).json({
-            sessionUrl: session.url,
-            trackingToken: guestPayment.trackingToken
+            message: 'Sesión de pago creada correctamente',
+            trackingToken,
+            sessionId: session.id,
+            sessionUrl: session.url
         });
-        console.log(`✅ Respuesta enviada al frontend con URL: ${session.url}`);
-
     } catch (error) {
-        console.error(`❌ Error al crear la sesión de pago:`, error);
-        res.status(400);
+        console.error('❌ Error al crear sesión de pago:', error);
+        res.status(500);
         throw new Error('Error al crear la sesión de pago: ' + error.message);
     }
 });

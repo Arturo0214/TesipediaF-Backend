@@ -27,6 +27,11 @@ export const createStripeSession = asyncHandler(async (req, res) => {
     throw new Error('No autorizado: esta orden pertenece a otro usuario');
   }
 
+  // Obtener la URL base del cliente
+  const clientUrl = process.env.NODE_ENV === 'production'
+    ? 'https://tesipedia.com'
+    : (req.headers.origin || process.env.CLIENT_URL || 'http://localhost:5173');
+
   const session = await stripe.checkout.sessions.create({
     payment_method_types: ['card'],
     line_items: [
@@ -43,8 +48,8 @@ export const createStripeSession = asyncHandler(async (req, res) => {
       }
     ],
     mode: 'payment',
-    success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
+    success_url: `${clientUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${clientUrl}/payment/cancel`,
     metadata: {
       orderId: order._id.toString()
     }
