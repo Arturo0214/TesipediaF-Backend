@@ -70,19 +70,23 @@ export const createOrderFromQuote = asyncHandler(async (req, res) => {
     throw new Error('Esta cotización ya fue convertida en pedido');
   }
 
-  const price = calculatePrice(quote.studyArea, quote.educationLevel, quote.pages);
-
-  const newOrder = await Order.create({
+  // Transform the data to match the Order model schema
+  const transformedData = {
     user: req.user._id,
     title: quote.taskTitle || 'Pedido desde cotización',
     studyArea: quote.studyArea,
     educationLevel: quote.educationLevel,
     pages: quote.pages,
     dueDate: quote.dueDate,
-    requirements: quote.requirements,
-    price,
+    requirements: {
+      text: quote.requirements?.text || '',
+      file: quote.requirements?.file?.path || ''
+    },
+    price: Number(quote.priceDetails?.finalPrice || quote.estimatedPrice),
     quoteId: quote._id,
-  });
+  };
+
+  const newOrder = await Order.create(transformedData);
 
   quote.convertedToOrder = true;
   await quote.save();
