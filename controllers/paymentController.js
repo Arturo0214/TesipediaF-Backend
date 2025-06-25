@@ -13,12 +13,18 @@ import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPayment
 
 // 💳 Crear sesión de pago con Stripe
 export const createStripeSession = asyncHandler(async (req, res) => {
-  const { orderId } = req.body;
+  const { orderId } = req.params;
   const order = await Order.findById(orderId).populate('user', 'name email');
 
   if (!order) {
     res.status(404);
     throw new Error('Orden no encontrada');
+  }
+
+  // Verificar que el usuario que hace la petición es el dueño de la orden
+  if (order.user._id.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error('No autorizado: esta orden pertenece a otro usuario');
   }
 
   const session = await stripe.checkout.sessions.create({

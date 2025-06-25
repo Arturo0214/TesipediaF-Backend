@@ -30,14 +30,11 @@ router.get('/cancel', handlePaymentCancel);
 router.post('/guest-payment', createGuestPayment);
 router.get('/guest-status/:trackingToken', checkGuestPaymentStatus);
 
-// Protected routes
+// Protected routes (require authentication but not admin)
 router.use(protect);
-router.post('/create-session', createStripeSession);
+router.post('/create-session/:orderId', createStripeSession);
 router.get('/my-payments', getMyPayments);
 router.get('/history', getPaymentHistory);
-router.get('/stats', getPaymentStats);
-router.post('/:id/refund', refundPayment);
-router.get('/:id/refund-status', getRefundStatus);
 router.get('/status/:sessionId', checkPaymentStatus);
 
 // Admin routes
@@ -46,5 +43,8 @@ router.get('/', getPayments);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);
 router.delete('/:id', deletePayment);
+router.get('/stats', getPaymentStats);
+router.post('/:id/refund', refundPayment);
+router.get('/:id/refund-status', getRefundStatus);
 
 export default router; 
