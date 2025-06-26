@@ -100,3 +100,12 @@ export const admin = (req, res, next) => {
     throw new Error('No autorizado: se requiere rol de administrador o escritor');
   }
 };
+
+export const writer = (req, res, next) => {
+  if (req.user && req.user.role === 'writer') {
+    next();
+  } else {
+    res.status(403);
+    throw new Error('Not authorized as a writer');
+  }
+};

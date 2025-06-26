@@ -15,12 +15,12 @@ const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 export const createQuote = asyncHandler(async (req, res) => {
   const {
     taskType,
-    studyArea,
+    studyArea: areaEstudio,
     career,
-    educationLevel,
-    taskTitle,
-    pages,
-    dueDate,
+    educationLevel: nivelAcademico,
+    taskTitle: tema,
+    pages: numPaginas,
+    dueDate: fechaEntrega,
     email,
     name,
     phone,
@@ -33,12 +33,12 @@ export const createQuote = asyncHandler(async (req, res) => {
 
   // Validar cada campo requerido
   if (!taskType) missingFields.push('Tipo de tesis');
-  if (!studyArea) missingFields.push('Área de estudio');
+  if (!areaEstudio) missingFields.push('Área de estudio');
   if (!career) missingFields.push('Carrera');
-  if (!educationLevel) missingFields.push('Nivel académico');
-  if (!taskTitle) missingFields.push('Título del trabajo');
-  if (!pages) missingFields.push('Número de páginas');
-  if (!dueDate) missingFields.push('Fecha de entrega');
+  if (!nivelAcademico) missingFields.push('Nivel académico');
+  if (!tema) missingFields.push('Título del trabajo');
+  if (!numPaginas) missingFields.push('Número de páginas');
+  if (!fechaEntrega) missingFields.push('Fecha de entrega');
   if (!email) missingFields.push('Email');
   if (!name) missingFields.push('Nombre');
   if (!text) missingFields.push('Descripción del proyecto');
@@ -50,7 +50,7 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Validaciones adicionales
-  if (taskTitle.length < 5) {
+  if (tema.length < 5) {
     res.status(400);
     throw new Error('El título debe tener al menos 5 caracteres');
   }
@@ -82,13 +82,13 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Validar que la fecha sea futura
-  if (new Date(dueDate) <= new Date()) {
+  if (new Date(fechaEntrega) <= new Date()) {
     res.status(400);
     throw new Error('La fecha de entrega debe ser futura');
   }
 
   // Calcular el precio estimado
-  const priceDetails = calculatePrice(studyArea, educationLevel, pages, dueDate);
+  const priceDetails = calculatePrice(areaEstudio, nivelAcademico, numPaginas, fechaEntrega);
   const estimatedPrice = priceDetails.precioTotal;
 
   let fileData;
@@ -109,16 +109,16 @@ export const createQuote = asyncHandler(async (req, res) => {
   const newQuote = await Quote.create({
     publicId: uuidv4(),
     taskType,
-    studyArea,
+    studyArea: areaEstudio,
     career,
-    educationLevel,
-    taskTitle,
+    educationLevel: nivelAcademico,
+    taskTitle: tema,
     requirements: {
       text,
       file: fileData,
     },
-    pages,
-    dueDate,
+    pages: numPaginas,
+    dueDate: fechaEntrega,
     email,
     name,
     phone,
@@ -135,7 +135,7 @@ export const createQuote = asyncHandler(async (req, res) => {
   await Notification.create({
     user: SUPER_ADMIN_ID,
     type: 'cotizacion',
-    message: `📝 Nueva cotización pública creada (${studyArea})`,
+    message: `📝 Nueva cotización pública creada (${areaEstudio})`,
     data: {
       quoteId: newQuote._id,
       email,

@@ -27,6 +27,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import paypalRoutes from './routes/paypalRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
+import projectRoutes from './routes/projectRoutes.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -102,6 +103,7 @@ app.use('/notifications', notificationRoutes);
 app.use('/payments', paymentRoutes);
 app.use('/paypal', paypalRoutes);
 app.use('/webhook', webhookRoutes);
+app.use('/api/projects', projectRoutes);
 
 // Middlewares de error
 app.use(notFound);
