@@ -135,7 +135,15 @@ export const createQuote = asyncHandler(async (req, res) => {
       finalPrice: priceDetails.precioTotal
     },
     status: 'pending',
+    // Vincular con el usuario si está autenticado
+    user: req.user ? req.user._id : null
   };
+
+  console.log('Creating quote with data:', {
+    ...quoteData,
+    estimatedPrice: priceDetails.precioTotal,
+    user: req.user ? req.user._id : 'No user authenticated'
+  });
 
   const newQuote = await Quote.create(quoteData);
 
@@ -146,15 +154,18 @@ export const createQuote = asyncHandler(async (req, res) => {
     throw new Error('Error al guardar el precio de la cotización');
   }
 
-  await Notification.create({
-    user: SUPER_ADMIN_ID,
-    type: 'cotizacion',
-    message: `📝 Nueva cotización pública creada (${areaEstudio})`,
-    data: {
-      quoteId: newQuote._id,
-      email,
-    },
-  });
+  // Crear notificación solo si hay un usuario administrador
+  if (SUPER_ADMIN_ID) {
+    await Notification.create({
+      user: SUPER_ADMIN_ID,
+      type: 'cotizacion',
+      message: `📝 Nueva cotización ${req.user ? 'creada por usuario registrado' : 'pública'} (${areaEstudio})`,
+      data: {
+        quoteId: newQuote._id,
+        email,
+      },
+    });
+  }
 
   // Enviar respuesta con todos los detalles necesarios
   res.status(201).json({
