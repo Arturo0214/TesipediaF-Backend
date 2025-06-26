@@ -88,8 +88,13 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Calcular el precio estimado
-  const priceDetails = calculatePrice(areaEstudio, nivelAcademico, numPaginas, fechaEntrega);
-  const estimatedPrice = priceDetails.precioTotal;
+  const priceDetails = calculatePrice(areaEstudio, nivelAcademico, parseInt(numPaginas), fechaEntrega);
+
+  if (!priceDetails || typeof priceDetails.precioTotal !== 'number') {
+    console.error('Error en el cálculo del precio:', priceDetails);
+    res.status(500);
+    throw new Error('Error al calcular el precio de la cotización');
+  }
 
   let fileData;
   if (req.file) {
@@ -106,7 +111,7 @@ export const createQuote = asyncHandler(async (req, res) => {
     };
   }
 
-  const newQuote = await Quote.create({
+  const quoteData = {
     publicId: uuidv4(),
     taskType,
     studyArea: areaEstudio,
@@ -117,12 +122,12 @@ export const createQuote = asyncHandler(async (req, res) => {
       text,
       file: fileData,
     },
-    pages: numPaginas,
+    pages: parseInt(numPaginas),
     dueDate: fechaEntrega,
     email,
     name,
     phone,
-    estimatedPrice,
+    estimatedPrice: priceDetails.precioTotal,
     priceDetails: {
       basePrice: priceDetails.precioBase,
       urgencyCharge: priceDetails.cargoUrgencia,
@@ -130,7 +135,16 @@ export const createQuote = asyncHandler(async (req, res) => {
       finalPrice: priceDetails.precioTotal
     },
     status: 'pending',
-  });
+  };
+
+  const newQuote = await Quote.create(quoteData);
+
+  // Verificar que la cotización se creó correctamente con el precio
+  if (!newQuote.estimatedPrice || newQuote.estimatedPrice === 0) {
+    console.error('Cotización creada sin precio:', newQuote);
+    res.status(500);
+    throw new Error('Error al guardar el precio de la cotización');
+  }
 
   await Notification.create({
     user: SUPER_ADMIN_ID,
@@ -142,9 +156,19 @@ export const createQuote = asyncHandler(async (req, res) => {
     },
   });
 
+  // Enviar respuesta con todos los detalles necesarios
   res.status(201).json({
     message: 'Cotización creada exitosamente',
-    quote: newQuote
+    quote: {
+      ...newQuote.toObject(),
+      estimatedPrice: priceDetails.precioTotal,
+      priceDetails: {
+        basePrice: priceDetails.precioBase,
+        urgencyCharge: priceDetails.cargoUrgencia,
+        cashDiscount: priceDetails.descuentoEfectivo,
+        finalPrice: priceDetails.precioTotal
+      }
+    }
   });
 });
 
