@@ -262,7 +262,8 @@ export const updateQuote = asyncHandler(async (req, res) => {
     studyArea: quote.studyArea,
     educationLevel: quote.educationLevel,
     pages: quote.pages,
-    dueDate: quote.dueDate
+    dueDate: quote.dueDate,
+    user: quote.user // Preservar el usuario
   };
 
   // Actualizar campos
@@ -278,6 +279,9 @@ export const updateQuote = asyncHandler(async (req, res) => {
   quote.name = req.body.name || quote.name;
   quote.phone = req.body.phone || quote.phone;
   if (req.body.status) quote.status = req.body.status;
+
+  // Asegurarse de que el usuario se mantenga
+  quote.user = previousValues.user;
 
   // Recalcular el precio si alguno de los campos relevantes cambió
   if (
@@ -306,6 +310,13 @@ export const updateQuote = asyncHandler(async (req, res) => {
   }
 
   const updatedQuote = await quote.save();
+
+  // Log para verificar que el usuario se mantiene
+  console.log('Quote updated with user:', {
+    quoteId: updatedQuote._id,
+    userId: updatedQuote.user
+  });
+
   res.json(updatedQuote);
 });
 
@@ -440,6 +451,69 @@ export const checkGuestPaymentStatus = async (req, res) => {
     res.status(500).json({ message: 'Error al verificar el estado del pago' });
   }
 };
+
+// 🔄 Actualizar mi cotización (usuario autenticado)
+export const updateMyQuote = asyncHandler(async (req, res) => {
+  const quote = await Quote.findOne({ _id: req.params.id, user: req.user._id });
+
+  if (!quote) {
+    res.status(404);
+    throw new Error('Cotización no encontrada o no tienes permiso para modificarla');
+  }
+
+  // Validar que la cotización no esté pagada
+  if (quote.status === 'paid') {
+    res.status(400);
+    throw new Error('No se puede modificar una cotización que ya ha sido pagada');
+  }
+
+  // Guardar los valores anteriores para comparar
+  const previousValues = {
+    studyArea: quote.studyArea,
+    educationLevel: quote.educationLevel,
+    pages: quote.pages,
+    dueDate: quote.dueDate
+  };
+
+  // Actualizar campos
+  quote.taskType = req.body.taskType || quote.taskType;
+  quote.studyArea = req.body.studyArea || quote.studyArea;
+  quote.career = req.body.career || quote.career;
+  quote.educationLevel = req.body.educationLevel || quote.educationLevel;
+  quote.taskTitle = req.body.taskTitle || quote.taskTitle;
+  quote.requirements = req.body.requirements || quote.requirements;
+  quote.pages = req.body.pages || quote.pages;
+  quote.dueDate = req.body.dueDate || quote.dueDate;
+  quote.email = req.body.email || quote.email;
+  quote.name = req.body.name || quote.name;
+  quote.phone = req.body.phone || quote.phone;
+
+  // Recalcular el precio si alguno de los campos relevantes cambió
+  if (
+    quote.studyArea !== previousValues.studyArea ||
+    quote.educationLevel !== previousValues.educationLevel ||
+    quote.pages !== previousValues.pages ||
+    quote.dueDate !== previousValues.dueDate
+  ) {
+    const priceCalculation = calculatePrice(
+      quote.studyArea,
+      quote.educationLevel,
+      quote.pages,
+      quote.dueDate
+    );
+
+    quote.estimatedPrice = priceCalculation.precioTotal;
+    quote.priceDetails = {
+      basePrice: priceCalculation.precioBase,
+      urgencyCharge: priceCalculation.cargoUrgencia,
+      cashDiscount: priceCalculation.descuentoEfectivo,
+      finalPrice: priceCalculation.precioTotal
+    };
+  }
+
+  const updatedQuote = await quote.save();
+  res.json(updatedQuote);
+});
 
 // 🔄 Actualizar cotización pública
 export const updatePublicQuote = asyncHandler(async (req, res) => {

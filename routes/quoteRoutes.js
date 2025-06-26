@@ -11,7 +11,8 @@ import {
     searchQuotes,
     processGuestPayment,
     checkGuestPaymentStatus,
-    updatePublicQuote
+    updatePublicQuote,
+    updateMyQuote
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -31,6 +32,7 @@ router.get('/check-guest-payment/:trackingToken', checkGuestPaymentStatus);
 
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);
+router.put('/my-quotes/:id', protect, updateMyQuote);
 
 // Admin
 router.get('/', protect, adminOnly, getQuotes);
