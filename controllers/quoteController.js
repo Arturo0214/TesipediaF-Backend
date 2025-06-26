@@ -13,6 +13,14 @@ const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
 // 📝 Crear cotización pública
 export const createQuote = asyncHandler(async (req, res) => {
+  // Log de autenticación
+  console.log('Estado de autenticación:', {
+    isAuthenticated: !!req.user,
+    userId: req.user?._id,
+    userEmail: req.user?.email,
+    userRole: req.user?.role
+  });
+
   const {
     taskType,
     studyArea: areaEstudio,
@@ -135,17 +143,24 @@ export const createQuote = asyncHandler(async (req, res) => {
       finalPrice: priceDetails.precioTotal
     },
     status: 'pending',
-    // Vincular con el usuario si está autenticado
-    user: req.user ? req.user._id : null
+    user: req.user?._id || null
   };
 
-  console.log('Creating quote with data:', {
+  console.log('Creando cotización con datos:', {
     ...quoteData,
     estimatedPrice: priceDetails.precioTotal,
-    user: req.user ? req.user._id : 'No user authenticated'
+    userAssigned: req.user ? req.user._id : 'No user authenticated'
   });
 
   const newQuote = await Quote.create(quoteData);
+
+  // Log después de crear la cotización
+  console.log('Cotización creada:', {
+    quoteId: newQuote._id,
+    publicId: newQuote.publicId,
+    userId: newQuote.user,
+    estimatedPrice: newQuote.estimatedPrice
+  });
 
   // Verificar que la cotización se creó correctamente con el precio
   if (!newQuote.estimatedPrice || newQuote.estimatedPrice === 0) {

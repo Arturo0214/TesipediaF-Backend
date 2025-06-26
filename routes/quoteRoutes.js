@@ -13,14 +13,14 @@ import {
     checkGuestPaymentStatus,
     updatePublicQuote
 } from '../controllers/quoteController.js';
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
 import { uploadLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Pública
-router.post('/', uploadLimiter, upload.single('file'), createQuote);
+// Pública (con autenticación opcional)
+router.post('/', optionalAuth, uploadLimiter, upload.single('file'), createQuote);
 router.get('/public/:publicId', getQuoteByPublicId);
 router.put('/public/:publicId', updatePublicQuote);
 router.put('/link/:publicId', protect, linkQuoteToUser);
