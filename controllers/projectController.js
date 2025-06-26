@@ -1,6 +1,6 @@
 import Project from '../models/Project.js';
 import Quote from '../models/Quote.js';
-import asyncHandler from '../middleware/asyncErrors.js';
+import asyncHandler from 'express-async-handler';
 
 // Create a new project from a quote
 export const createProjectFromQuote = asyncHandler(async (req, res) => {
