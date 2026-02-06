@@ -1,34 +1,40 @@
-const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, paymentMethod = 'card') => {
+const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, paymentMethod = 'card', taskType = '') => {
   let precioPorPagina = 0;
+  const areaLower = areaEstudios.toLowerCase();
+  const isSaludOrMath = areaLower.includes('salud') || areaLower.includes('matemáticas') || areaLower.includes('área 2');
+  const isArticulo = taskType && taskType.toLowerCase().includes('artículo');
 
-  // Determinar precio por página según área y nivel
-  if (areaEstudios.startsWith('Área 1:') || areaEstudios.startsWith('Área 2:')) {
+  // Determinar precio por página según tipo, área y nivel
+  if (isArticulo) {
+    // Precios especiales para Artículos Científicos
     switch (nivelEstudios) {
       case 'Licenciatura':
-        precioPorPagina = 320;
+        precioPorPagina = isSaludOrMath ? 380 : 350;
         break;
       case 'Maestría':
-        precioPorPagina = 420;
+        precioPorPagina = isSaludOrMath ? 450 : 410;
         break;
       case 'Doctorado':
-        precioPorPagina = 520;
+        precioPorPagina = isSaludOrMath ? 520 : 480;
         break;
-      default:
-        precioPorPagina = 320;
+      default: // Especialidad y otros
+        precioPorPagina = 450;
     }
-  } else if (areaEstudios.startsWith('Área 3:') || areaEstudios.startsWith('Área 4:')) {
+  } else {
+    // Precios estándar para Tesis, Tesinas, etc.
+    // Estandarizando lógica con quoteController
     switch (nivelEstudios) {
       case 'Licenciatura':
-        precioPorPagina = 280;
+        precioPorPagina = isSaludOrMath ? 250 : 220;
         break;
       case 'Maestría':
-        precioPorPagina = 380;
+        precioPorPagina = isSaludOrMath ? 300 : 270;
         break;
       case 'Doctorado':
-        precioPorPagina = 480;
+        precioPorPagina = isSaludOrMath ? 350 : 320;
         break;
-      default:
-        precioPorPagina = 280;
+      default: // Especialidad y otros
+        precioPorPagina = 300;
     }
   }
 

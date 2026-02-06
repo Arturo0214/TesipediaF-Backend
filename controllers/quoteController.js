@@ -94,7 +94,7 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Calcular el precio estimado
-  const priceDetails = calculatePrice(studyArea, educationLevel, parseInt(pages), dueDate);
+  const priceDetails = calculatePrice(studyArea, educationLevel, parseInt(pages), dueDate, 'card', taskType);
 
   if (!priceDetails || typeof priceDetails.precioTotal !== 'number') {
     console.error('Error en el cálculo del precio:', priceDetails);
@@ -292,7 +292,9 @@ export const updateQuote = asyncHandler(async (req, res) => {
       quote.studyArea,
       quote.educationLevel,
       quote.pages,
-      quote.dueDate
+      quote.dueDate,
+      'card',
+      quote.taskType
     );
 
     // Asignar el precio total al campo estimatedPrice
@@ -497,7 +499,9 @@ export const updateMyQuote = asyncHandler(async (req, res) => {
       quote.studyArea,
       quote.educationLevel,
       quote.pages,
-      quote.dueDate
+      quote.dueDate,
+      'card',
+      quote.taskType
     );
 
     quote.estimatedPrice = priceCalculation.precioTotal;
@@ -554,7 +558,9 @@ export const updatePublicQuote = asyncHandler(async (req, res) => {
       quote.studyArea,
       quote.educationLevel,
       quote.pages,
-      quote.dueDate
+      quote.dueDate,
+      'card',
+      quote.taskType
     );
 
     // Asignar el precio total al campo estimatedPrice
