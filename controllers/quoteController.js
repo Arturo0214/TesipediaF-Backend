@@ -6,7 +6,6 @@ import calculatePrice from '../utils/calculatePrice.js';
 import cloudinary from '../config/cloudinary.js';
 import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
-import generateToken from '../utils/generateToken.js';
 import stripe from '../config/stripe.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
@@ -21,19 +20,18 @@ export const createQuote = asyncHandler(async (req, res) => {
     userRole: req.user?.role
   });
 
-  const {
-    taskType,
-    studyArea: areaEstudio,
-    career,
-    educationLevel: nivelAcademico,
-    taskTitle: tema,
-    pages: numPaginas,
-    dueDate: fechaEntrega,
-    email,
-    name,
-    phone,
-  } = req.body;
+  console.log('Datos recibidos:', req.body);
 
+  const taskType = req.body.taskType || req.body.tipoTesis;
+  const studyArea = req.body.studyArea || req.body.areaEstudio;
+  const career = req.body.career || req.body.carrera;
+  const educationLevel = req.body.educationLevel || req.body.nivelAcademico;
+  const taskTitle = req.body.taskTitle || req.body.tema;
+  const pages = req.body.pages || req.body.numPaginas;
+  const dueDate = req.body.dueDate || req.body.fechaEntrega;
+  const email = req.body.email || req.body.correo;
+  const name = req.body.name || req.body.nombre;
+  const phone = req.body.phone || req.body.telefono;
   const text = req.body.descripcion || req.body.requirements?.text;
 
   // Crear un objeto para rastrear los campos faltantes
@@ -41,12 +39,12 @@ export const createQuote = asyncHandler(async (req, res) => {
 
   // Validar cada campo requerido
   if (!taskType) missingFields.push('Tipo de tesis');
-  if (!areaEstudio) missingFields.push('Área de estudio');
+  if (!studyArea) missingFields.push('Área de estudio');
   if (!career) missingFields.push('Carrera');
-  if (!nivelAcademico) missingFields.push('Nivel académico');
-  if (!tema) missingFields.push('Título del trabajo');
-  if (!numPaginas) missingFields.push('Número de páginas');
-  if (!fechaEntrega) missingFields.push('Fecha de entrega');
+  if (!educationLevel) missingFields.push('Nivel académico');
+  if (!taskTitle) missingFields.push('Título del trabajo');
+  if (!pages) missingFields.push('Número de páginas');
+  if (!dueDate) missingFields.push('Fecha de entrega');
   if (!email) missingFields.push('Email');
   if (!name) missingFields.push('Nombre');
   if (!text) missingFields.push('Descripción del proyecto');
@@ -58,7 +56,7 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Validaciones adicionales
-  if (tema.length < 5) {
+  if (taskTitle.length < 5) {
     res.status(400);
     throw new Error('El título debe tener al menos 5 caracteres');
   }
@@ -90,13 +88,13 @@ export const createQuote = asyncHandler(async (req, res) => {
   }
 
   // Validar que la fecha sea futura
-  if (new Date(fechaEntrega) <= new Date()) {
+  if (new Date(dueDate) <= new Date()) {
     res.status(400);
     throw new Error('La fecha de entrega debe ser futura');
   }
 
   // Calcular el precio estimado
-  const priceDetails = calculatePrice(areaEstudio, nivelAcademico, parseInt(numPaginas), fechaEntrega);
+  const priceDetails = calculatePrice(studyArea, educationLevel, parseInt(pages), dueDate);
 
   if (!priceDetails || typeof priceDetails.precioTotal !== 'number') {
     console.error('Error en el cálculo del precio:', priceDetails);
@@ -122,16 +120,16 @@ export const createQuote = asyncHandler(async (req, res) => {
   const quoteData = {
     publicId: uuidv4(),
     taskType,
-    studyArea: areaEstudio,
+    studyArea,
     career,
-    educationLevel: nivelAcademico,
-    taskTitle: tema,
+    educationLevel,
+    taskTitle,
     requirements: {
       text,
       file: fileData,
     },
-    pages: parseInt(numPaginas),
-    dueDate: fechaEntrega,
+    pages: parseInt(pages),
+    dueDate,
     email,
     name,
     phone,
@@ -174,7 +172,7 @@ export const createQuote = asyncHandler(async (req, res) => {
     await Notification.create({
       user: SUPER_ADMIN_ID,
       type: 'cotizacion',
-      message: `📝 Nueva cotización ${req.user ? 'creada por usuario registrado' : 'pública'} (${areaEstudio})`,
+      message: `📝 Nueva cotización ${req.user ? 'creada por usuario registrado' : 'pública'} (${studyArea})`,
       data: {
         quoteId: newQuote._id,
         email,
@@ -574,3 +572,98 @@ export const updatePublicQuote = asyncHandler(async (req, res) => {
   const updatedQuote = await quote.save();
   res.json(updatedQuote);
 });
+
+// 💰 Calcular precio para cotización de venta
+export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
+  const { educationLevel, studyArea, pages, serviceType } = req.body;
+
+  // Validar campos requeridos
+  if (!educationLevel || !studyArea || !pages) {
+    res.status(400);
+    throw new Error('Faltan campos requeridos: nivel académico, área de estudio y páginas');
+  }
+
+  // Validar que páginas sea un número positivo
+  const numPages = parseInt(pages);
+  if (isNaN(numPages) || numPages <= 0) {
+    res.status(400);
+    throw new Error('El número de páginas debe ser un número positivo');
+  }
+
+  // Normalizar el área de estudio para la comparación
+  const normalizedArea = studyArea.toLowerCase();
+
+  // Determinar si es área de salud o matemáticas
+  const isSaludOrMath =
+    normalizedArea.includes('salud') ||
+    normalizedArea.includes('matemáticas') ||
+    normalizedArea.includes('área 2');
+
+  let pricePerPage = 0;
+
+  // Calcular precio por página según nivel académico y área
+  switch (educationLevel.toLowerCase()) {
+    case 'licenciatura':
+      if (isSaludOrMath) {
+        pricePerPage = 250;
+      } else {
+        pricePerPage = 220; // Ciencias sociales, humanidades, diseño, algunas ingenierías
+      }
+      break;
+
+    case 'maestría':
+    case 'maestria':
+      if (normalizedArea.includes('salud') || normalizedArea.includes('área 2')) {
+        pricePerPage = 300; // $220 + $80
+      } else {
+        pricePerPage = 270; // $220 + $50 (cualquier área excepto salud)
+      }
+      break;
+
+    case 'maestría / especialidad salud':
+    case 'maestria / especialidad salud':
+    case 'especialidad':
+      pricePerPage = 300; // $220 + $80 (área de la salud)
+      break;
+
+    case 'doctorado':
+      if (normalizedArea.includes('salud') || normalizedArea.includes('área 2')) {
+        pricePerPage = 350; // $220 + $130
+      } else {
+        pricePerPage = 320; // $220 + $100 (cualquier área excepto salud)
+      }
+      break;
+
+    case 'doctorado / área de la salud':
+      pricePerPage = 350; // $220 + $130
+      break;
+
+    default:
+      res.status(400);
+      throw new Error('Nivel académico no válido');
+  }
+
+  // Si es servicio de corrección, aplicar 50% de descuento
+  const isCorrectionService = serviceType === 'correccion' || serviceType === 'correction';
+  if (isCorrectionService) {
+    pricePerPage = pricePerPage * 0.5;
+  }
+
+  // Calcular precio total
+  const totalPrice = pricePerPage * numPages;
+
+  // Preparar respuesta con detalles
+  res.json({
+    success: true,
+    pricing: {
+      educationLevel,
+      studyArea,
+      pages: numPages,
+      serviceType: isCorrectionService ? 'Corrección' : 'Trabajo Completo',
+      pricePerPage,
+      totalPrice,
+      formattedPrice: `$${totalPrice.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }
+  });
+});
+

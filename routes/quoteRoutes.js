@@ -12,7 +12,8 @@ import {
     processGuestPayment,
     checkGuestPaymentStatus,
     updatePublicQuote,
-    updateMyQuote
+    updateMyQuote,
+    calculateSalesQuotePrice
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -29,6 +30,9 @@ router.put('/link/:publicId', protect, linkQuoteToUser);
 // Rutas públicas para pago como invitado
 router.post('/process-guest-payment', processGuestPayment);
 router.get('/check-guest-payment/:trackingToken', checkGuestPaymentStatus);
+
+// Ruta pública para calcular precio de cotización de venta
+router.post('/calculate-sales-price', calculateSalesQuotePrice);
 
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);
