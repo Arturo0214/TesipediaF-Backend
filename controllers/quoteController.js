@@ -612,25 +612,26 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
 
   // Si es Artículo Científico, usar precios especiales
   if (isArticuloCientifico) {
-    // Precios especiales para artículos científicos (basado en $12,500 por 35 páginas = $357/página)
+    // Precios especiales para artículos científicos
+    // Basados en: $12,500 final (con desc. 10%) ÷ 35 págs = $400/pág base
     switch (educationLevel.toLowerCase()) {
       case 'licenciatura':
-        pricePerPage = isSaludOrMath ? 380 : 350;
+        pricePerPage = isSaludOrMath ? 435 : 400;
         break;
       case 'maestría':
       case 'maestria':
-        pricePerPage = isSaludOrMath ? 450 : 410;
+        pricePerPage = isSaludOrMath ? 510 : 470;
         break;
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = 450;
+        pricePerPage = 510;
         break;
       case 'doctorado':
-        pricePerPage = isSaludOrMath ? 520 : 480;
+        pricePerPage = isSaludOrMath ? 590 : 540;
         break;
       case 'doctorado / área de la salud':
-        pricePerPage = 520;
+        pricePerPage = 590;
         break;
       default:
         res.status(400);
@@ -663,14 +664,30 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
     }
   }
 
-  // Si es servicio de corrección, aplicar 50% de descuento
-  const isCorrectionService = serviceType === 'correccion' || serviceType === 'correction';
-  if (isCorrectionService) {
+  // Aplicar modificador según el tipo de servicio
+  // Modalidad 1: 100% (hacemos todo) - sin modificador
+  // Modalidad 2: 75% (acompañamiento) - aplicar 0.75
+  // Corrección: 50% (solo corrección) - aplicar 0.5
+  const isModalidad2 = serviceType === 'modalidad2';
+  const isCorreccion = serviceType === 'correccion' || serviceType === 'correction';
+
+  if (isModalidad2) {
+    pricePerPage = pricePerPage * 0.75;
+  } else if (isCorreccion) {
     pricePerPage = pricePerPage * 0.5;
   }
+  // Si es modalidad1 o cualquier otro valor, se mantiene el 100%
 
   // Calcular precio total
   const totalPrice = pricePerPage * numPages;
+
+  // Determinar descripción del tipo de servicio
+  let serviceTypeDescription = 'Modalidad 1 - Hacemos todo';
+  if (isModalidad2) {
+    serviceTypeDescription = 'Modalidad 2 - Acompañamiento';
+  } else if (isCorreccion) {
+    serviceTypeDescription = 'Solo Corrección';
+  }
 
   // Preparar respuesta con detalles
   res.json({
@@ -680,7 +697,7 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
       studyArea,
       pages: numPages,
       taskType: taskType || 'No especificado',
-      serviceType: isCorrectionService ? 'Corrección' : 'Trabajo Completo',
+      serviceType: serviceTypeDescription,
       pricePerPage,
       totalPrice,
       formattedPrice: `$${totalPrice.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
