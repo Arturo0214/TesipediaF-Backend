@@ -625,7 +625,7 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = 510;
+        pricePerPage = isSaludOrMath ? 510 : 470; // Mismo precio que maestría
         break;
       case 'doctorado':
         pricePerPage = isSaludOrMath ? 590 : 540;
@@ -650,7 +650,7 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = 300;
+        pricePerPage = isSaludOrMath ? 300 : 270; // Mismo precio que maestría
         break;
       case 'doctorado':
         pricePerPage = isSaludOrMath ? 350 : 320;
