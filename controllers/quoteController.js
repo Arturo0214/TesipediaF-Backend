@@ -575,7 +575,7 @@ export const updatePublicQuote = asyncHandler(async (req, res) => {
 
 // 💰 Calcular precio para cotización de venta
 export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
-  const { educationLevel, studyArea, pages, serviceType } = req.body;
+  const { educationLevel, studyArea, pages, serviceType, taskType } = req.body;
 
   // Validar campos requeridos
   if (!educationLevel || !studyArea || !pages) {
@@ -599,48 +599,62 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
     normalizedArea.includes('matemáticas') ||
     normalizedArea.includes('área 2');
 
+  // Determinar si es artículo científico
+  const isArticuloCientifico = taskType && taskType.toLowerCase().includes('artículo');
+
   let pricePerPage = 0;
 
-  // Calcular precio por página según nivel académico y área
-  switch (educationLevel.toLowerCase()) {
-    case 'licenciatura':
-      if (isSaludOrMath) {
-        pricePerPage = 250;
-      } else {
-        pricePerPage = 220; // Ciencias sociales, humanidades, diseño, algunas ingenierías
-      }
-      break;
-
-    case 'maestría':
-    case 'maestria':
-      if (normalizedArea.includes('salud') || normalizedArea.includes('área 2')) {
-        pricePerPage = 300; // $220 + $80
-      } else {
-        pricePerPage = 270; // $220 + $50 (cualquier área excepto salud)
-      }
-      break;
-
-    case 'maestría / especialidad salud':
-    case 'maestria / especialidad salud':
-    case 'especialidad':
-      pricePerPage = 300; // $220 + $80 (área de la salud)
-      break;
-
-    case 'doctorado':
-      if (normalizedArea.includes('salud') || normalizedArea.includes('área 2')) {
-        pricePerPage = 350; // $220 + $130
-      } else {
-        pricePerPage = 320; // $220 + $100 (cualquier área excepto salud)
-      }
-      break;
-
-    case 'doctorado / área de la salud':
-      pricePerPage = 350; // $220 + $130
-      break;
-
-    default:
-      res.status(400);
-      throw new Error('Nivel académico no válido');
+  // Si es Artículo Científico, usar precios especiales
+  if (isArticuloCientifico) {
+    // Precios especiales para artículos científicos (basado en $12,500 por 35 páginas = $357/página)
+    switch (educationLevel.toLowerCase()) {
+      case 'licenciatura':
+        pricePerPage = isSaludOrMath ? 380 : 350;
+        break;
+      case 'maestría':
+      case 'maestria':
+        pricePerPage = isSaludOrMath ? 450 : 410;
+        break;
+      case 'maestría / especialidad salud':
+      case 'maestria / especialidad salud':
+      case 'especialidad':
+        pricePerPage = 450;
+        break;
+      case 'doctorado':
+        pricePerPage = isSaludOrMath ? 520 : 480;
+        break;
+      case 'doctorado / área de la salud':
+        pricePerPage = 520;
+        break;
+      default:
+        res.status(400);
+        throw new Error('Nivel académico no válido');
+    }
+  } else {
+    // Precios normales para Tesis, Tesina, y otros trabajos
+    switch (educationLevel.toLowerCase()) {
+      case 'licenciatura':
+        pricePerPage = isSaludOrMath ? 250 : 220;
+        break;
+      case 'maestría':
+      case 'maestria':
+        pricePerPage = isSaludOrMath ? 300 : 270;
+        break;
+      case 'maestría / especialidad salud':
+      case 'maestria / especialidad salud':
+      case 'especialidad':
+        pricePerPage = 300;
+        break;
+      case 'doctorado':
+        pricePerPage = isSaludOrMath ? 350 : 320;
+        break;
+      case 'doctorado / área de la salud':
+        pricePerPage = 350;
+        break;
+      default:
+        res.status(400);
+        throw new Error('Nivel académico no válido');
+    }
   }
 
   // Si es servicio de corrección, aplicar 50% de descuento
@@ -659,6 +673,7 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
       educationLevel,
       studyArea,
       pages: numPages,
+      taskType: taskType || 'No especificado',
       serviceType: isCorrectionService ? 'Corrección' : 'Trabajo Completo',
       pricePerPage,
       totalPrice,
