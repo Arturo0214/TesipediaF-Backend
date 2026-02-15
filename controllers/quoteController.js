@@ -709,24 +709,35 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
 
 // 💾 Guardar cotización generada (SalesQuote)
 export const saveGeneratedQuote = asyncHandler(async (req, res) => {
-  console.log('Guardando cotización generada:', req.body.clientName);
+  console.log('--------------------------------------------------');
+  console.log('📌 BACKEND: Received request to save generated quote');
+  console.log('User:', req.user ? req.user._id : 'Guest');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
 
-  // Normalize and clean data
-  const quoteData = {
-    ...req.body,
-    generatedBy: req.user ? req.user._id : null,
-  };
+  try {
+    // Normalize and clean data
+    const quoteData = {
+      ...req.body,
+      generatedBy: req.user ? req.user._id : null,
+    };
 
-  // Create new GeneratedQuote
-  const newQuote = await GeneratedQuote.create(quoteData);
+    console.log('Calculated quoteData to save:', quoteData);
 
-  console.log('Cotización generada guardada con ID:', newQuote._id);
+    // Create new GeneratedQuote
+    const newQuote = await GeneratedQuote.create(quoteData);
 
-  res.status(201).json({
-    success: true,
-    message: 'Cotización guardada exitosamente',
-    quote: newQuote
-  });
+    console.log('✅ Cotización generada guardada con ID:', newQuote._id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Cotización guardada exitosamente',
+      quote: newQuote
+    });
+  } catch (error) {
+    console.error('❌ Error saving generated quote:', error);
+    res.status(500);
+    throw new Error('Error al guardar la cotización: ' + error.message);
+  }
 });
 
 // 📋 Obtener todas las cotizaciones generadas (admin)
@@ -752,4 +763,16 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
 
   const updatedQuote = await quote.save();
   res.json(updatedQuote);
+});
+
+// ❌ Eliminar cotización generada (admin)
+export const deleteGeneratedQuote = asyncHandler(async (req, res) => {
+  const quote = await GeneratedQuote.findById(req.params.id);
+  if (!quote) {
+    res.status(404);
+    throw new Error('Cotización generada no encontrada');
+  }
+
+  await quote.deleteOne();
+  res.json({ message: 'Cotización generada eliminada correctamente', id: req.params.id });
 });

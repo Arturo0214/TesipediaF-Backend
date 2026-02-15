@@ -16,7 +16,8 @@ import {
     calculateSalesQuotePrice,
     saveGeneratedQuote,
     getGeneratedQuotes,
-    updateGeneratedQuote
+    updateGeneratedQuote,
+    deleteGeneratedQuote
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -46,6 +47,7 @@ router.post('/generated', optionalAuth, saveGeneratedQuote);
 router.get('/', protect, adminOnly, getQuotes);
 router.get('/generated/all', protect, adminOnly, getGeneratedQuotes);
 router.put('/generated/:id', protect, adminOnly, updateGeneratedQuote);
+router.delete('/generated/:id', protect, adminOnly, deleteGeneratedQuote);
 router.get('/search', protect, adminOnly, searchQuotes);
 router.get('/:id', protect, adminOnly, getQuoteById);
 router.put('/:id', protect, adminOnly, updateQuote);
