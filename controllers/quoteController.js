@@ -7,6 +7,7 @@ import cloudinary from '../config/cloudinary.js';
 import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
+import GeneratedQuote from '../models/GeneratedQuote.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -705,3 +706,50 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
   });
 });
 
+
+// 💾 Guardar cotización generada (SalesQuote)
+export const saveGeneratedQuote = asyncHandler(async (req, res) => {
+  console.log('Guardando cotización generada:', req.body.clientName);
+
+  // Normalize and clean data
+  const quoteData = {
+    ...req.body,
+    generatedBy: req.user ? req.user._id : null,
+  };
+
+  // Create new GeneratedQuote
+  const newQuote = await GeneratedQuote.create(quoteData);
+
+  console.log('Cotización generada guardada con ID:', newQuote._id);
+
+  res.status(201).json({
+    success: true,
+    message: 'Cotización guardada exitosamente',
+    quote: newQuote
+  });
+});
+
+// 📋 Obtener todas las cotizaciones generadas (admin)
+export const getGeneratedQuotes = asyncHandler(async (req, res) => {
+  const quotes = await GeneratedQuote.find({}).sort({ createdAt: -1 }).populate('generatedBy', 'name email');
+  res.json(quotes);
+});
+
+// 🔄 Actualizar cotización generada (admin)
+export const updateGeneratedQuote = asyncHandler(async (req, res) => {
+  const quote = await GeneratedQuote.findById(req.params.id);
+  if (!quote) {
+    res.status(404);
+    throw new Error('Cotización no encontrada');
+  }
+
+  // Update status if provided
+  if (req.body.status) {
+    quote.status = req.body.status;
+  }
+
+  // Can add more fields to update if needed
+
+  const updatedQuote = await quote.save();
+  res.json(updatedQuote);
+});

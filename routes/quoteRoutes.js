@@ -13,7 +13,10 @@ import {
     checkGuestPaymentStatus,
     updatePublicQuote,
     updateMyQuote,
-    calculateSalesQuotePrice
+    calculateSalesQuotePrice,
+    saveGeneratedQuote,
+    getGeneratedQuotes,
+    updateGeneratedQuote
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -37,9 +40,12 @@ router.post('/calculate-sales-price', calculateSalesQuotePrice);
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);
 router.put('/my-quotes/:id', protect, updateMyQuote);
+router.post('/generated', protect, saveGeneratedQuote);
 
 // Admin
 router.get('/', protect, adminOnly, getQuotes);
+router.get('/generated/all', protect, adminOnly, getGeneratedQuotes);
+router.put('/generated/:id', protect, adminOnly, updateGeneratedQuote);
 router.get('/search', protect, adminOnly, searchQuotes);
 router.get('/:id', protect, adminOnly, getQuoteById);
 router.put('/:id', protect, adminOnly, updateQuote);
