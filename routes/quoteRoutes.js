@@ -40,7 +40,7 @@ router.post('/calculate-sales-price', calculateSalesQuotePrice);
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);
 router.put('/my-quotes/:id', protect, updateMyQuote);
-router.post('/generated', protect, saveGeneratedQuote);
+router.post('/generated', optionalAuth, saveGeneratedQuote);
 
 // Admin
 router.get('/', protect, adminOnly, getQuotes);
