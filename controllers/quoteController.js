@@ -580,14 +580,95 @@ export const updatePublicQuote = asyncHandler(async (req, res) => {
   res.json(updatedQuote);
 });
 
-// 💰 Calcular precio para cotización de venta
-export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
-  const { educationLevel, studyArea, pages, serviceType, taskType } = req.body;
+// �️ Mapeo de carreras comunes de México a áreas de estudio
+const CAREER_TO_AREA_MAP = {
+  'Área 1: Ciencias Físico Matemáticas e Ingenierías': [
+    'ingeniería', 'ingeniera', 'sistemas', 'computación', 'computacion',
+    'informática', 'informatica', 'matemáticas', 'matematicas', 'física',
+    'fisica', 'arquitectura', 'civil', 'electrónica', 'electronica',
+    'mecánica', 'mecanica', 'industrial', 'mecatrónica', 'mecatronica',
+    'telecomunicaciones', 'robótica', 'robotica', 'software', 'datos',
+    'aeronáutica', 'aeronautica', 'ambiental', 'geología', 'geologia',
+    'topografía', 'topografia', 'eléctrica', 'electrica', 'automotriz'
+  ],
+  'Área 2: Ciencias Biológicas, Químicas y de la Salud': [
+    'medicina', 'médico', 'medico', 'enfermería', 'enfermeria',
+    'odontología', 'odontologia', 'dental', 'psicología', 'psicologia',
+    'nutrición', 'nutricion', 'biología', 'biologia', 'química',
+    'quimica', 'farmacia', 'farmacéutica', 'farmaceutica', 'veterinaria',
+    'fisioterapia', 'rehabilitación', 'rehabilitacion', 'salud',
+    'biomédica', 'biomedica', 'biotecnología', 'biotecnologia',
+    'genómica', 'genomica', 'optometría', 'optometria', 'cirujano',
+    'paramédico', 'paramedico', 'epidemiología', 'epidemiologia'
+  ],
+  'Área 3: Ciencias Sociales y Humanidades': [
+    'derecho', 'abogado', 'leyes', 'administración', 'administracion',
+    'contabilidad', 'contaduría', 'contaduria', 'contador', 'pedagogía',
+    'pedagogia', 'educación', 'educacion', 'sociología', 'sociologia',
+    'trabajo social', 'comunicación', 'comunicacion', 'periodismo',
+    'historia', 'filosofía', 'filosofia', 'economía', 'economia',
+    'turismo', 'mercadotecnia', 'marketing', 'finanzas', 'negocios',
+    'comercio', 'relaciones internacionales', 'ciencias políticas',
+    'ciencias politicas', 'politología', 'politologia', 'antropología',
+    'antropologia', 'archivonomía', 'archivonomia', 'bibliotecología',
+    'bibliotecologia', 'criminología', 'criminologia', 'criminalística',
+    'criminalistica', 'geografía', 'geografia'
+  ],
+  'Área 4: Artes y Humanidades': [
+    'diseño', 'diseno', 'arte', 'artes', 'música', 'musica',
+    'literatura', 'letras', 'interiores', 'gráfico', 'grafico',
+    'visual', 'escénicas', 'escenicas', 'cinematografía', 'cinematografia',
+    'teatro', 'danza', 'cine', 'animación', 'animacion', 'multimedia',
+    'moda', 'textil', 'fotografía', 'fotografia'
+  ]
+};
 
-  // Validar campos requeridos
-  if (!educationLevel || !studyArea || !pages) {
+/**
+ * Determina el área de estudio a partir del nombre de la carrera.
+ * Realiza búsqueda parcial case-insensitive.
+ * @param {string} career - Nombre de la carrera
+ * @returns {string} Área de estudio correspondiente
+ */
+const detectStudyAreaFromCareer = (career) => {
+  if (!career) return 'Área 3: Ciencias Sociales y Humanidades';
+
+  const normalizedCareer = career.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  for (const [area, keywords] of Object.entries(CAREER_TO_AREA_MAP)) {
+    for (const keyword of keywords) {
+      const normalizedKeyword = keyword.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (normalizedCareer.includes(normalizedKeyword)) {
+        return area;
+      }
+    }
+  }
+
+  // Default si no hay match
+  return 'Área 3: Ciencias Sociales y Humanidades';
+};
+
+// �💰 Calcular precio para cotización de venta
+export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
+  const { educationLevel, pages, serviceType, taskType, career } = req.body;
+  let { studyArea } = req.body;
+
+  // Validar campos requeridos mínimos
+  if (!educationLevel || !pages) {
     res.status(400);
-    throw new Error('Faltan campos requeridos: nivel académico, área de estudio y páginas');
+    throw new Error('Faltan campos requeridos: nivel académico y páginas');
+  }
+
+  // Si no viene studyArea, intentar detectarla desde career
+  let studyAreaAutoDetected = false;
+  if (!studyArea) {
+    if (career) {
+      studyArea = detectStudyAreaFromCareer(career);
+      studyAreaAutoDetected = true;
+      console.log(`🗺️ studyArea auto-detectada desde career "${career}" → "${studyArea}"`);
+    } else {
+      res.status(400);
+      throw new Error('Debe proporcionar studyArea o career para calcular el precio');
+    }
   }
 
   // Validar que páginas sea un número positivo
@@ -696,6 +777,8 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
     pricing: {
       educationLevel,
       studyArea,
+      studyAreaAutoDetected,
+      career: career || null,
       pages: numPages,
       taskType: taskType || 'No especificado',
       serviceType: serviceTypeDescription,
