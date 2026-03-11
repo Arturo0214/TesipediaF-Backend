@@ -18,7 +18,8 @@ import {
     getGeneratedQuotes,
     updateGeneratedQuote,
     deleteGeneratedQuote,
-    uploadQuotePDF
+    uploadQuotePDF,
+    generateAndUploadQuotePDF
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -38,6 +39,15 @@ router.get('/check-guest-payment/:trackingToken', checkGuestPaymentStatus);
 
 // Ruta pública para calcular precio de cotización de venta
 router.post('/calculate-sales-price', calculateSalesQuotePrice);
+
+// Generar PDF server-side y subir a Cloudinary (llamado desde n8n, protegido con API key)
+router.post('/generate-quote-pdf', (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey !== process.env.N8N_API_KEY) {
+        return res.status(401).json({ success: false, message: 'API key inválida' });
+    }
+    next();
+}, generateAndUploadQuotePDF);
 
 // Privadas
 router.get('/my-quotes', protect, getMyQuotes);

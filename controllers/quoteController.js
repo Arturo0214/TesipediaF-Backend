@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
+import generateQuotePDF from '../utils/generateQuotePDF.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -915,3 +916,55 @@ export const uploadQuotePDF = asyncHandler(async (req, res) => {
     throw new Error('Error al subir el PDF: ' + error.message);
   }
 });
+
+// 📄 Generar PDF de cotización server-side y subir a Cloudinary (para n8n/WhatsApp)
+export const generateAndUploadQuotePDF = async (req, res) => {
+  try {
+    const data = req.body;
+
+    if (!data || (!data.tipoServicio && !data.serviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren datos de la cotización (al menos tipoServicio)',
+      });
+    }
+
+    // 1. Generar el PDF en memoria
+    const pdfBuffer = await generateQuotePDF(data);
+
+    // 2. Subir a Cloudinary como raw upload
+    const uploadResult = await new Promise((resolve, reject) => {
+      const timestamp = Date.now();
+
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          resource_type: 'raw',
+          folder: 'tesipedia/cotizaciones',
+          public_id: `cotizacion-${data.nombre ? data.nombre.replace(/\s+/g, '-').toLowerCase() : 'cliente'}-${timestamp}`,
+          format: 'pdf',
+          access_mode: 'public',
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+
+      uploadStream.end(pdfBuffer);
+    });
+
+    // 3. Devolver la URL pública
+    return res.status(200).json({
+      success: true,
+      pdfUrl: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+    });
+  } catch (error) {
+    console.error('Error generando PDF de cotización:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al generar el PDF',
+      error: error.message,
+    });
+  }
+};
