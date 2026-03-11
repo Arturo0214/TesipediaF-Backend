@@ -127,6 +127,14 @@ const generatedQuoteSchema = new mongoose.Schema(
             enum: ['pending', 'approved', 'rejected', 'paid', 'cancelled'],
             default: 'pending',
         },
+        pdfUrl: {
+            type: String,
+            default: null,
+        },
+        pdfPublicId: {
+            type: String,
+            default: null,
+        },
     },
     { timestamps: true }
 );

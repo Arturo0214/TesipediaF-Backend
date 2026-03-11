@@ -859,3 +859,59 @@ export const deleteGeneratedQuote = asyncHandler(async (req, res) => {
   await quote.deleteOne();
   res.json({ message: 'Cotización generada eliminada correctamente', id: req.params.id });
 });
+
+// 📤 Subir PDF de cotización a Cloudinary y obtener URL pública
+export const uploadQuotePDF = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    res.status(400);
+    throw new Error('No se recibió ningún archivo PDF');
+  }
+
+  const { quoteId } = req.body; // ID del GeneratedQuote (opcional pero recomendado)
+
+  try {
+    // Subir PDF a Cloudinary usando upload_stream (multer usa memoryStorage, no haypath)
+    const pdfPublicId = `generated-quotes/cotizacion_${quoteId || Date.now()}`;
+
+    const uploadResult = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          resource_type: 'raw',  // PDF se clasifica como 'raw' en Cloudinary
+          folder: 'generated-quotes',
+          public_id: `cotizacion_${quoteId || Date.now()}`,
+          overwrite: true,
+          format: 'pdf',
+          type: 'upload',
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve(result);
+        }
+      );
+      uploadStream.end(req.file.buffer);
+    });
+
+    const pdfUrl = uploadResult.secure_url;
+    const pdfPublicIdResult = uploadResult.public_id;
+
+    // Si se proporcionó un quoteId, actualizar el documento en BD
+    if (quoteId) {
+      await GeneratedQuote.findByIdAndUpdate(
+        quoteId,
+        { pdfUrl, pdfPublicId: pdfPublicIdResult },
+        { new: true }
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      pdfUrl,
+      pdfPublicId: pdfPublicIdResult,
+      message: 'PDF subido exitosamente a Cloudinary',
+    });
+  } catch (error) {
+    console.error('❌ Error subiendo PDF a Cloudinary:', error);
+    res.status(500);
+    throw new Error('Error al subir el PDF: ' + error.message);
+  }
+});

@@ -17,7 +17,8 @@ import {
     saveGeneratedQuote,
     getGeneratedQuotes,
     updateGeneratedQuote,
-    deleteGeneratedQuote
+    deleteGeneratedQuote,
+    uploadQuotePDF
 } from '../controllers/quoteController.js';
 import { protect, adminOnly, optionalAuth } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
@@ -42,6 +43,9 @@ router.post('/calculate-sales-price', calculateSalesQuotePrice);
 router.get('/my-quotes', protect, getMyQuotes);
 router.put('/my-quotes/:id', protect, updateMyQuote);
 router.post('/generated', optionalAuth, saveGeneratedQuote);
+
+// Subir PDF de cotización generada a Cloudinary
+router.post('/generated/upload-pdf', optionalAuth, upload.single('pdf'), uploadQuotePDF);
 
 // Admin
 router.get('/', protect, adminOnly, getQuotes);
