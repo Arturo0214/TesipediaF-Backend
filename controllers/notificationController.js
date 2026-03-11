@@ -50,6 +50,7 @@ export const getAdminNotifications = asyncHandler(async (req, res) => {
 // @route   PATCH /api/notifications/:id/read
 // @access  Private
 export const markNotificationAsRead = asyncHandler(async (req, res) => {
+  console.log('Marking notification as read:', req.params.id);
   const notification = await Notification.findById(req.params.id);
 
   if (!notification) {
@@ -57,15 +58,21 @@ export const markNotificationAsRead = asyncHandler(async (req, res) => {
     throw new Error('Notificación no encontrada');
   }
 
+  // Verificar propiedad
   if (notification.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
+    console.log('Unauthorized attempt to mark read:', req.user._id);
     res.status(403);
     throw new Error('No autorizado');
   }
 
-  notification.isRead = true;
-  await notification.save();
+  const updatedNotification = await Notification.findByIdAndUpdate(
+    req.params.id,
+    { isRead: true },
+    { new: true }
+  );
 
-  res.json(notification);
+  console.log('Notification updated:', updatedNotification);
+  res.json(updatedNotification);
 });
 
 // @desc    Marcar todas las notificaciones como leídas
@@ -78,6 +85,42 @@ export const markAllNotificationsAsRead = asyncHandler(async (req, res) => {
   );
 
   res.json({ message: 'Todas las notificaciones han sido marcadas como leídas' });
+});
+
+// @desc    Marcar notificaciones de un tipo específico como leídas
+// @route   POST /api/notifications/mark-type-read
+// @access  Private
+export const markNotificationsByType = asyncHandler(async (req, res) => {
+  const { type } = req.body;
+
+  if (!type) {
+    res.status(400);
+    throw new Error('Tipo de notificación requerido');
+  }
+
+  // Handle singular vs plural mapping if necessary, or assume frontend sends correct 'type' stored in DB
+  // DB types: 'cotizacion', 'mensaje', 'visita', etc.
+  // Frontend sends: 'cotizacion', 'mensaje', etc.
+
+  // Si el tipo es 'mensajes', convertir a 'mensaje' (singular) si es necesario.
+  // Pero lo ideal es que el frontend envíe el tipo correcto.
+  // Vamos a asumir que el frontend envía el tipo correcto tal cual está en la DB.
+
+  const query = {
+    user: req.user._id,
+    isRead: false,
+    type: type // Exact match
+  };
+
+  const result = await Notification.updateMany(query, { isRead: true });
+
+  console.log(`Marked ${result.nModified || result.modifiedCount} notifications of type ${type} as read.`);
+
+  res.json({
+    message: `Notificaciones de tipo ${type} marcadas como leídas`,
+    count: result.nModified || result.modifiedCount,
+    type
+  });
 });
 
 // @desc    Eliminar una notificación
@@ -96,7 +139,7 @@ export const deleteNotification = asyncHandler(async (req, res) => {
     throw new Error('No autorizado');
   }
 
-  await notification.remove();
+  await notification.deleteOne();
   res.json({ message: 'Notificación eliminada' });
 });
 

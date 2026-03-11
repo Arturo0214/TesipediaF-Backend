@@ -7,6 +7,7 @@ import {
     markAllNotificationsAsRead,
     deleteNotification,
     getNotificationStats,
+    markNotificationsByType,
 } from '../controllers/notificationController.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import Notification from '../models/Notification.js';
@@ -30,6 +31,9 @@ router.post('/:id/read', markNotificationAsRead);
 // 🔔 Marcar todas como leídas
 router.patch('/mark-all-read', markAllNotificationsAsRead);
 router.post('/mark-all-read', markAllNotificationsAsRead);
+
+// 🔔 Marcar por tipo como leídas
+router.post('/mark-type-read', markNotificationsByType);
 
 // 🔔 Eliminar una notificación
 router.delete('/:id', deleteNotification);

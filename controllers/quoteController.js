@@ -883,6 +883,7 @@ export const uploadQuotePDF = asyncHandler(async (req, res) => {
           overwrite: true,
           format: 'pdf',
           type: 'upload',
+          access_mode: 'public',
         },
         (error, result) => {
           if (error) return reject(error);
@@ -892,8 +893,18 @@ export const uploadQuotePDF = asyncHandler(async (req, res) => {
       uploadStream.end(req.file.buffer);
     });
 
-    const pdfUrl = uploadResult.secure_url;
     const pdfPublicIdResult = uploadResult.public_id;
+
+    // Generar URL de descarga privada (bypass de restricciones PDF en Cloudinary)
+    const pdfUrl = cloudinary.utils.private_download_url(
+      pdfPublicIdResult,
+      'pdf',
+      {
+        resource_type: 'raw',
+        type: 'upload',
+        expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 días
+      }
+    );
 
     // Si se proporcionó un quoteId, actualizar el documento en BD
     if (quoteId) {
@@ -953,10 +964,22 @@ export const generateAndUploadQuotePDF = async (req, res) => {
       uploadStream.end(pdfBuffer);
     });
 
-    // 3. Devolver la URL pública
+    // 3. Generar URL de descarga privada (bypass de restricciones PDF en Cloudinary)
+    const downloadUrl = cloudinary.utils.private_download_url(
+      uploadResult.public_id,
+      'pdf',
+      {
+        resource_type: 'raw',
+        type: 'upload',
+        expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 días
+      }
+    );
+
+    // 4. Devolver la URL de descarga
     return res.status(200).json({
       success: true,
-      pdfUrl: uploadResult.secure_url,
+      pdfUrl: downloadUrl,
+      fallbackUrl: uploadResult.secure_url,
       publicId: uploadResult.public_id,
     });
   } catch (error) {
