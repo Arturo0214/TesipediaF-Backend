@@ -12,6 +12,14 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: String,
             required: true,
         },
+        clientEmail: {
+            type: String,
+            default: '',
+        },
+        clientPhone: {
+            type: String,
+            default: '',
+        },
         tipoTrabajo: {
             type: String,
             required: true,

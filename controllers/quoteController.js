@@ -10,6 +10,7 @@ import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
+import syncHubSpotContact from '../utils/syncHubSpotContact.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -182,6 +183,15 @@ export const createQuote = asyncHandler(async (req, res) => {
       },
     });
   }
+
+  // Sync contact to HubSpot (fire-and-forget, don't block response)
+  syncHubSpotContact({
+    email,
+    name,
+    phone,
+    lifecycle: 'lead',
+    source: 'endpoint',
+  }).catch(err => console.error('[createQuote] HubSpot sync error:', err.message));
 
   // Enviar respuesta con todos los detalles necesarios
   res.status(201).json({
@@ -812,6 +822,17 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
     const newQuote = await GeneratedQuote.create(quoteData);
 
     console.log('✅ Cotización generada guardada con ID:', newQuote._id);
+
+    // Sync contact to HubSpot if we have an email
+    if (quoteData.clientEmail) {
+      syncHubSpotContact({
+        email: quoteData.clientEmail,
+        name: quoteData.clientName,
+        phone: quoteData.clientPhone,
+        lifecycle: 'lead',
+        source: 'cotizador',
+      }).catch(err => console.error('[saveGeneratedQuote] HubSpot sync error:', err.message));
+    }
 
     res.status(201).json({
       success: true,
