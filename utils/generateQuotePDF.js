@@ -614,7 +614,7 @@ export const generateQuotePDF = async (data) => {
     const descuentoPorcentaje = parseFloat(quoteData.descuentoEfectivo) || 0;
     const esEfectivo = quoteData.metodoPago === 'efectivo';
 
-    if (esEfectivo && descuentoPorcentaje > 0) {
+    if (esEfectivo) {
         doc.setFillColor(255, 248, 240);
         doc.roundedRect(margin, yPos, ctaWidth, boxHeight, 2, 2, 'F');
         doc.setDrawColor(...accentOrange);
