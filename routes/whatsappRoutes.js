@@ -4,6 +4,7 @@ import upload from '../middleware/multer.js';
 import {
   getLeads,
   getLeadByWaId,
+  getLeadsStatus,
   toggleModoHumano,
   sendMessage,
 } from '../controllers/whatsappController.js';
@@ -16,6 +17,7 @@ router.use(adminOnly);
 
 // Leer leads / conversaciones
 router.get('/leads', getLeads);
+router.get('/leads-status', getLeadsStatus);
 router.get('/leads/:waId', getLeadByWaId);
 
 // Toggle modo humano

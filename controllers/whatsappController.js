@@ -80,6 +80,26 @@ export const toggleModoHumano = asyncHandler(async (req, res) => {
  * POST /api/v1/whatsapp/send
  * Enviar mensaje por WhatsApp y guardar en historial
  */
+/**
+ * GET /api/v1/whatsapp/leads-status
+ * Devuelve un mapa de leads con estado_sofia para cruzar con HubSpot
+ */
+export const getLeadsStatus = asyncHandler(async (req, res) => {
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,nombre,estado_sofia,updated_at`;
+  const response = await fetch(url, { headers: supabaseHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text();
+    res.status(response.status);
+    throw new Error(`Error de Supabase: ${errorText}`);
+  }
+  const data = await response.json();
+  res.json(data);
+});
+
+/**
+ * POST /api/v1/whatsapp/send
+ * Enviar mensaje por WhatsApp y guardar en historial
+ */
 export const sendMessage = asyncHandler(async (req, res) => {
   const { wa_id, mensaje } = req.body;
   const file = req.file;
