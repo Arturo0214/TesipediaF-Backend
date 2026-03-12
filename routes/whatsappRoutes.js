@@ -1,5 +1,6 @@
 import express from 'express';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import upload from '../middleware/multer.js';
 import {
   getLeads,
   getLeadByWaId,
@@ -20,7 +21,7 @@ router.get('/leads/:waId', getLeadByWaId);
 // Toggle modo humano
 router.patch('/leads/:waId/modo-humano', toggleModoHumano);
 
-// Enviar mensaje
-router.post('/send', sendMessage);
+// Enviar mensaje con soporte para archivo adjunto
+router.post('/send', upload.single('file'), sendMessage);
 
 export default router;

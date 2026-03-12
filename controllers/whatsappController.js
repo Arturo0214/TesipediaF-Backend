@@ -4,6 +4,7 @@
  */
 
 import asyncHandler from 'express-async-handler';
+import cloudinary from '../config/cloudinary.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -81,26 +82,62 @@ export const toggleModoHumano = asyncHandler(async (req, res) => {
  */
 export const sendMessage = asyncHandler(async (req, res) => {
   const { wa_id, mensaje } = req.body;
+  const file = req.file;
 
-  if (!wa_id || !mensaje) {
+  if (!wa_id) {
     res.status(400);
-    throw new Error('wa_id y mensaje son requeridos');
+    throw new Error('wa_id es requerido');
+  }
+  if (!mensaje && !file) {
+    res.status(400);
+    throw new Error('mensaje o archivo requerido');
+  }
+
+  // Upload file if exists
+  let mediaUrl = null;
+  let mediaType = null;
+  let mimetype = null;
+  let filename = null;
+
+  if (file) {
+    const fileBuffer = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+    const result = await cloudinary.uploader.upload(fileBuffer, {
+      folder: 'whatsapp_admin_media',
+      resource_type: 'auto',
+    });
+    mediaUrl = result.secure_url;
+    mimetype = file.mimetype;
+    filename = file.originalname;
+
+    const isDoc = file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
+    mediaType = isDoc ? 'document' : 'image';
   }
 
   // 1. Enviar mensaje por WhatsApp Business API
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: wa_id.replace(/\D/g, ''),
+  };
+
+  if (mediaUrl) {
+    payload.type = mediaType;
+    payload[mediaType] = { link: mediaUrl };
+    if (mensaje) payload[mediaType].caption = mensaje;
+    if (mediaType === 'document' && filename) payload.document.filename = filename;
+  } else {
+    payload.type = 'text';
+    payload.text = { body: mensaje };
+  }
+
   const waResponse = await fetch(waUrl, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${WA_TOKEN}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to: wa_id.replace(/\D/g, ''),
-      type: 'text',
-      text: { body: mensaje },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!waResponse.ok) {
@@ -129,10 +166,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
   }
 
   // 3. Agregar mensaje al historial
-  historial.push({
+  const newMsg = {
     role: 'assistant',
-    content: `[HUMANO] ${mensaje}`,
-  });
+    content: mensaje ? `[HUMANO] ${mensaje}` : '[HUMANO] (Archivo)',
+  };
+
+  if (mediaUrl) {
+    newMsg.mediaUrl = mediaUrl;
+    newMsg.mimetype = mimetype;
+    newMsg.filename = filename;
+  }
+
+  historial.push(newMsg);
 
   // 4. Guardar historial actualizado en Supabase
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
