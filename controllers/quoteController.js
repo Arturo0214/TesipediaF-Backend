@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import { v4 as uuidv4 } from 'uuid';
 import Quote from '../models/Quote.js';
 import Notification from '../models/Notification.js';
+import createNotification from '../utils/createNotification.js';
 import calculatePrice from '../utils/calculatePrice.js';
 import cloudinary from '../config/cloudinary.js';
 import crypto from 'crypto';
@@ -171,7 +172,7 @@ export const createQuote = asyncHandler(async (req, res) => {
 
   // Crear notificación solo si hay un usuario administrador
   if (SUPER_ADMIN_ID) {
-    await Notification.create({
+    await createNotification(req.app, {
       user: SUPER_ADMIN_ID,
       type: 'cotizacion',
       message: `📝 Nueva cotización ${req.user ? 'creada por usuario registrado' : 'pública'} (${studyArea})`,

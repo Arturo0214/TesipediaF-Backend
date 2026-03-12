@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 import Message from '../models/Message.js';
 import Notification from '../models/Notification.js';
+import createNotification from '../utils/createNotification.js';
 import Order from '../models/Order.js';
 import cloudinary from '../config/cloudinary.js';
 import User from '../models/User.js';
@@ -129,7 +130,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   console.log('💾 Mensaje guardado:', savedMessage);
 
   if (mongoose.Types.ObjectId.isValid(finalReceiver)) {
-    await Notification.create({
+    await createNotification(req.app, {
       user: finalReceiver,
       type: 'mensaje',
       message: `Nuevo mensaje de ${senderName}`,

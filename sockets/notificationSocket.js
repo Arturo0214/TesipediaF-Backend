@@ -6,7 +6,14 @@ export const notificationSocket = (io) => {
     io.on('connection', (socket) => {
         console.log('🔔 Usuario conectado a notificaciones:', socket.id);
 
-        // 👉 Unirse a la sala de notificaciones del usuario
+        // Auto-join notification room on connect if user is authenticated
+        if (socket.user?._id) {
+            const userId = socket.user._id.toString();
+            socket.join(`notifications:${userId}`);
+            console.log(`🧩 Usuario ${userId} auto-unido a sala de notificaciones`);
+        }
+
+        // 👉 Unirse a la sala de notificaciones del usuario (manual fallback)
         socket.on('joinNotifications', () => {
             const userId = socket.user._id.toString();
             socket.join(`notifications:${userId}`);
