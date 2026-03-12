@@ -29,6 +29,7 @@ import paypalRoutes from './routes/paypalRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
 import projectRoutes from './routes/projectRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
+import hubspotRoutes from './routes/hubspotRoutes.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -106,6 +107,7 @@ app.use('/paypal', paypalRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
+app.use('/api/v1/hubspot', hubspotRoutes);
 
 // Middlewares de error
 app.use(notFound);
