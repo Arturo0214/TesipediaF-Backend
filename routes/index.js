@@ -19,6 +19,7 @@ import chatRoutes from './chatRoutes.js';
 import notificationRoutes from './notificationRoutes.js';
 import adminRoutes from './adminRoutes.js';
 import visitRoutes from './visitRoutes.js';
+import whatsappRoutes from './whatsappRoutes.js';
 
 // Health check endpoint    
 router.get(`${API_VERSION}/health`, (req, res) => {
@@ -58,6 +59,7 @@ router.use(`${API_VERSION}/chat`, chatRoutes);
 router.use(`${API_VERSION}/notifications`, notificationRoutes);
 router.use(`${API_VERSION}/admin`, adminRoutes);
 router.use(`${API_VERSION}/visits`, visitRoutes);
+router.use(`${API_VERSION}/whatsapp`, whatsappRoutes);
 
 // 404 handler
 router.use((req, res) => {
