@@ -178,6 +178,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const newMsg = {
     role: 'assistant',
     content: mensaje ? `[HUMANO] ${mensaje}` : '[HUMANO] (Archivo)',
+    timestamp: new Date().toISOString(),
   };
 
   if (mediaUrl) {
