@@ -100,16 +100,25 @@ export const sendMessage = asyncHandler(async (req, res) => {
   let filename = null;
 
   if (file) {
+    const isDoc = !!file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
     const fileBuffer = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-    const result = await cloudinary.uploader.upload(fileBuffer, {
+    
+    const uploadOptions = {
       folder: 'whatsapp_admin_media',
-      resource_type: 'auto',
-    });
+      resource_type: isDoc ? 'raw' : 'auto',
+    };
+
+    // Si es un documento, subimos como 'raw' y le damos un public_id que incluya su extensión
+    if (isDoc) {
+      const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
+      uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+    }
+
+    const result = await cloudinary.uploader.upload(fileBuffer, uploadOptions);
+    
     mediaUrl = result.secure_url;
     mimetype = file.mimetype;
     filename = file.originalname;
-
-    const isDoc = file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
     mediaType = isDoc ? 'document' : 'image';
   }
 
