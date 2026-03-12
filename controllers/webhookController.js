@@ -5,6 +5,7 @@ import Payment from '../models/Payment.js';
 import GuestPayment from '../models/guestPayment.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
+import onPaymentComplete from '../utils/onPaymentComplete.js';
 
 // 🔔 Webhook de Stripe
 export const stripeWebhook = asyncHandler(async (req, res) => {
@@ -82,6 +83,15 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
                     },
                 });
                 console.log(`✅ Notificación creada para el admin`);
+
+                // Actualizar cotización a 'paid' y crear deal en HubSpot
+                await onPaymentComplete({
+                    quoteId: guestPayment.quoteId,
+                    amount: guestPayment.amount,
+                    clientName: `${guestPayment.nombres} ${guestPayment.apellidos}`,
+                    clientEmail: guestPayment.correo,
+                    title: `Pago invitado - ${guestPayment.nombres} ${guestPayment.apellidos}`,
+                });
             } else {
                 console.error(`❌ Pago de invitado no encontrado para el token: ${trackingToken}`);
 
@@ -187,6 +197,16 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
                 },
             });
             console.log(`✅ Notificación creada para el admin`);
+
+            // Actualizar cotización a 'paid' y crear deal en HubSpot
+            await onPaymentComplete({
+                orderId: order._id,
+                quoteId: order.quoteId,
+                amount: order.price,
+                clientName: order.user.name,
+                clientEmail: order.user.email,
+                title: order.title,
+            });
         }
     } else if (event.type === 'checkout.session.expired') {
         const { trackingToken } = event.data.object.metadata;
@@ -317,6 +337,16 @@ export const paymentWebhook = asyncHandler(async (req, res) => {
                         userId: order.user._id,
                         amount: order.price,
                     },
+                });
+
+                // Actualizar cotización a 'paid' y crear deal en HubSpot
+                await onPaymentComplete({
+                    orderId: order._id,
+                    quoteId: order.quoteId,
+                    amount: order.price,
+                    clientName: order.user.name,
+                    clientEmail: order.user.email,
+                    title: order.title,
                 });
                 break;
 

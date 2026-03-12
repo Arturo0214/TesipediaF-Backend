@@ -9,23 +9,31 @@ const hubspotFetch = async (endpoint, params = {}) => {
   const url = new URL(`${HUBSPOT_BASE}${endpoint}`);
   Object.entries(params).forEach(([k, v]) => {
     if (Array.isArray(v)) {
-      v.forEach(val => url.searchParams.append(k, val));
+      // HubSpot v3 API: properties must be comma-separated in a single param
+      url.searchParams.set(k, v.join(','));
     } else {
-      url.searchParams.set(k, v);
+      url.searchParams.set(k, String(v));
     }
   });
 
+  console.log('[HubSpot] Fetching:', endpoint);
+
   const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
   });
 
   if (!res.ok) {
     const errorBody = await res.text();
-    console.error('HubSpot API error:', res.status, errorBody);
-    throw new Error(`HubSpot API error: ${res.status}`);
+    console.error('[HubSpot] API error:', res.status, errorBody);
+    throw new Error(`HubSpot API error: ${res.status} - ${errorBody.substring(0, 200)}`);
   }
 
-  return res.json();
+  const data = await res.json();
+  console.log(`[HubSpot] ${endpoint} => ${data.results?.length ?? 0} results`);
+  return data;
 };
 
 // @desc    Get HubSpot deals with pipeline stages
@@ -53,7 +61,7 @@ export const getDeals = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/hubspot/contacts
 // @access  Admin
 export const getContacts = asyncHandler(async (req, res) => {
-  const { limit = 50, after } = req.query;
+  const { limit = 100, after } = req.query;
 
   const params = {
     limit,
@@ -85,8 +93,9 @@ export const getPipelines = asyncHandler(async (req, res) => {
 // @route   GET /api/v1/hubspot/summary
 // @access  Admin
 export const getSummary = asyncHandler(async (req, res) => {
-  // Fetch deals and contacts in parallel
-  const [dealsData, contactsData, pipelinesData] = await Promise.all([
+  // Fetch deals, contacts, and pipelines in parallel
+  // Use Promise.allSettled so one failure doesn't block everything
+  const [dealsResult, contactsResult, pipelinesResult] = await Promise.allSettled([
     hubspotFetch('/crm/v3/objects/deals', {
       limit: 100,
       properties: ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline', 'createdate', 'hs_lastmodifieddate'],
@@ -98,9 +107,14 @@ export const getSummary = asyncHandler(async (req, res) => {
     hubspotFetch('/crm/v3/pipelines/deals'),
   ]);
 
-  const deals = dealsData.results || [];
-  const contacts = contactsData.results || [];
-  const pipelines = pipelinesData.results || [];
+  const deals = dealsResult.status === 'fulfilled' ? (dealsResult.value.results || []) : [];
+  const contacts = contactsResult.status === 'fulfilled' ? (contactsResult.value.results || []) : [];
+  const pipelines = pipelinesResult.status === 'fulfilled' ? (pipelinesResult.value.results || []) : [];
+
+  // Log errors for failed requests
+  if (dealsResult.status === 'rejected') console.error('[HubSpot] Deals fetch failed:', dealsResult.reason?.message);
+  if (contactsResult.status === 'rejected') console.error('[HubSpot] Contacts fetch failed:', contactsResult.reason?.message);
+  if (pipelinesResult.status === 'rejected') console.error('[HubSpot] Pipelines fetch failed:', pipelinesResult.reason?.message);
 
   // Build stage label map from pipelines
   const stageMap = {};
@@ -113,7 +127,6 @@ export const getSummary = asyncHandler(async (req, res) => {
   // Aggregate deals by stage
   const dealsByStage = {};
   let totalRevenue = 0;
-  let totalDeals = deals.length;
 
   const now = new Date();
   const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -167,9 +180,21 @@ export const getSummary = asyncHandler(async (req, res) => {
       created: d.properties?.createdate || null,
     }));
 
+  // Recent contacts (last 5 created)
+  const recentContacts = [...contacts]
+    .sort((a, b) => new Date(b.properties?.createdate || 0) - new Date(a.properties?.createdate || 0))
+    .slice(0, 5)
+    .map(c => ({
+      id: c.id,
+      name: `${c.properties?.firstname || ''} ${c.properties?.lastname || ''}`.trim() || c.properties?.email || 'Sin nombre',
+      email: c.properties?.email || '',
+      lifecycle: c.properties?.lifecyclestage || '',
+      created: c.properties?.createdate || null,
+    }));
+
   res.json({
     deals: {
-      total: totalDeals,
+      total: deals.length,
       totalRevenue,
       dealsThisMonth,
       revenueThisMonth,
@@ -180,11 +205,17 @@ export const getSummary = asyncHandler(async (req, res) => {
       total: contacts.length,
       contactsThisMonth,
       byLifecycle: contactsByLifecycle,
+      recent: recentContacts,
     },
     pipelines: pipelines.map(p => ({
       id: p.id,
       label: p.label,
       stages: (p.stages || []).map(s => ({ id: s.id, label: s.label, displayOrder: s.displayOrder })),
     })),
+    errors: {
+      deals: dealsResult.status === 'rejected' ? dealsResult.reason?.message : null,
+      contacts: contactsResult.status === 'rejected' ? contactsResult.reason?.message : null,
+      pipelines: pipelinesResult.status === 'rejected' ? pipelinesResult.reason?.message : null,
+    },
   });
 });

@@ -5,6 +5,7 @@ import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
+import onPaymentComplete from '../utils/onPaymentComplete.js';
 
 const Environment = process.env.NODE_ENV === 'production'
     ? checkoutNodeJssdk.core.LiveEnvironment
@@ -148,6 +149,16 @@ export const capturePayPalPayment = asyncHandler(async (req, res) => {
                 userId: order.user._id,
                 amount: order.price,
             },
+        });
+
+        // Actualizar cotización a 'paid' y crear deal en HubSpot
+        await onPaymentComplete({
+            orderId: order._id,
+            quoteId: order.quoteId,
+            amount: order.price,
+            clientName: order.user.name,
+            clientEmail: order.user.email,
+            title: order.title,
         });
 
         res.json({ message: 'Pago capturado exitosamente' });
