@@ -254,6 +254,17 @@ export const getSummary = asyncHandler(async (req, res) => {
     deals: monthlyDeals[key] || 0,
   }));
 
+  // ── Full contact/deal arrays for table views ──
+  const allContacts = contacts.map(c => ({
+    id: c.id,
+    properties: c.properties || {},
+  }));
+
+  const allDeals = deals.map(d => ({
+    id: d.id,
+    properties: d.properties || {},
+  }));
+
   res.json({
     kpis: {
       totalContacts: contacts.length,
@@ -292,6 +303,8 @@ export const getSummary = asyncHandler(async (req, res) => {
       label: p.label,
       stages: (p.stages || []).map(s => ({ id: s.id, label: s.label, displayOrder: s.displayOrder })),
     })),
+    allContacts,
+    allDeals,
     errors: {
       deals: dealsResult.status === 'rejected' ? dealsResult.reason?.message : null,
       contacts: contactsResult.status === 'rejected' ? contactsResult.reason?.message : null,
