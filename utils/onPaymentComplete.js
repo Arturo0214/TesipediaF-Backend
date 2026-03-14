@@ -1,5 +1,7 @@
 import Quote from '../models/Quote.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
+import Project from '../models/Project.js';
+import emailSender from './emailSender.js';
 
 /**
  * Shared handler for when a payment is confirmed.
@@ -29,6 +31,74 @@ const onPaymentComplete = async (opts = {}) => {
         quote.convertedToOrder = true;
         await quote.save();
         console.log(`[onPaymentComplete] Quote ${quoteId} marked as paid`);
+
+        // Auto-create project from paid quote
+        try {
+          const existingProject = await Project.findOne({ quote: quote._id });
+          if (!existingProject) {
+            const project = await Project.create({
+              quote: quote._id,
+              client: quote.user || null,
+              taskType: quote.taskType,
+              studyArea: quote.studyArea,
+              career: quote.career,
+              educationLevel: quote.educationLevel,
+              taskTitle: quote.taskTitle,
+              requirements: quote.requirements,
+              pages: quote.pages,
+              dueDate: quote.dueDate,
+            });
+            console.log(`[onPaymentComplete] Project created: ${project._id}`);
+          }
+        } catch (projErr) {
+          console.error('[onPaymentComplete] Error creating project:', projErr.message);
+        }
+
+        // Send confirmation email to client
+        try {
+          const recipientEmail = clientEmail || quote.email;
+          const recipientName = clientName || quote.name || 'Cliente';
+          if (recipientEmail) {
+            const emailHtml = `
+              <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; padding: 0; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb;">
+                <div style="background: linear-gradient(135deg, #2575fc, #6a11cb); padding: 32px 24px; text-align: center;">
+                  <h1 style="color: #fff; margin: 0; font-size: 24px;">Pago Confirmado</h1>
+                  <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 14px;">Tu proyecto ya fue registrado</p>
+                </div>
+                <div style="padding: 32px 24px;">
+                  <p style="font-size: 16px; color: #374151;">Hola <strong>${recipientName}</strong>,</p>
+                  <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
+                    Tu pago ha sido confirmado exitosamente y tu proyecto <strong>"${quote.taskTitle}"</strong> ha sido registrado en nuestro sistema.
+                  </p>
+                  <div style="background: #f9fafb; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Detalles del proyecto:</p>
+                    <table style="width: 100%; font-size: 14px; color: #374151;">
+                      <tr><td style="padding: 4px 0;"><strong>Tipo:</strong></td><td>${quote.taskType}</td></tr>
+                      <tr><td style="padding: 4px 0;"><strong>Carrera:</strong></td><td>${quote.career}</td></tr>
+                      <tr><td style="padding: 4px 0;"><strong>Nivel:</strong></td><td>${quote.educationLevel}</td></tr>
+                      <tr><td style="padding: 4px 0;"><strong>P\u00e1ginas:</strong></td><td>${quote.pages}</td></tr>
+                      <tr><td style="padding: 4px 0;"><strong>Fecha de entrega:</strong></td><td>${new Date(quote.dueDate).toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+                      ${quote.priceDetails?.finalPrice ? `<tr><td style="padding: 4px 0;"><strong>Monto:</strong></td><td>$${quote.priceDetails.finalPrice.toFixed(2)} MXN</td></tr>` : ''}
+                    </table>
+                  </div>
+                  <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
+                    Nuestro equipo comenzar\u00e1 a trabajar en tu proyecto. Te mantendremos informado sobre el progreso.
+                  </p>
+                  <p style="font-size: 14px; color: #9ca3af; margin-top: 32px;">
+                    Si tienes alguna duda, no dudes en contactarnos respondiendo a este correo.
+                  </p>
+                </div>
+                <div style="background: #f9fafb; padding: 16px 24px; text-align: center; border-top: 1px solid #e5e7eb;">
+                  <p style="font-size: 12px; color: #9ca3af; margin: 0;">&copy; ${new Date().getFullYear()} Tesipedia | Todos los derechos reservados</p>
+                </div>
+              </div>
+            `;
+            await emailSender(recipientEmail, '✅ Pago Confirmado - Tu proyecto ha sido registrado | Tesipedia', emailHtml);
+            console.log(`[onPaymentComplete] Confirmation email sent to ${recipientEmail}`);
+          }
+        } catch (emailErr) {
+          console.error('[onPaymentComplete] Error sending confirmation email:', emailErr.message);
+        }
       }
 
       // Also try GeneratedQuote

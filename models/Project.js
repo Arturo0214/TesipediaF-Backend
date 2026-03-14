@@ -95,7 +95,24 @@ const projectSchema = new mongoose.Schema(
                 type: Date,
                 default: Date.now
             }
-        }]
+        }],
+        googleCalendarEventId: {
+            type: String,
+            default: null
+        },
+        kanbanOrder: {
+            type: Number,
+            default: 0
+        },
+        priority: {
+            type: String,
+            enum: ['low', 'medium', 'high', 'urgent'],
+            default: 'medium'
+        },
+        color: {
+            type: String,
+            default: '#3b82f6'
+        }
     },
     { timestamps: true }
 );

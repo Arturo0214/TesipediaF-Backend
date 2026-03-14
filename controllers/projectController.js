@@ -45,6 +45,7 @@ export const createProjectFromQuote = asyncHandler(async (req, res) => {
 // Get all projects (admin only)
 export const getAllProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find()
+        .sort({ kanbanOrder: 1 })
         .populate('quote')
         .populate('writer', 'name email')
         .populate('client', 'name email');
@@ -173,6 +174,33 @@ export const addComment = asyncHandler(async (req, res) => {
         user: req.user._id,
         text
     });
+
+    await project.save();
+    res.json(project);
+});
+
+// Update project (general updates for status, priority, color, kanbanOrder, dueDate)
+export const updateProject = asyncHandler(async (req, res) => {
+    const { status, priority, color, kanbanOrder, dueDate } = req.body;
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+        res.status(404);
+        throw new Error('Project not found');
+    }
+
+    // Verify admin has permission
+    if (!req.user.isAdmin) {
+        res.status(403);
+        throw new Error('Not authorized to update this project');
+    }
+
+    // Update allowed fields
+    if (status !== undefined) project.status = status;
+    if (priority !== undefined) project.priority = priority;
+    if (color !== undefined) project.color = color;
+    if (kanbanOrder !== undefined) project.kanbanOrder = kanbanOrder;
+    if (dueDate !== undefined) project.dueDate = dueDate;
 
     await project.save();
     res.json(project);
