@@ -18,7 +18,7 @@ router.get('/auth-url', protect, admin, getAuthUrlEndpoint);
 router.get('/callback', handleCallback);
 
 // Status and events
-router.get('/status', protect, admin, getConnectionStatus);
+router.get('/connection-status', protect, admin, getConnectionStatus);
 router.get('/events', protect, admin, getCalendarEvents);
 
 // Event management

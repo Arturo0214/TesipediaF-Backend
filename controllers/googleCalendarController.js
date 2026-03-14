@@ -30,7 +30,7 @@ export const handleCallback = asyncHandler(async (req, res) => {
 
         // Redirect to frontend with success message
         // In production, you might want to store tokens in DB or session
-        res.redirect(`${process.env.CLIENT_URL}/admin/calendar?status=connected`);
+        res.redirect(`${process.env.CLIENT_URL}/admin/proyectos?google=connected`);
     } catch (error) {
         res.status(400);
         throw new Error(`Failed to exchange authorization code: ${error.message}`);
