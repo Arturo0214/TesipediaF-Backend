@@ -16,7 +16,8 @@ import {
     getRefundStatus,
     createGuestPayment,
     checkPaymentStatus,
-    checkGuestPaymentStatus
+    checkGuestPaymentStatus,
+    getPaymentsDashboard
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -40,10 +41,11 @@ router.get('/status/:sessionId', checkPaymentStatus);
 // Admin routes
 router.use(adminOnly);
 router.get('/', getPayments);
+router.get('/dashboard', getPaymentsDashboard);
+router.get('/stats', getPaymentStats);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);
 router.delete('/:id', deletePayment);
-router.get('/stats', getPaymentStats);
 router.post('/:id/refund', refundPayment);
 router.get('/:id/refund-status', getRefundStatus);
 

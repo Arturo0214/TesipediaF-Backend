@@ -458,3 +458,187 @@ export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
   // Redirigir a la función del guestPaymentController
   return checkGuestPaymentStatusFromGuest(req, res);
 });
+
+// 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
+export const getPaymentsDashboard = asyncHandler(async (req, res) => {
+  const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+
+  // 1. Get all Stripe/PayPal payments
+  const stripePayments = await Payment.find({})
+    .populate({
+      path: 'order',
+      select: 'title price user dueDate',
+      populate: { path: 'user', select: 'name email' }
+    })
+    .sort({ createdAt: -1 });
+
+  // 2. Get all paid GeneratedQuotes (Sofia quotes)
+  const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
+    .sort({ updatedAt: -1 });
+
+  // 3. Get all completed GuestPayments
+  const guestPayments = await GuestPayment.find({ paymentStatus: 'completed' })
+    .populate('quoteId', 'taskTitle taskType estimatedPrice dueDate')
+    .sort({ createdAt: -1 });
+
+  // Helper: generate installment schedule based on esquemaPago
+  const generateSchedule = (totalAmount, esquema, startDate) => {
+    const start = new Date(startDate);
+    const installments = [];
+
+    switch (esquema) {
+      case '50-50':
+        installments.push(
+          { number: 1, amount: Math.round(totalAmount * 0.5), dueDate: new Date(start), label: '1er pago (50%)' },
+          { number: 2, amount: Math.round(totalAmount * 0.5), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (50%)' }
+        );
+        break;
+      case '33-33-34':
+        installments.push(
+          { number: 1, amount: Math.round(totalAmount * 0.33), dueDate: new Date(start), label: '1er pago (33%)' },
+          { number: 2, amount: Math.round(totalAmount * 0.33), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (33%)' },
+          { number: 3, amount: Math.round(totalAmount * 0.34), dueDate: new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000), label: '3er pago (34%)' }
+        );
+        break;
+      case '6-quincenas':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(totalAmount / 6),
+            dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+            label: `Quincena ${i + 1}`
+          });
+        }
+        // Adjust last installment for rounding
+        const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumQ !== totalAmount) installments[5].amount += (totalAmount - sumQ);
+        break;
+      case '6-msi':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(totalAmount / 6),
+            dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+            label: `Mes ${i + 1} (MSI)`
+          });
+        }
+        const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumM !== totalAmount) installments[5].amount += (totalAmount - sumM);
+        break;
+      default:
+        // Single payment
+        installments.push(
+          { number: 1, amount: totalAmount, dueDate: new Date(start), label: 'Pago único' }
+        );
+    }
+    return installments;
+  };
+
+  // Normalize esquemaPago from GeneratedQuote free text to our keys
+  const normalizeEsquema = (raw) => {
+    if (!raw) return 'unico';
+    const lower = raw.toLowerCase();
+    if (lower.includes('50') && lower.includes('50')) return '50-50';
+    if (lower.includes('33')) return '33-33-34';
+    if (lower.includes('quincena') || lower.includes('6 quincena')) return '6-quincenas';
+    if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    return 'unico';
+  };
+
+  // Build unified payment records
+  const unified = [];
+
+  // From Stripe/PayPal payments
+  for (const p of stripePayments) {
+    const amount = p.amount || p.order?.price || 0;
+    unified.push({
+      _id: p._id,
+      source: 'stripe',
+      clientName: p.order?.user?.name || 'Cliente',
+      clientEmail: p.order?.user?.email || '',
+      title: p.order?.title || 'Pago',
+      amount,
+      method: p.method,
+      status: p.status,
+      esquema: 'unico',
+      schedule: generateSchedule(amount, 'unico', p.createdAt),
+      commission: Math.round(amount * 0.15),
+      date: p.createdAt,
+      dueDate: p.order?.dueDate || null,
+    });
+  }
+
+  // From GeneratedQuotes (Sofia paid quotes)
+  for (const q of paidQuotes) {
+    const amount = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
+    const esquema = normalizeEsquema(q.esquemaPago);
+    unified.push({
+      _id: q._id,
+      source: 'sofia',
+      clientName: q.clientName || 'Cliente',
+      clientEmail: q.clientEmail || '',
+      title: q.tituloTrabajo || q.tipoTrabajo || 'Cotización Sofia',
+      amount,
+      method: q.metodoPago || 'efectivo',
+      status: 'paid',
+      esquema,
+      esquemaRaw: q.esquemaPago || '',
+      schedule: generateSchedule(amount, esquema, q.updatedAt),
+      commission: Math.round(amount * 0.15),
+      date: q.updatedAt,
+      dueDate: q.fechaEntrega || null,
+      tipoServicio: q.tipoServicio || '',
+      carrera: q.carrera || '',
+    });
+  }
+
+  // From GuestPayments
+  for (const g of guestPayments) {
+    const amount = g.amount || 0;
+    unified.push({
+      _id: g._id,
+      source: 'guest',
+      clientName: `${g.nombres || ''} ${g.apellidos || ''}`.trim() || 'Invitado',
+      clientEmail: g.correo || '',
+      title: g.quoteId?.taskTitle || 'Pago Invitado',
+      amount,
+      method: g.paymentMethod || 'stripe',
+      status: 'completed',
+      esquema: 'unico',
+      schedule: generateSchedule(amount, 'unico', g.createdAt),
+      commission: Math.round(amount * 0.15),
+      date: g.createdAt,
+      dueDate: g.quoteId?.dueDate || null,
+    });
+  }
+
+  // Sort by date descending
+  unified.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Calculate summary
+  const totalIngresos = unified.reduce((s, p) => s + p.amount, 0);
+  const totalComisiones = unified.reduce((s, p) => s + p.commission, 0);
+  const totalPagos = unified.length;
+
+  // Monthly breakdown for chart
+  const monthlyMap = {};
+  for (const p of unified) {
+    const key = new Date(p.date).toISOString().slice(0, 7); // YYYY-MM
+    if (!monthlyMap[key]) monthlyMap[key] = { month: key, ingresos: 0, comisiones: 0, count: 0 };
+    monthlyMap[key].ingresos += p.amount;
+    monthlyMap[key].comisiones += p.commission;
+    monthlyMap[key].count += 1;
+  }
+  const monthly = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
+
+  res.json({
+    payments: unified,
+    summary: {
+      totalIngresos,
+      totalComisiones,
+      netoEmpresa: totalIngresos - totalComisiones,
+      totalPagos,
+    },
+    monthly,
+  });
+});
