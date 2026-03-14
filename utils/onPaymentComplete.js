@@ -93,7 +93,11 @@ const onPaymentComplete = async (opts = {}) => {
                 </div>
               </div>
             `;
-            await emailSender(recipientEmail, '✅ Pago Confirmado - Tu proyecto ha sido registrado | Tesipedia', emailHtml);
+            await emailSender({
+              to: recipientEmail,
+              subject: '✅ Pago Confirmado - Tu proyecto ha sido registrado | Tesipedia',
+              html: emailHtml
+            });
             console.log(`[onPaymentComplete] Confirmation email sent to ${recipientEmail}`);
           }
         } catch (emailErr) {

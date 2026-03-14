@@ -109,7 +109,7 @@ app.use('/webhook', webhookRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
 app.use('/api/v1/hubspot', hubspotRoutes);
-app.use('/api/v1/google', googleCalendarRoutes);
+app.use('/google', googleCalendarRoutes);
 
 // Middlewares de error
 app.use(notFound);
