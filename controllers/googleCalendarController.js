@@ -40,7 +40,20 @@ export const handleCallback = asyncHandler(async (req, res) => {
 // Get connection status
 export const getConnectionStatus = asyncHandler(async (req, res) => {
     const connected = isAuthenticated();
-    res.json({ connected });
+    let email = null;
+
+    if (connected) {
+        try {
+            const { google } = await import('googleapis');
+            const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+            const userInfo = await oauth2.userinfo.get();
+            email = userInfo.data.email;
+        } catch (err) {
+            // If we can't get email, just return connected status
+        }
+    }
+
+    res.json({ connected, email });
 });
 
 // Get calendar events
