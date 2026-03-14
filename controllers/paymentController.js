@@ -459,6 +459,40 @@ export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
   return checkGuestPaymentStatusFromGuest(req, res);
 });
 
+// 📝 Registrar pago manualmente (admin)
+export const createManualPayment = asyncHandler(async (req, res) => {
+  const { clientName, clientEmail, title, amount, method, esquemaPago, notes } = req.body;
+
+  if (!clientName || !amount || !title) {
+    res.status(400);
+    throw new Error('Se requiere nombre del cliente, monto y título del proyecto');
+  }
+
+  // Store as a Payment document with method 'manual'
+  const payment = await Payment.create({
+    amount: parseFloat(amount),
+    method: method || 'manual',
+    status: 'completed',
+    transactionId: `MANUAL-${Date.now()}`,
+    currency: 'MXN',
+    // We store extra info in a lean way
+  });
+
+  // Return enriched response
+  res.status(201).json({
+    _id: payment._id,
+    clientName,
+    clientEmail: clientEmail || '',
+    title,
+    amount: payment.amount,
+    method: payment.method,
+    status: payment.status,
+    esquemaPago: esquemaPago || 'Pago único',
+    notes: notes || '',
+    createdAt: payment.createdAt,
+  });
+});
+
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
 export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;

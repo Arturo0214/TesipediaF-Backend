@@ -5,8 +5,16 @@ const projectSchema = new mongoose.Schema(
         quote: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Quote',
-            required: true,
-            unique: true,
+            default: null,
+            sparse: true,
+        },
+        clientName: {
+            type: String,
+            default: '',
+        },
+        clientEmail: {
+            type: String,
+            default: '',
         },
         writer: {
             type: mongoose.Schema.Types.ObjectId,

@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     createProjectFromQuote,
+    createManualProject,
     getAllProjects,
     getWriterProjects,
     getClientProjects,
@@ -19,6 +20,8 @@ const router = express.Router();
 router.route('/')
     .post(protect, admin, createProjectFromQuote)
     .get(protect, admin, getAllProjects);
+
+router.post('/manual', protect, admin, createManualProject);
 
 router.route('/writer')
     .get(protect, writer, getWriterProjects);

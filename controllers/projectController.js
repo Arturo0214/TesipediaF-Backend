@@ -179,6 +179,38 @@ export const addComment = asyncHandler(async (req, res) => {
     res.json(project);
 });
 
+// Create a project manually (admin only, no quote required)
+export const createManualProject = asyncHandler(async (req, res) => {
+    const {
+        taskTitle, taskType, studyArea, career, educationLevel,
+        clientName, clientEmail, requirements, pages, dueDate,
+        priority, status
+    } = req.body;
+
+    if (!taskTitle || !taskType || !dueDate) {
+        res.status(400);
+        throw new Error('Se requiere título, tipo de trabajo y fecha de entrega');
+    }
+
+    const project = await Project.create({
+        quote: null,
+        taskType,
+        studyArea: studyArea || 'General',
+        career: career || 'General',
+        educationLevel: educationLevel || 'licenciatura',
+        taskTitle,
+        requirements: { text: requirements || 'Proyecto creado manualmente' },
+        pages: pages || 1,
+        dueDate: new Date(dueDate),
+        priority: priority || 'medium',
+        status: status || 'pending',
+        clientName: clientName || '',
+        clientEmail: clientEmail || '',
+    });
+
+    res.status(201).json(project);
+});
+
 // Update project (general updates for status, priority, color, kanbanOrder, dueDate)
 export const updateProject = asyncHandler(async (req, res) => {
     const { status, priority, color, kanbanOrder, dueDate } = req.body;
