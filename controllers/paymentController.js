@@ -615,14 +615,49 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   // Sort by date descending
   unified.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-  // Calculate summary
-  const totalIngresos = unified.reduce((s, p) => s + p.amount, 0);
-  const totalComisiones = unified.reduce((s, p) => s + p.commission, 0);
-  const totalPagos = unified.length;
+  // Filter out test data from 2025 — only keep 2026+
+  const cutoffDate = new Date('2026-01-01T00:00:00Z');
+  const realPayments = unified.filter(p => new Date(p.date) >= cutoffDate);
 
-  // Monthly breakdown for chart
+  // Calculate summary (only real data)
+  const totalIngresos = realPayments.reduce((s, p) => s + p.amount, 0);
+  const totalComisiones = realPayments.reduce((s, p) => s + p.commission, 0);
+  const totalPagos = realPayments.length;
+
+  // --- Time-series breakdowns ---
+
+  // Daily breakdown (last 30 days)
+  const dailyMap = {};
+  for (const p of realPayments) {
+    const key = new Date(p.date).toISOString().slice(0, 10); // YYYY-MM-DD
+    if (!dailyMap[key]) dailyMap[key] = { date: key, ingresos: 0, comisiones: 0, count: 0 };
+    dailyMap[key].ingresos += p.amount;
+    dailyMap[key].comisiones += p.commission;
+    dailyMap[key].count += 1;
+  }
+  const daily = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Weekly breakdown
+  const getWeekKey = (dateStr) => {
+    const d = new Date(dateStr);
+    const day = d.getDay();
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((day + 6) % 7));
+    return monday.toISOString().slice(0, 10);
+  };
+  const weeklyMap = {};
+  for (const p of realPayments) {
+    const key = getWeekKey(p.date);
+    if (!weeklyMap[key]) weeklyMap[key] = { week: key, ingresos: 0, comisiones: 0, count: 0 };
+    weeklyMap[key].ingresos += p.amount;
+    weeklyMap[key].comisiones += p.commission;
+    weeklyMap[key].count += 1;
+  }
+  const weekly = Object.values(weeklyMap).sort((a, b) => a.week.localeCompare(b.week));
+
+  // Monthly breakdown
   const monthlyMap = {};
-  for (const p of unified) {
+  for (const p of realPayments) {
     const key = new Date(p.date).toISOString().slice(0, 7); // YYYY-MM
     if (!monthlyMap[key]) monthlyMap[key] = { month: key, ingresos: 0, comisiones: 0, count: 0 };
     monthlyMap[key].ingresos += p.amount;
@@ -632,13 +667,15 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const monthly = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
 
   res.json({
-    payments: unified,
+    payments: realPayments,
     summary: {
       totalIngresos,
       totalComisiones,
       netoEmpresa: totalIngresos - totalComisiones,
       totalPagos,
     },
+    daily,
+    weekly,
     monthly,
   });
 });
