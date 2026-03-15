@@ -17,9 +17,14 @@ export const deleteUser = asyncHandler(async (req, res) => {
     throw new Error('Usuario no encontrado');
   }
 
-  if (user.role === 'admin') {
+  if (user.role === 'superadmin') {
     res.status(403);
-    throw new Error('No puedes eliminar a otro administrador');
+    throw new Error('El Super Administrador no puede ser eliminado');
+  }
+
+  if (user.role === 'admin' && req.user.role !== 'superadmin') {
+    res.status(403);
+    throw new Error('Solo el Super Admin puede eliminar administradores');
   }
 
   await user.deleteOne();

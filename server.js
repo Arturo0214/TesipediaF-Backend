@@ -39,7 +39,21 @@ import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 dotenv.config();
 
 // Conectar a la base de datos
-connectDB();
+connectDB().then(async () => {
+  // Auto-promover superadmin si existe y no tiene el rol aún
+  try {
+    const User = (await import('./models/User.js')).default;
+    const SUPER_ADMIN_EMAIL = 'osvaldosuarezcruz@gmail.com';
+    const superAdmin = await User.findOne({ email: SUPER_ADMIN_EMAIL });
+    if (superAdmin && superAdmin.role !== 'superadmin') {
+      superAdmin.role = 'superadmin';
+      await superAdmin.save();
+      console.log(`👑 Usuario ${SUPER_ADMIN_EMAIL} promovido a superadmin`);
+    }
+  } catch (err) {
+    console.error('Error verificando superadmin:', err.message);
+  }
+});
 
 // Inicializar la app
 const app = express();
@@ -107,6 +121,7 @@ app.use('/payments', paymentRoutes);
 app.use('/paypal', paypalRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/projects', projectRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
 app.use('/api/v1/hubspot', hubspotRoutes);
 app.use('/google', googleCalendarRoutes);

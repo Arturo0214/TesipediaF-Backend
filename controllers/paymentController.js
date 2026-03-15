@@ -3,12 +3,14 @@ import stripe from '../config/stripe.js';
 import Order from '../models/Order.js';
 import mongoose from 'mongoose';
 import Payment from '../models/Payment.js';
+import Project from '../models/Project.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
 import GuestPayment from '../models/guestPayment.js';
 import { generateTrackingToken } from '../utils/tokenGenerator.js';
 import jwt from 'jsonwebtoken';
 import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPaymentStatusFromGuest } from './guestPaymentController.js';
+import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 
 
 // 💳 Crear sesión de pago con Stripe
@@ -460,8 +462,13 @@ export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
 });
 
 // 📝 Registrar pago manualmente (admin)
+// También crea un proyecto vinculado y un usuario cliente automáticamente
 export const createManualPayment = asyncHandler(async (req, res) => {
-  const { clientName, clientEmail, title, amount, method, esquemaPago, paymentDate, notes } = req.body;
+  const {
+    clientName, clientEmail, clientPhone, title, amount, method, esquemaPago, paymentDate, notes,
+    // Campos de proyecto (opcionales)
+    taskType, studyArea, career, educationLevel, pages, dueDate, requirements, priority,
+  } = req.body;
 
   if (!clientName || !amount || !title) {
     res.status(400);
@@ -537,6 +544,19 @@ export const createManualPayment = asyncHandler(async (req, res) => {
 
   const schedule = generateSchedule(totalAmount, esquemaKey, startDate);
 
+  // 1. Auto-crear usuario cliente si hay email
+  let clientUser = null;
+  if (clientEmail) {
+    const { user } = await autoCreateClientUser({
+      clientName: clientName || 'Cliente',
+      clientEmail,
+      clientPhone,
+      projectTitle: title,
+    });
+    clientUser = user;
+  }
+
+  // 2. Crear el pago
   const payment = await Payment.create({
     amount: totalAmount,
     method: method || 'transferencia',
@@ -546,6 +566,7 @@ export const createManualPayment = asyncHandler(async (req, res) => {
     isManual: true,
     clientName: clientName || '',
     clientEmail: clientEmail || '',
+    clientPhone: clientPhone || '',
     title: title || '',
     esquemaPago: esquemaKey,
     paymentDate: startDate,
@@ -553,7 +574,41 @@ export const createManualPayment = asyncHandler(async (req, res) => {
     notes: notes || '',
   });
 
-  res.status(201).json(payment);
+  // 3. Crear proyecto vinculado automáticamente
+  let linkedProject = null;
+  try {
+    linkedProject = await Project.create({
+      quote: null,
+      taskType: taskType || 'Trabajo Académico',
+      studyArea: studyArea || 'General',
+      career: career || 'General',
+      educationLevel: educationLevel || 'licenciatura',
+      taskTitle: title,
+      requirements: { text: requirements || 'Proyecto creado desde registro de pago' },
+      pages: pages || 1,
+      dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // default 30 días
+      priority: priority || 'medium',
+      status: 'pending',
+      clientName: clientName || '',
+      clientEmail: clientEmail || '',
+      clientPhone: clientPhone || '',
+      client: clientUser?._id || null,
+      payment: payment._id,
+    });
+
+    // Vincular proyecto al pago
+    payment.project = linkedProject._id;
+    await payment.save();
+  } catch (err) {
+    console.error('[ManualPayment] Error creando proyecto vinculado:', err.message);
+    // El pago se creó correctamente, el proyecto es complementario
+  }
+
+  res.status(201).json({
+    payment,
+    project: linkedProject,
+    clientCreated: clientUser ? true : false,
+  });
 });
 
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments

@@ -58,6 +58,12 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     enum: ['pending', 'completed', 'failed', 'cancelled'],
   },
+  // Referencia al proyecto vinculado
+  project: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Project',
+    default: null,
+  },
   // ===== Campos para pagos manuales =====
   isManual: {
     type: Boolean,
@@ -68,6 +74,10 @@ const paymentSchema = new mongoose.Schema({
     default: '',
   },
   clientEmail: {
+    type: String,
+    default: '',
+  },
+  clientPhone: {
     type: String,
     default: '',
   },

@@ -26,6 +26,15 @@ const projectSchema = new mongoose.Schema(
             ref: 'User',
             default: null,
         },
+        payment: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Payment',
+            default: null,
+        },
+        clientPhone: {
+            type: String,
+            default: '',
+        },
         status: {
             type: String,
             enum: ['pending', 'in_progress', 'review', 'completed', 'cancelled'],

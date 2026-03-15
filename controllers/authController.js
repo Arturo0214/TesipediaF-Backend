@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import generateToken from '../utils/generateToken.js';
 import sendEmail from '../utils/emailSender.js';
 import crypto from 'crypto';
+import { SUPER_ADMIN_EMAIL } from '../middleware/authMiddleware.js';
 
 // 📌 Registrar un nuevo usuario
 const register = asyncHandler(async (req, res) => {
@@ -23,7 +24,7 @@ const register = asyncHandler(async (req, res) => {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 días
+      maxAge: 365 * 24 * 60 * 60 * 1000, // 1 año
       path: '/',
     });
 
@@ -32,6 +33,62 @@ const register = asyncHandler(async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
+    });
+
+    // Enviar emails de forma asincrónica (no bloquea la respuesta)
+    setImmediate(async () => {
+      try {
+        // 1. Email de bienvenida al usuario
+        const welcomeHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <h2 style="color: #2575fc; text-align: center;">Bienvenido a Tesipedia</h2>
+            <p style="font-size: 16px;">Hola <strong>${user.name}</strong>,</p>
+            <p style="font-size: 16px;">Tu cuenta ha sido creada exitosamente. Ya puedes iniciar sesión y explorar nuestros servicios.</p>
+            <div style="text-align: center; margin: 20px 0;">
+              <a href="${process.env.CLIENT_URL || 'https://tesipedia.com'}/login"
+                 style="background-color: #2575fc; color: white; padding: 12px 24px; text-decoration: none; font-size: 16px; border-radius: 5px; display: inline-block;">
+                 Iniciar Sesión
+              </a>
+            </div>
+            <p style="font-size: 14px; color: #666;">Si tienes alguna pregunta, no dudes en contactarnos.</p>
+            <hr>
+            <p style="font-size: 12px; text-align: center; color: #888;">© 2026 Tesipedia | Todos los derechos reservados</p>
+          </div>
+        `;
+        await sendEmail({
+          to: user.email,
+          subject: 'Bienvenido a Tesipedia',
+          html: welcomeHtml,
+        });
+        console.log(`📧 Email de bienvenida enviado a ${user.email}`);
+      } catch (err) {
+        console.error('Error enviando email de bienvenida:', err.message);
+      }
+
+      try {
+        // 2. Notificación al admin
+        const adminNotifHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <h2 style="color: #2575fc; text-align: center;">Nuevo Usuario Registrado</h2>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0;">
+              <p><strong>Nombre:</strong> ${user.name}</p>
+              <p><strong>Email:</strong> ${user.email}</p>
+              <p><strong>Rol:</strong> ${user.role}</p>
+              <p><strong>Fecha:</strong> ${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}</p>
+            </div>
+            <hr>
+            <p style="font-size: 12px; text-align: center; color: #888;">© 2026 Tesipedia | Notificación automática</p>
+          </div>
+        `;
+        await sendEmail({
+          to: SUPER_ADMIN_EMAIL,
+          subject: `Nuevo registro: ${user.name} (${user.email})`,
+          html: adminNotifHtml,
+        });
+        console.log(`📧 Notificación de registro enviada al admin`);
+      } catch (err) {
+        console.error('Error enviando notificación al admin:', err.message);
+      }
     });
   } else {
     res.status(400);
@@ -53,7 +110,7 @@ const login = asyncHandler(async (req, res) => {
 
   // Establecer la cookie de manera más explícita
   res.setHeader('Set-Cookie', [
-    `jwt=${token}; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=${30 * 24 * 60 * 60}; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
+    `jwt=${token}; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=${365 * 24 * 60 * 60}; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
   ]);
 
   res.status(200).json({

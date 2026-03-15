@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 
-const generateToken = (user, expiresIn = '30d') => {
+const generateToken = (user, expiresIn = '365d') => {
   if (!process.env.JWT_SECRET) {
     throw new Error("JWT_SECRET no está definido en el entorno");
   }

@@ -3,6 +3,9 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import asyncHandler from 'express-async-handler';
 
+// Email del superadmin (hardcoded por seguridad)
+const SUPER_ADMIN_EMAIL = 'osvaldosuarezcruz@gmail.com';
+
 // Protege rutas normales
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -32,6 +35,10 @@ export const protect = asyncHandler(async (req, res, next) => {
       throw new Error('No autorizado: cuenta desactivada');
     }
 
+    // Marcar helpers en req.user para uso fácil en controladores
+    req.user.isSuperAdmin = req.user.role === 'superadmin';
+    req.user.isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
+
     next();
   } catch (error) {
     res.status(401);
@@ -55,25 +62,24 @@ export const optionalAuth = asyncHandler(async (req, res, next) => {
       req.user = await User.findById(decoded.id).select('-password');
 
       if (!req.user) {
-        // Si el usuario no existe, continuamos sin autenticación
         req.user = null;
       } else if (!req.user.isActive) {
-        // Si la cuenta está desactivada, continuamos sin autenticación
         req.user = null;
+      } else {
+        req.user.isSuperAdmin = req.user.role === 'superadmin';
+        req.user.isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
       }
     } catch (error) {
-      // Si hay error en el token, continuamos sin autenticación
       req.user = null;
     }
   }
 
-  // Siempre continuamos, con o sin usuario autenticado
   next();
 });
 
-// Protege rutas de admin
+// Protege rutas de admin (admin + superadmin)
 export const adminOnly = (req, res, next) => {
-  if (req.user && req.user.role === 'admin') {
+  if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin')) {
     next();
   } else {
     res.status(403);
@@ -81,9 +87,19 @@ export const adminOnly = (req, res, next) => {
   }
 };
 
+// Protege rutas exclusivas de superadmin
+export const superAdminOnly = (req, res, next) => {
+  if (req.user && req.user.role === 'superadmin') {
+    next();
+  } else {
+    res.status(403);
+    throw new Error('No autorizado: se requiere rol de Super Administrador');
+  }
+};
+
 // Protege rutas de escritor
 export const writerOnly = (req, res, next) => {
-  if (req.user && req.user.role === 'writer') {
+  if (req.user && req.user.role === 'redactor') {
     next();
   } else {
     res.status(403);
@@ -93,7 +109,7 @@ export const writerOnly = (req, res, next) => {
 
 // Protege rutas de admin o escritor
 export const admin = (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.role === 'writer')) {
+  if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin' || req.user.role === 'redactor')) {
     next();
   } else {
     res.status(403);
@@ -102,10 +118,13 @@ export const admin = (req, res, next) => {
 };
 
 export const writer = (req, res, next) => {
-  if (req.user && req.user.role === 'writer') {
+  if (req.user && req.user.role === 'redactor') {
     next();
   } else {
     res.status(403);
     throw new Error('Not authorized as a writer');
   }
 };
+
+// Exportar la constante para usar en otros módulos
+export { SUPER_ADMIN_EMAIL };

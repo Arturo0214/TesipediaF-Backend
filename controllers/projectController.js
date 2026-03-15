@@ -1,6 +1,8 @@
 import Project from '../models/Project.js';
 import Quote from '../models/Quote.js';
+import Payment from '../models/Payment.js';
 import asyncHandler from 'express-async-handler';
+import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 
 // Create a new project from a quote
 export const createProjectFromQuote = asyncHandler(async (req, res) => {
@@ -180,11 +182,14 @@ export const addComment = asyncHandler(async (req, res) => {
 });
 
 // Create a project manually (admin only, no quote required)
+// También crea un pago vinculado y un usuario cliente automáticamente
 export const createManualProject = asyncHandler(async (req, res) => {
     const {
         taskTitle, taskType, studyArea, career, educationLevel,
-        clientName, clientEmail, requirements, pages, dueDate,
-        priority, status
+        clientName, clientEmail, clientPhone, requirements, pages, dueDate,
+        priority, status,
+        // Campos de pago (opcionales — si vienen, se crea el pago vinculado)
+        amount, method, esquemaPago, paymentDate, paymentNotes,
     } = req.body;
 
     if (!taskTitle || !taskType || !dueDate) {
@@ -192,6 +197,19 @@ export const createManualProject = asyncHandler(async (req, res) => {
         throw new Error('Se requiere título, tipo de trabajo y fecha de entrega');
     }
 
+    // 1. Auto-crear usuario cliente si hay email
+    let clientUser = null;
+    if (clientEmail) {
+        const { user } = await autoCreateClientUser({
+            clientName: clientName || 'Cliente',
+            clientEmail,
+            clientPhone,
+            projectTitle: taskTitle,
+        });
+        clientUser = user;
+    }
+
+    // 2. Crear el proyecto
     const project = await Project.create({
         quote: null,
         taskType,
@@ -206,9 +224,110 @@ export const createManualProject = asyncHandler(async (req, res) => {
         status: status || 'pending',
         clientName: clientName || '',
         clientEmail: clientEmail || '',
+        clientPhone: clientPhone || '',
+        client: clientUser?._id || null,
     });
 
-    res.status(201).json(project);
+    // 3. Si se proporcionó monto, crear pago vinculado automáticamente
+    let linkedPayment = null;
+    if (amount && parseFloat(amount) > 0) {
+        const totalAmount = parseFloat(amount);
+        const startDate = paymentDate ? new Date(paymentDate) : new Date();
+
+        // Normalizar esquema
+        const normalizeEsquemaKey = (raw) => {
+            if (!raw) return 'unico';
+            const lower = raw.toLowerCase();
+            if (lower.includes('50')) return '50-50';
+            if (lower.includes('33')) return '33-33-34';
+            if (lower.includes('quincena')) return '6-quincenas';
+            if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+            return 'unico';
+        };
+
+        const esquemaKey = normalizeEsquemaKey(esquemaPago);
+
+        // Generar schedule
+        const generateSchedule = (total, esquema, start) => {
+            const installments = [];
+            switch (esquema) {
+                case '50-50':
+                    installments.push(
+                        { number: 1, amount: Math.round(total * 0.5), dueDate: new Date(start), label: '1er pago (50%)', status: 'pending' },
+                        { number: 2, amount: Math.round(total * 0.5), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (50%)', status: 'pending' }
+                    );
+                    break;
+                case '33-33-34':
+                    installments.push(
+                        { number: 1, amount: Math.round(total * 0.33), dueDate: new Date(start), label: '1er pago (33%)', status: 'pending' },
+                        { number: 2, amount: Math.round(total * 0.33), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (33%)', status: 'pending' },
+                        { number: 3, amount: Math.round(total * 0.34), dueDate: new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000), label: '3er pago (34%)', status: 'pending' }
+                    );
+                    break;
+                case '6-quincenas':
+                    for (let i = 0; i < 6; i++) {
+                        installments.push({
+                            number: i + 1,
+                            amount: Math.round(total / 6),
+                            dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+                            label: `Quincena ${i + 1}`,
+                            status: 'pending',
+                        });
+                    }
+                    const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
+                    if (sumQ !== total) installments[5].amount += (total - sumQ);
+                    break;
+                case '6-msi':
+                    for (let i = 0; i < 6; i++) {
+                        installments.push({
+                            number: i + 1,
+                            amount: Math.round(total / 6),
+                            dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+                            label: `Mes ${i + 1} (MSI)`,
+                            status: 'pending',
+                        });
+                    }
+                    const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
+                    if (sumM !== total) installments[5].amount += (total - sumM);
+                    break;
+                default:
+                    installments.push(
+                        { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
+                    );
+            }
+            return installments;
+        };
+
+        const schedule = generateSchedule(totalAmount, esquemaKey, startDate);
+
+        linkedPayment = await Payment.create({
+            amount: totalAmount,
+            method: method || 'transferencia',
+            status: 'completed',
+            transactionId: `MANUAL-${Date.now()}`,
+            currency: 'MXN',
+            isManual: true,
+            clientName: clientName || '',
+            clientEmail: clientEmail || '',
+            clientPhone: clientPhone || '',
+            title: taskTitle,
+            esquemaPago: esquemaKey,
+            paymentDate: startDate,
+            schedule,
+            notes: paymentNotes || '',
+            project: project._id,
+        });
+
+        // Vincular pago al proyecto
+        project.payment = linkedPayment._id;
+        await project.save();
+    }
+
+    res.status(201).json({
+        project,
+        payment: linkedPayment,
+        clientCreated: clientUser ? true : false,
+    });
 });
 
 // Update project (general updates for status, priority, color, kanbanOrder, dueDate)
