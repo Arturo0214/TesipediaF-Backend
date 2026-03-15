@@ -461,49 +461,116 @@ export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
 
 // 📝 Registrar pago manualmente (admin)
 export const createManualPayment = asyncHandler(async (req, res) => {
-  const { clientName, clientEmail, title, amount, method, esquemaPago, notes } = req.body;
+  const { clientName, clientEmail, title, amount, method, esquemaPago, paymentDate, notes } = req.body;
 
   if (!clientName || !amount || !title) {
     res.status(400);
     throw new Error('Se requiere nombre del cliente, monto y título del proyecto');
   }
 
-  // Store as a Payment document with method 'manual'
+  const totalAmount = parseFloat(amount);
+  const startDate = paymentDate ? new Date(paymentDate) : new Date();
+
+  // Normalize esquema key
+  const normalizeEsquemaKey = (raw) => {
+    if (!raw) return 'unico';
+    const lower = raw.toLowerCase();
+    if (lower.includes('50')) return '50-50';
+    if (lower.includes('33')) return '33-33-34';
+    if (lower.includes('quincena')) return '6-quincenas';
+    if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    return 'unico';
+  };
+
+  const esquemaKey = normalizeEsquemaKey(esquemaPago);
+
+  // Generate installment schedule
+  const generateSchedule = (total, esquema, start) => {
+    const installments = [];
+    switch (esquema) {
+      case '50-50':
+        installments.push(
+          { number: 1, amount: Math.round(total * 0.5), dueDate: new Date(start), label: '1er pago (50%)', status: 'pending' },
+          { number: 2, amount: Math.round(total * 0.5), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (50%)', status: 'pending' }
+        );
+        break;
+      case '33-33-34':
+        installments.push(
+          { number: 1, amount: Math.round(total * 0.33), dueDate: new Date(start), label: '1er pago (33%)', status: 'pending' },
+          { number: 2, amount: Math.round(total * 0.33), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (33%)', status: 'pending' },
+          { number: 3, amount: Math.round(total * 0.34), dueDate: new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000), label: '3er pago (34%)', status: 'pending' }
+        );
+        break;
+      case '6-quincenas':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(total / 6),
+            dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+            label: `Quincena ${i + 1}`,
+            status: 'pending',
+          });
+        }
+        const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumQ !== total) installments[5].amount += (total - sumQ);
+        break;
+      case '6-msi':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(total / 6),
+            dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+            label: `Mes ${i + 1} (MSI)`,
+            status: 'pending',
+          });
+        }
+        const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumM !== total) installments[5].amount += (total - sumM);
+        break;
+      default:
+        installments.push(
+          { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
+        );
+    }
+    return installments;
+  };
+
+  const schedule = generateSchedule(totalAmount, esquemaKey, startDate);
+
   const payment = await Payment.create({
-    amount: parseFloat(amount),
-    method: method || 'manual',
+    amount: totalAmount,
+    method: method || 'transferencia',
     status: 'completed',
     transactionId: `MANUAL-${Date.now()}`,
     currency: 'MXN',
-    // We store extra info in a lean way
+    isManual: true,
+    clientName: clientName || '',
+    clientEmail: clientEmail || '',
+    title: title || '',
+    esquemaPago: esquemaKey,
+    paymentDate: startDate,
+    schedule,
+    notes: notes || '',
   });
 
-  // Return enriched response
-  res.status(201).json({
-    _id: payment._id,
-    clientName,
-    clientEmail: clientEmail || '',
-    title,
-    amount: payment.amount,
-    method: payment.method,
-    status: payment.status,
-    esquemaPago: esquemaPago || 'Pago único',
-    notes: notes || '',
-    createdAt: payment.createdAt,
-  });
+  res.status(201).json(payment);
 });
 
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
 export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
 
-  // 1. Get all Stripe/PayPal payments
-  const stripePayments = await Payment.find({})
+  // 1. Get all Stripe/PayPal payments (non-manual)
+  const stripePayments = await Payment.find({ isManual: { $ne: true } })
     .populate({
       path: 'order',
       select: 'title price user dueDate',
       populate: { path: 'user', select: 'name email' }
     })
+    .sort({ createdAt: -1 });
+
+  // 1b. Get all manual payments
+  const manualPayments = await Payment.find({ isManual: true })
     .sort({ createdAt: -1 });
 
   // 2. Get all paid GeneratedQuotes (Sofia quotes)
@@ -643,6 +710,30 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       commission: Math.round(amount * 0.15),
       date: g.createdAt,
       dueDate: g.quoteId?.dueDate || null,
+    });
+  }
+
+  // From Manual Payments
+  for (const m of manualPayments) {
+    const amount = m.amount || 0;
+    const esquema = m.esquemaPago || 'unico';
+    unified.push({
+      _id: m._id,
+      source: 'manual',
+      clientName: m.clientName || 'Manual',
+      clientEmail: m.clientEmail || '',
+      title: m.title || 'Pago Manual',
+      amount,
+      method: m.method,
+      status: m.status,
+      esquema,
+      schedule: m.schedule && m.schedule.length > 0
+        ? m.schedule
+        : generateSchedule(amount, esquema, m.paymentDate || m.createdAt),
+      commission: Math.round(amount * 0.15),
+      date: m.paymentDate || m.createdAt,
+      dueDate: null,
+      notes: m.notes || '',
     });
   }
 

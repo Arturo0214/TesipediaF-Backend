@@ -1,14 +1,26 @@
 import mongoose from 'mongoose';
 
+const installmentSchema = new mongoose.Schema({
+  number: Number,
+  amount: Number,
+  dueDate: Date,
+  label: String,
+  status: {
+    type: String,
+    enum: ['pending', 'paid'],
+    default: 'pending',
+  },
+}, { _id: false });
+
 const paymentSchema = new mongoose.Schema({
   order: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Order',
-    required: true,
+    default: null,
   },
   method: {
     type: String,
-    enum: ['stripe', 'paypal'],
+    enum: ['stripe', 'paypal', 'transferencia', 'efectivo', 'mercadolibre', 'manual'],
     required: true,
   },
   amount: {
@@ -45,6 +57,36 @@ const paymentSchema = new mongoose.Schema({
   refundStatus: {
     type: String,
     enum: ['pending', 'completed', 'failed', 'cancelled'],
+  },
+  // ===== Campos para pagos manuales =====
+  isManual: {
+    type: Boolean,
+    default: false,
+  },
+  clientName: {
+    type: String,
+    default: '',
+  },
+  clientEmail: {
+    type: String,
+    default: '',
+  },
+  title: {
+    type: String,
+    default: '',
+  },
+  esquemaPago: {
+    type: String,
+    default: 'unico',
+  },
+  paymentDate: {
+    type: Date,
+    default: null,
+  },
+  schedule: [installmentSchema],
+  notes: {
+    type: String,
+    default: '',
   },
 }, {
   timestamps: true,

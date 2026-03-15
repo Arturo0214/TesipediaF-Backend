@@ -11,6 +11,7 @@ import stripe from '../config/stripe.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
+import { notifyQuoteSent } from '../utils/sendWhatsAppNotification.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -833,6 +834,11 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
         source: 'cotizador',
       }).catch(err => console.error('[saveGeneratedQuote] HubSpot sync error:', err.message));
     }
+
+    // 📲 Notificar al equipo por WhatsApp (fire-and-forget)
+    notifyQuoteSent(quoteData).catch(err =>
+      console.error('[saveGeneratedQuote] WhatsApp notification error:', err.message)
+    );
 
     res.status(201).json({
       success: true,
