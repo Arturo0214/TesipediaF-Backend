@@ -611,6 +611,48 @@ export const createManualPayment = asyncHandler(async (req, res) => {
   });
 });
 
+// 🗑️ Eliminar pago de cualquier fuente (admin) — Payment, GeneratedQuote o GuestPayment
+export const deleteDashboardPayment = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { source } = req.query; // 'stripe' | 'manual' | 'sofia' | 'guest'
+
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400);
+    throw new Error('ID de pago inválido');
+  }
+
+  let deleted = false;
+
+  if (source === 'sofia') {
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const doc = await GeneratedQuote.findById(id);
+    if (doc) {
+      await doc.deleteOne();
+      deleted = true;
+    }
+  } else if (source === 'guest') {
+    const doc = await GuestPayment.findById(id);
+    if (doc) {
+      await doc.deleteOne();
+      deleted = true;
+    }
+  } else {
+    // stripe or manual — both live in Payment collection
+    const doc = await Payment.findById(id);
+    if (doc) {
+      await doc.deleteOne();
+      deleted = true;
+    }
+  }
+
+  if (!deleted) {
+    res.status(404);
+    throw new Error('Pago no encontrado');
+  }
+
+  res.json({ message: 'Pago eliminado correctamente' });
+});
+
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
 export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;

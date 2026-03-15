@@ -10,7 +10,8 @@ import {
     updateProjectStatus,
     updateProgress,
     addComment,
-    updateProject
+    updateProject,
+    createClientFromProject
 } from '../controllers/projectController.js';
 import { protect, admin, writer } from '../middleware/authMiddleware.js';
 
@@ -32,6 +33,9 @@ router.route('/client')
 router.route('/:id')
     .get(protect, getProjectById)
     .put(protect, admin, updateProject);
+
+router.route('/:id/create-client')
+    .post(protect, admin, createClientFromProject);
 
 router.route('/:id/assign')
     .put(protect, admin, assignWriter);

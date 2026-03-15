@@ -96,14 +96,29 @@ const register = asyncHandler(async (req, res) => {
   }
 });
 
-// 🔑 Login
+// 🔑 Login (acepta email o teléfono)
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email }).select('+password');
+  // Buscar por email o por teléfono
+  let user = await User.findOne({ email: email?.toLowerCase() }).select('+password');
+
+  // Si no se encontró por email, intentar buscar por teléfono
+  if (!user && email) {
+    const phoneClean = email.replace(/\D/g, '');
+    if (phoneClean.length >= 10) {
+      const phoneVariants = [
+        phoneClean,
+        phoneClean.startsWith('52') ? phoneClean : `52${phoneClean}`,
+        phoneClean.startsWith('52') ? phoneClean.slice(2) : phoneClean,
+      ];
+      user = await User.findOne({ phone: { $in: phoneVariants.filter(p => p.length > 0) } }).select('+password');
+    }
+  }
+
   if (!user || !(await user.matchPassword(password))) {
     res.status(401);
-    throw new Error('Email o contraseña incorrectos');
+    throw new Error('Email/teléfono o contraseña incorrectos');
   }
 
   const token = generateToken(user);

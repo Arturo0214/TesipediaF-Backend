@@ -28,6 +28,30 @@ const handleQuotePaid = async ({
 }) => {
   console.log(`[handleQuotePaid] Procesando cotización ${quoteType} ${quoteId} como pagada...`);
 
+  // 0. Protección contra duplicados — verificar si ya existe un proyecto para esta cotización
+  if (quoteType === 'regular' && quoteId) {
+    const existingProject = await Project.findOne({ quote: quoteId });
+    if (existingProject) {
+      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para la cotización ${quoteId}. Saltando creación.`);
+      return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
+    }
+  } else {
+    // Para generatedquotes (quote = null), buscar por clientEmail/clientName + titulo similar
+    const existingProject = await Project.findOne({
+      $or: [
+        { clientEmail: clientEmail || '' },
+        { clientEmail: null },
+        { clientName: clientName }
+      ],
+      taskTitle: title?.trim() || 'Proyecto Tesipedia',
+      quote: null,
+    });
+    if (existingProject) {
+      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para el cliente ${clientEmail || clientName} con título "${title}". Saltando creación.`);
+      return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
+    }
+  }
+
   // 1. Auto-crear usuario cliente si hay email
   let clientUser = null;
   let clientCreated = false;
@@ -386,6 +410,19 @@ export const createQuote = asyncHandler(async (req, res) => {
     lifecycle: 'lead',
     source: 'endpoint',
   }).catch(err => console.error('[createQuote] HubSpot sync error:', err.message));
+
+  // 📲 Notificar al equipo por WhatsApp (fire-and-forget)
+  notifyQuoteSent({
+    clientName: name,
+    clientEmail: email,
+    clientPhone: phone,
+    tipoServicio: taskType,
+    tituloTrabajo: taskTitle,
+    precioBase: priceDetails.precioTotal,
+    esquemaPago: 'Pendiente',
+  }).catch(err =>
+    console.error('[createQuote] WhatsApp notification error:', err.message)
+  );
 
   // Enviar respuesta con todos los detalles necesarios
   res.status(201).json({
@@ -1097,6 +1134,11 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
 
   const previousStatus = quote.status;
   const newStatus = req.body.status;
+
+  // Update editable fields if provided
+  if (req.body.clientName !== undefined) quote.clientName = req.body.clientName;
+  if (req.body.clientEmail !== undefined) quote.clientEmail = req.body.clientEmail;
+  if (req.body.clientPhone !== undefined) quote.clientPhone = req.body.clientPhone;
 
   // Update status if provided
   if (newStatus) {

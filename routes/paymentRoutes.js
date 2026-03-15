@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import { protect, adminOnly, superAdminOnly } from '../middleware/authMiddleware.js';
 import {
     createStripeSession,
     getPayments,
@@ -18,7 +18,8 @@ import {
     checkPaymentStatus,
     checkGuestPaymentStatus,
     getPaymentsDashboard,
-    createManualPayment
+    createManualPayment,
+    deleteDashboardPayment
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -48,6 +49,7 @@ router.post('/manual', createManualPayment);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);
 router.delete('/:id', deletePayment);
+router.delete('/dashboard/:id', superAdminOnly, deleteDashboardPayment);
 router.post('/:id/refund', refundPayment);
 router.get('/:id/refund-status', getRefundStatus);
 

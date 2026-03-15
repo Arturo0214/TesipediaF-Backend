@@ -58,7 +58,8 @@ export const getAllProjects = asyncHandler(async (req, res) => {
 export const getWriterProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find({ writer: req.user._id })
         .populate('quote')
-        .populate('client', 'name email');
+        .populate('client', 'name email')
+        .populate('payment');
     res.json(projects);
 });
 
@@ -66,7 +67,8 @@ export const getWriterProjects = asyncHandler(async (req, res) => {
 export const getClientProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find({ client: req.user._id })
         .populate('writer', 'name')
-        .populate('quote');
+        .populate('quote')
+        .populate('payment');
     res.json(projects);
 });
 
@@ -327,6 +329,60 @@ export const createManualProject = asyncHandler(async (req, res) => {
         project,
         payment: linkedPayment,
         clientCreated: clientUser ? true : false,
+    });
+});
+
+// Create client user from project data (admin only)
+export const createClientFromProject = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id)
+        .populate('client', 'name email');
+
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    // Si ya tiene un cliente vinculado, retornar info
+    if (project.client) {
+        return res.json({
+            alreadyExists: true,
+            user: project.client,
+            message: `El cliente ya tiene cuenta: ${project.client.email}`,
+        });
+    }
+
+    if (!project.clientEmail && !project.clientPhone) {
+        res.status(400);
+        throw new Error('El proyecto no tiene email ni teléfono de cliente para crear la cuenta');
+    }
+
+    const { user, isNew, password, loginIdentifier } = await autoCreateClientUser({
+        clientName: project.clientName || 'Cliente',
+        clientEmail: project.clientEmail || '',
+        clientPhone: project.clientPhone || '',
+        projectTitle: project.taskTitle,
+    });
+
+    if (!user) {
+        res.status(500);
+        throw new Error('No se pudo crear el usuario cliente');
+    }
+
+    // Vincular el usuario al proyecto
+    project.client = user._id;
+    await project.save();
+
+    // Re-popular para devolver datos completos
+    await project.populate('client', 'name email phone');
+
+    res.json({
+        alreadyExists: !isNew,
+        user: { _id: user._id, name: user.name, email: user.email, phone: user.phone },
+        password: isNew ? password : null,
+        loginIdentifier: loginIdentifier || user.email,
+        message: isNew
+            ? `Usuario creado — Login: ${loginIdentifier || user.email} — Credenciales enviadas por WhatsApp`
+            : `El usuario ya existía: ${user.email} — Se vinculó al proyecto`,
     });
 });
 
