@@ -12,8 +12,201 @@ import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
 import { notifyQuoteSent } from '../utils/sendWhatsAppNotification.js';
+import Project from '../models/Project.js';
+import Payment from '../models/Payment.js';
+import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
+
+// =============================================
+// 🚀 Helper: Auto-crear proyecto + pago + usuario cuando cotización se marca como "paid"
+// =============================================
+const handleQuotePaid = async ({
+  clientName, clientEmail, clientPhone, title, amount, method, esquemaPago,
+  taskType, studyArea, career, educationLevel, pages, dueDate, requirements,
+  quoteId, quoteType,
+}) => {
+  console.log(`[handleQuotePaid] Procesando cotización ${quoteType} ${quoteId} como pagada...`);
+
+  // 1. Auto-crear usuario cliente si hay email
+  let clientUser = null;
+  let clientCreated = false;
+  if (clientEmail) {
+    const result = await autoCreateClientUser({
+      clientName: clientName || 'Cliente',
+      clientEmail,
+      clientPhone,
+      projectTitle: title,
+    });
+    clientUser = result.user;
+    clientCreated = result.isNew;
+  }
+
+  // 2. Normalizar esquema de pago
+  const normalizeEsquemaKey = (raw) => {
+    if (!raw) return 'unico';
+    const lower = raw.toLowerCase();
+    if (lower.includes('50')) return '50-50';
+    if (lower.includes('33')) return '33-33-34';
+    if (lower.includes('quincena')) return '6-quincenas';
+    if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    return 'unico';
+  };
+  const esquemaKey = normalizeEsquemaKey(esquemaPago);
+
+  // 3. Generar calendario de pagos
+  const totalAmount = parseFloat(amount) || 0;
+  const startDate = new Date();
+  const generateSchedule = (total, esquema, start) => {
+    const installments = [];
+    switch (esquema) {
+      case '50-50':
+        installments.push(
+          { number: 1, amount: Math.round(total * 0.5), dueDate: new Date(start), label: '1er pago (50%)', status: 'paid' },
+          { number: 2, amount: Math.round(total * 0.5), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (50%)', status: 'pending' }
+        );
+        break;
+      case '33-33-34':
+        installments.push(
+          { number: 1, amount: Math.round(total * 0.33), dueDate: new Date(start), label: '1er pago (33%)', status: 'paid' },
+          { number: 2, amount: Math.round(total * 0.33), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (33%)', status: 'pending' },
+          { number: 3, amount: Math.round(total * 0.34), dueDate: new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000), label: '3er pago (34%)', status: 'pending' }
+        );
+        break;
+      case '6-quincenas':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(total / 6),
+            dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+            label: `Quincena ${i + 1}`,
+            status: i === 0 ? 'paid' : 'pending',
+          });
+        }
+        const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumQ !== total) installments[5].amount += (total - sumQ);
+        break;
+      case '6-msi':
+        for (let i = 0; i < 6; i++) {
+          installments.push({
+            number: i + 1,
+            amount: Math.round(total / 6),
+            dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+            label: `Mes ${i + 1} (MSI)`,
+            status: i === 0 ? 'paid' : 'pending',
+          });
+        }
+        const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
+        if (sumM !== total) installments[5].amount += (total - sumM);
+        break;
+      default: // unico
+        installments.push(
+          { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
+        );
+    }
+    return installments;
+  };
+  const schedule = generateSchedule(totalAmount, esquemaKey, startDate);
+
+  // 4. Normalizar método de pago
+  const normalizeMethod = (raw) => {
+    if (!raw) return 'transferencia';
+    const lower = raw.toLowerCase();
+    if (lower.includes('tarjeta') || lower.includes('nu') || lower.includes('bbva')) return 'transferencia';
+    if (lower.includes('efectivo')) return 'efectivo';
+    if (lower.includes('stripe')) return 'stripe';
+    if (lower.includes('paypal')) return 'paypal';
+    return 'transferencia';
+  };
+
+  // 5. Crear el pago
+  const payment = await Payment.create({
+    amount: totalAmount,
+    method: normalizeMethod(method),
+    status: esquemaKey === 'unico' ? 'completed' : 'pendiente',
+    transactionId: `AUTO-PAID-${Date.now()}`,
+    currency: 'MXN',
+    isManual: true,
+    clientName: clientName || '',
+    clientEmail: clientEmail || '',
+    clientPhone: clientPhone || '',
+    title: title || '',
+    esquemaPago: esquemaKey,
+    paymentDate: startDate,
+    schedule,
+    notes: `Auto-generado al marcar cotización ${quoteType} como pagada`,
+  });
+
+  // 6. Parsear fecha de entrega
+  let parsedDueDate = null;
+  if (dueDate) {
+    if (dueDate instanceof Date) {
+      parsedDueDate = dueDate;
+    } else {
+      const d = new Date(dueDate);
+      if (!isNaN(d.getTime())) {
+        parsedDueDate = d;
+      } else {
+        const meses = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
+        const match = dueDate.match(/(\d{1,2})\s+de\s+(\w+)(?:\s+de\s+(\d{4}))?/i);
+        if (match) {
+          const day = parseInt(match[1]);
+          const month = meses[match[2].toLowerCase()];
+          const year = match[3] ? parseInt(match[3]) : new Date().getFullYear();
+          if (month !== undefined) parsedDueDate = new Date(year, month, day);
+        }
+      }
+    }
+  }
+
+  // 7. Crear proyecto vinculado
+  // FIX: Asegurar que TODOS los campos required tengan valores no vacíos
+  // El modelo Project requiere: taskType, studyArea, career, educationLevel, taskTitle, requirements.text, pages, dueDate
+  let linkedProject = null;
+  let projectError = null;
+  try {
+    const quoteRef = quoteType === 'regular' ? quoteId : null;
+
+    const projectData = {
+      quote: quoteRef,
+      taskType: taskType?.trim() || 'Trabajo Académico',
+      studyArea: studyArea?.trim() || 'General',
+      career: career?.trim() || 'General',
+      educationLevel: educationLevel?.trim() || 'licenciatura',
+      taskTitle: title?.trim() || 'Proyecto Tesipedia',
+      requirements: { text: requirements?.trim() || 'Proyecto creado automáticamente al marcar cotización como pagada' },
+      pages: parseInt(pages) || 1,
+      dueDate: parsedDueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      priority: 'medium',
+      status: 'pending',
+      clientName: clientName || '',
+      clientEmail: clientEmail || '',
+      clientPhone: clientPhone || '',
+      client: clientUser?._id || null,
+      payment: payment._id,
+    };
+
+    console.log('[handleQuotePaid] Creando proyecto con datos:', JSON.stringify(projectData, null, 2));
+    linkedProject = await Project.create(projectData);
+
+    // Vincular proyecto al pago
+    payment.project = linkedProject._id;
+    await payment.save();
+
+    console.log(`[handleQuotePaid] Proyecto creado: ${linkedProject._id}, Pago: ${payment._id}`);
+  } catch (err) {
+    if (err.errors) {
+      const details = Object.entries(err.errors).map(([f, e]) => `${f}: ${e.message}`).join(', ');
+      console.error('[handleQuotePaid] Error de validación creando proyecto:', details);
+      projectError = details;
+    } else {
+      console.error('[handleQuotePaid] Error creando proyecto:', err.message);
+      projectError = err.message;
+    }
+  }
+
+  return { project: linkedProject, payment, clientCreated, clientUser, projectError };
+};
 
 // 📝 Crear cotización pública
 export const createQuote = asyncHandler(async (req, res) => {
@@ -275,7 +468,8 @@ export const updateQuote = asyncHandler(async (req, res) => {
     educationLevel: quote.educationLevel,
     pages: quote.pages,
     dueDate: quote.dueDate,
-    user: quote.user // Preservar el usuario
+    user: quote.user, // Preservar el usuario
+    status: quote.status // Para detectar cambio a paid
   };
 
   // Actualizar campos
@@ -331,7 +525,42 @@ export const updateQuote = asyncHandler(async (req, res) => {
     userId: updatedQuote.user
   });
 
-  res.json(updatedQuote);
+  // 🚀 Si cambió a "paid", auto-crear usuario + proyecto + pago
+  let autoCreated = null;
+  if (req.body.status === 'paid' && previousValues.status !== 'paid') {
+    try {
+      autoCreated = await handleQuotePaid({
+        clientName: quote.name || '',
+        clientEmail: quote.email || '',
+        clientPhone: quote.phone || '',
+        title: quote.taskTitle || quote.taskType || 'Proyecto Tesipedia',
+        amount: quote.priceDetails?.finalPrice || quote.estimatedPrice || 0,
+        method: 'transferencia',
+        esquemaPago: 'unico',
+        taskType: quote.taskType || 'Trabajo Académico',
+        studyArea: quote.studyArea || 'General',
+        career: quote.career || 'General',
+        educationLevel: quote.educationLevel || 'licenciatura',
+        pages: quote.pages || 1,
+        dueDate: quote.dueDate || null,
+        requirements: quote.requirements || '',
+        quoteId: quote._id,
+        quoteType: 'regular',
+      });
+      console.log('[UpdateQuote] Auto-creación completada:', {
+        project: autoCreated.project?._id,
+        payment: autoCreated.payment?._id,
+        clientCreated: autoCreated.clientCreated,
+      });
+    } catch (err) {
+      console.error('[UpdateQuote] Error en auto-creación:', err.message);
+    }
+  }
+
+  res.json({
+    ...updatedQuote.toObject(),
+    _autoCreated: autoCreated || null,
+  });
 });
 
 // ❌ Eliminar cotización (admin)
@@ -866,15 +1095,52 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
     throw new Error('Cotización no encontrada');
   }
 
+  const previousStatus = quote.status;
+  const newStatus = req.body.status;
+
   // Update status if provided
-  if (req.body.status) {
-    quote.status = req.body.status;
+  if (newStatus) {
+    quote.status = newStatus;
   }
 
-  // Can add more fields to update if needed
-
   const updatedQuote = await quote.save();
-  res.json(updatedQuote);
+
+  // 🚀 Si cambió a "paid", auto-crear usuario + proyecto + pago
+  let autoCreated = null;
+  if (newStatus === 'paid' && previousStatus !== 'paid') {
+    try {
+      autoCreated = await handleQuotePaid({
+        clientName: quote.clientName || '',
+        clientEmail: quote.clientEmail || '',
+        clientPhone: quote.clientPhone || '',
+        title: quote.tituloTrabajo || quote.tipoTrabajo || 'Proyecto Tesipedia',
+        amount: quote.precioConDescuento || quote.precioBase || 0,
+        method: quote.metodoPago || 'transferencia',
+        esquemaPago: quote.esquemaPago || 'unico',
+        taskType: quote.tipoTrabajo || 'Trabajo Académico',
+        studyArea: quote.area || 'General',
+        career: quote.carrera || 'General',
+        educationLevel: 'licenciatura',
+        pages: parseInt(quote.extensionEstimada) || 1,
+        dueDate: quote.fechaEntrega || null,
+        requirements: quote.descripcionServicio || '',
+        quoteId: quote._id,
+        quoteType: 'generated',
+      });
+      console.log('[UpdateGeneratedQuote] Auto-creación completada:', {
+        project: autoCreated.project?._id,
+        payment: autoCreated.payment?._id,
+        clientCreated: autoCreated.clientCreated,
+      });
+    } catch (err) {
+      console.error('[UpdateGeneratedQuote] Error en auto-creación:', err.message);
+    }
+  }
+
+  res.json({
+    ...updatedQuote.toObject(),
+    _autoCreated: autoCreated || null,
+  });
 });
 
 // ❌ Eliminar cotización generada (admin)

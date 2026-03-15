@@ -178,20 +178,42 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   const waResult = await waResponse.json();
 
-  // 2. Obtener historial actual del lead
-  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat&limit=1`;
+  // 2. Obtener historial actual del lead (o crear uno si no existe)
+  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id&limit=1`;
   const getResponse = await fetch(getUrl, { headers: supabaseHeaders() });
   let historial = [];
+  let leadExists = false;
   if (getResponse.ok) {
     const leadData = await getResponse.json();
-    if (leadData[0]?.historial_chat) {
-      const raw = leadData[0].historial_chat;
-      if (Array.isArray(raw)) {
-        historial = raw;
-      } else if (typeof raw === 'string' && raw.trim()) {
-        try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+    if (leadData.length > 0) {
+      leadExists = true;
+      if (leadData[0]?.historial_chat) {
+        const raw = leadData[0].historial_chat;
+        if (Array.isArray(raw)) {
+          historial = raw;
+        } else if (typeof raw === 'string' && raw.trim()) {
+          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        }
       }
     }
+  }
+
+  // Si no existe lead para este wa_id, crearlo (permite ver conversaciones con cualquier número)
+  if (!leadExists) {
+    const createUrl = `${SUPABASE_URL}/rest/v1/leads`;
+    await fetch(createUrl, {
+      method: 'POST',
+      headers: { ...supabaseHeaders(), 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        wa_id,
+        nombre: `+${wa_id}`,
+        estado_sofia: 'modo_humano',
+        modo_humano: true,
+        historial_chat: '[]',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    });
   }
 
   // 3. Agregar mensaje al historial
