@@ -810,10 +810,30 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     });
   }
 
-  // From Manual Payments
+  // Build a lookup of sofia entries to detect duplicates from auto-created manual payments
+  const sofiaKeys = new Set();
+  for (const q of paidQuotes) {
+    const amt = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
+    const name = (q.clientName || '').trim().toLowerCase();
+    const titulo = (q.tituloTrabajo || q.tipoTrabajo || '').trim().toLowerCase();
+    sofiaKeys.add(`${name}|${titulo}|${amt}`);
+  }
+
+  // From Manual Payments — skip auto-generated entries that duplicate a Sofia quote
   for (const m of manualPayments) {
     const amount = m.amount || 0;
     const esquema = m.esquemaPago || 'unico';
+    const notes = m.notes || '';
+
+    // If this payment was auto-generated from a GeneratedQuote that already appears as 'sofia', skip it
+    if (notes.includes('Auto-generado al marcar cotización generated')) {
+      const mName = (m.clientName || '').trim().toLowerCase();
+      const mTitle = (m.title || '').trim().toLowerCase();
+      if (sofiaKeys.has(`${mName}|${mTitle}|${amount}`)) {
+        continue; // skip duplicate
+      }
+    }
+
     unified.push({
       _id: m._id,
       source: 'manual',
@@ -830,7 +850,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       commission: Math.round(amount * 0.15),
       date: m.paymentDate || m.createdAt,
       dueDate: null,
-      notes: m.notes || '',
+      notes,
     });
   }
 
