@@ -35,31 +35,38 @@ const handleQuotePaid = async ({
       console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para la cotización ${quoteId}. Saltando creación.`);
       return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
     }
-  } else {
-    // Para generatedquotes (quote = null), buscar por clientEmail/clientName + titulo similar
-    const existingProject = await Project.findOne({
-      $or: [
-        { clientEmail: clientEmail || '' },
-        { clientEmail: null },
-        { clientName: clientName }
-      ],
-      taskTitle: title?.trim() || 'Proyecto Tesipedia',
-      quote: null,
-    });
+  } else if (quoteType === 'generated' && quoteId) {
+    // Para generatedquotes, buscar por quoteId exacto en el campo generatedQuoteId
+    // o por combinación estricta de email + título
+    const searchQuery = { quote: null };
+    const titleToSearch = title?.trim() || 'Proyecto Tesipedia';
+
+    if (clientEmail) {
+      searchQuery.clientEmail = clientEmail;
+      searchQuery.taskTitle = titleToSearch;
+    } else if (clientPhone) {
+      searchQuery.clientPhone = clientPhone;
+      searchQuery.taskTitle = titleToSearch;
+    } else {
+      // Sin email ni phone no podemos verificar duplicados fiablemente → permitir creación
+      searchQuery._id = null; // query que no matchea nada
+    }
+
+    const existingProject = await Project.findOne(searchQuery);
     if (existingProject) {
-      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para el cliente ${clientEmail || clientName} con título "${title}". Saltando creación.`);
+      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para el cliente ${clientEmail || clientPhone || clientName} con título "${title}". Saltando creación.`);
       return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
     }
   }
 
-  // 1. Auto-crear usuario cliente si hay email
+  // 1. Auto-crear usuario cliente si hay email o teléfono
   let clientUser = null;
   let clientCreated = false;
-  if (clientEmail) {
+  if (clientEmail || clientPhone) {
     const result = await autoCreateClientUser({
       clientName: clientName || 'Cliente',
-      clientEmail,
-      clientPhone,
+      clientEmail: clientEmail || '',
+      clientPhone: clientPhone || '',
       projectTitle: title,
     });
     clientUser = result.user;
