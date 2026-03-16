@@ -11,7 +11,7 @@ import stripe from '../config/stripe.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
-import { notifyQuoteSent } from '../utils/sendWhatsAppNotification.js';
+import { notifyQuoteSent, notifyNewClient } from '../utils/sendWhatsAppNotification.js';
 import Project from '../models/Project.js';
 import Payment from '../models/Payment.js';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
@@ -1104,6 +1104,16 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
     // 📲 Notificar al equipo por WhatsApp (fire-and-forget)
     notifyQuoteSent(quoteData).catch(err =>
       console.error('[saveGeneratedQuote] WhatsApp notification error:', err.message)
+    );
+
+    // 🆕 Notificar a seguimiento que llegó nuevo cliente
+    notifyNewClient({
+      clientName: quoteData.clientName,
+      clientPhone: quoteData.clientPhone,
+      tipoServicio: quoteData.tipoServicio,
+      source: 'Cotizador Sofia',
+    }).catch(err =>
+      console.error('[saveGeneratedQuote] New client notification error:', err.message)
     );
 
     res.status(201).json({

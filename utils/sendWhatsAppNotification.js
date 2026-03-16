@@ -103,4 +103,45 @@ export const notifyQuoteSent = async (quoteData) => {
   return { sent, total: NOTIFICATION_NUMBERS.length };
 };
 
-export default { sendWhatsAppText, notifyQuoteSent };
+/**
+ * Notificar que llegó un nuevo cliente por WhatsApp
+ * Se envía a los números de seguimiento (no a Sofia)
+ * @param {object} clientData - Datos básicos del cliente
+ */
+const NEW_CLIENT_NOTIFY_NUMBERS = [
+  '525583352096',
+  '525512478395',
+];
+
+export const notifyNewClient = async (clientData) => {
+  const {
+    clientName = 'Cliente',
+    clientPhone = '',
+    tipoServicio = '',
+    source = 'WhatsApp',
+  } = clientData;
+
+  const message = [
+    `🆕 *Nuevo Cliente — ${source}*`,
+    ``,
+    `👤 *Nombre:* ${clientName}`,
+    clientPhone ? `📱 *Teléfono:* ${clientPhone}` : null,
+    tipoServicio ? `📝 *Servicio:* ${tipoServicio}` : null,
+    ``,
+    `📞 Sofia ya recabó sus datos.`,
+    `Contactar al 5561757123 para seguimiento.`,
+    ``,
+    `⏰ ${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`,
+  ].filter(Boolean).join('\n');
+
+  const results = await Promise.allSettled(
+    NEW_CLIENT_NOTIFY_NUMBERS.map(num => sendWhatsAppText(num, message))
+  );
+
+  const sent = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+  console.log(`📲 Notificación de nuevo cliente enviada a ${sent}/${NEW_CLIENT_NOTIFY_NUMBERS.length} números`);
+
+  return { sent, total: NEW_CLIENT_NOTIFY_NUMBERS.length };
+};
+
+export default { sendWhatsAppText, notifyQuoteSent, notifyNewClient };
