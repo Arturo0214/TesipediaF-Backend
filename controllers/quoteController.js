@@ -74,13 +74,16 @@ const handleQuotePaid = async ({
   }
 
   // 2. Normalizar esquema de pago
+  // IMPORTANTE: Buscar porcentajes (50%, 33%) y NO solo "50" o "33"
+  // porque los montos como "$3,085.50" contienen "50" y causaban falsos positivos
   const normalizeEsquemaKey = (raw) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
-    if (lower.includes('50')) return '50-50';
-    if (lower.includes('33')) return '33-33-34';
+    // Priorizar esquemas más específicos primero
+    if (lower.includes('33%') || lower.includes('33-33-34') || lower.includes('33 33 34')) return '33-33-34';
     if (lower.includes('quincena')) return '6-quincenas';
-    if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    if (lower.includes('msi') || lower.includes('meses sin intereses') || lower.includes('6 pagos mensuales')) return '6-msi';
+    if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50 50')) return '50-50';
     return 'unico';
   };
   const esquemaKey = normalizeEsquemaKey(esquemaPago);
@@ -88,47 +91,92 @@ const handleQuotePaid = async ({
   // 3. Generar calendario de pagos
   const totalAmount = parseFloat(amount) || 0;
   const startDate = new Date();
-  const generateSchedule = (total, esquema, start) => {
+
+  // Helper: parsear montos ($3,085.50) del texto de esquemaPago
+  const parseAmountsFromText = (text) => {
+    if (!text) return [];
+    const matches = [...text.matchAll(/\$\s*([\d,]+(?:\.\d{1,2})?)/g)];
+    return matches.map(m => parseFloat(m[1].replace(/,/g, '')));
+  };
+
+  // Helper: parsear fechas españolas "15 de marzo de 2026" del texto de esquemaPago
+  const parseDatesFromText = (text) => {
+    if (!text) return [];
+    const meses = {
+      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
+      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11,
+    };
+    const dateRegex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})/g;
+    const dates = [];
+    let match;
+    while ((match = dateRegex.exec(text)) !== null) {
+      const day = parseInt(match[1]);
+      const month = meses[match[2].toLowerCase()];
+      const year = parseInt(match[3]);
+      if (month !== undefined && !isNaN(day) && !isNaN(year)) {
+        dates.push(new Date(year, month, day));
+      }
+    }
+    return dates;
+  };
+
+  const generateSchedule = (total, esquema, start, rawEsquemaText) => {
     const installments = [];
+    // Intentar parsear montos y fechas del texto original de la cotización
+    const parsedAmounts = parseAmountsFromText(rawEsquemaText);
+    const parsedDates = parseDatesFromText(rawEsquemaText);
+
     switch (esquema) {
-      case '50-50':
+      case '50-50': {
+        const amt1 = parsedAmounts[0] || Math.round(total * 0.5 * 100) / 100;
+        const amt2 = parsedAmounts[1] || Math.round((total - amt1) * 100) / 100;
+        const date1 = parsedDates[0] || new Date(start);
+        const date2 = parsedDates[1] || new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000);
         installments.push(
-          { number: 1, amount: Math.round(total * 0.5), dueDate: new Date(start), label: '1er pago (50%)', status: 'paid' },
-          { number: 2, amount: Math.round(total * 0.5), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (50%)', status: 'pending' }
+          { number: 1, amount: Math.round(amt1), dueDate: date1, label: '1er pago (50%)', status: 'paid' },
+          { number: 2, amount: Math.round(amt2), dueDate: date2, label: '2do pago (50%)', status: 'pending' }
         );
         break;
-      case '33-33-34':
+      }
+      case '33-33-34': {
+        const amt1 = parsedAmounts[0] || Math.round(total * 0.33 * 100) / 100;
+        const amt2 = parsedAmounts[1] || Math.round(total * 0.33 * 100) / 100;
+        const amt3 = parsedAmounts[2] || Math.round((total - amt1 - amt2) * 100) / 100;
+        const date1 = parsedDates[0] || new Date(start);
+        const date2 = parsedDates[1] || new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000);
+        const date3 = parsedDates[2] || new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
         installments.push(
-          { number: 1, amount: Math.round(total * 0.33), dueDate: new Date(start), label: '1er pago (33%)', status: 'paid' },
-          { number: 2, amount: Math.round(total * 0.33), dueDate: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000), label: '2do pago (33%)', status: 'pending' },
-          { number: 3, amount: Math.round(total * 0.34), dueDate: new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000), label: '3er pago (34%)', status: 'pending' }
+          { number: 1, amount: Math.round(amt1), dueDate: date1, label: '1er pago (33%)', status: 'paid' },
+          { number: 2, amount: Math.round(amt2), dueDate: date2, label: '2do pago (33%)', status: 'pending' },
+          { number: 3, amount: Math.round(amt3), dueDate: date3, label: '3er pago (34%)', status: 'pending' }
         );
         break;
+      }
       case '6-quincenas':
         for (let i = 0; i < 6; i++) {
           installments.push({
             number: i + 1,
-            amount: Math.round(total / 6),
-            dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+            amount: parsedAmounts[i] ? Math.round(parsedAmounts[i]) : Math.round(total / 6),
+            dueDate: parsedDates[i] || new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
             label: `Quincena ${i + 1}`,
             status: i === 0 ? 'paid' : 'pending',
           });
         }
         const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
-        if (sumQ !== total) installments[5].amount += (total - sumQ);
+        if (sumQ !== total && !parsedAmounts.length) installments[5].amount += (total - sumQ);
         break;
       case '6-msi':
         for (let i = 0; i < 6; i++) {
           installments.push({
             number: i + 1,
-            amount: Math.round(total / 6),
-            dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+            amount: parsedAmounts[i] ? Math.round(parsedAmounts[i]) : Math.round(total / 6),
+            dueDate: parsedDates[i] || new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
             label: `Mes ${i + 1} (MSI)`,
             status: i === 0 ? 'paid' : 'pending',
           });
         }
         const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
-        if (sumM !== total) installments[5].amount += (total - sumM);
+        if (sumM !== total && !parsedAmounts.length) installments[5].amount += (total - sumM);
         break;
       default: // unico
         installments.push(
@@ -137,7 +185,7 @@ const handleQuotePaid = async ({
     }
     return installments;
   };
-  const schedule = generateSchedule(totalAmount, esquemaKey, startDate);
+  const schedule = generateSchedule(totalAmount, esquemaKey, startDate, esquemaPago);
 
   // 4. Normalizar método de pago
   const normalizeMethod = (raw) => {
