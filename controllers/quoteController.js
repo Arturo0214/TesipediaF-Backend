@@ -578,15 +578,22 @@ export const updateQuote = asyncHandler(async (req, res) => {
   quote.phone = req.body.phone || quote.phone;
   if (req.body.status) quote.status = req.body.status;
 
+  // Manual price override from admin
+  if (req.body.estimatedPrice !== undefined) {
+    quote.estimatedPrice = Number(req.body.estimatedPrice);
+  }
+
   // Asegurarse de que el usuario se mantenga
   quote.user = previousValues.user;
 
-  // Recalcular el precio si alguno de los campos relevantes cambió
+  // Recalcular el precio SOLO si campos relevantes cambiaron Y no se envió precio manual
   if (
-    quote.studyArea !== previousValues.studyArea ||
-    quote.educationLevel !== previousValues.educationLevel ||
-    quote.pages !== previousValues.pages ||
-    quote.dueDate !== previousValues.dueDate
+    req.body.estimatedPrice === undefined && (
+      quote.studyArea !== previousValues.studyArea ||
+      quote.educationLevel !== previousValues.educationLevel ||
+      quote.pages !== previousValues.pages ||
+      quote.dueDate !== previousValues.dueDate
+    )
   ) {
     const priceCalculation = calculatePrice(
       quote.studyArea,
@@ -1204,6 +1211,15 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   if (req.body.clientName !== undefined) quote.clientName = req.body.clientName;
   if (req.body.clientEmail !== undefined) quote.clientEmail = req.body.clientEmail;
   if (req.body.clientPhone !== undefined) quote.clientPhone = req.body.clientPhone;
+
+  // Update price fields if provided (admin manual price editing)
+  if (req.body.precioBase !== undefined) quote.precioBase = Number(req.body.precioBase);
+  if (req.body.precioConDescuento !== undefined) quote.precioConDescuento = Number(req.body.precioConDescuento);
+  if (req.body.descuentoMonto !== undefined) quote.descuentoMonto = Number(req.body.descuentoMonto);
+  if (req.body.descuentoEfectivo !== undefined) quote.descuentoEfectivo = Number(req.body.descuentoEfectivo);
+  if (req.body.recargoMonto !== undefined) quote.recargoMonto = Number(req.body.recargoMonto);
+  if (req.body.recargoPorcentaje !== undefined) quote.recargoPorcentaje = Number(req.body.recargoPorcentaje);
+  if (req.body.precioConRecargo !== undefined) quote.precioConRecargo = Number(req.body.precioConRecargo);
 
   // Update status if provided
   if (newStatus) {
