@@ -11,6 +11,26 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const WA_PHONE_ID = process.env.WA_PHONE_ID || '978427788691495';
 const WA_TOKEN = process.env.WA_TOKEN || '';
 
+// Plantilla aprobada para enviar fuera de la ventana de 24h
+const WA_TEMPLATE_NAME = 'seguimiento_tesipedia';
+const WA_TEMPLATE_LANG = 'es_MX';
+const HOURS_24 = 24 * 60 * 60 * 1000;
+
+/**
+ * Helper: determinar si la ventana de 24h expiró
+ * Busca el último mensaje del USUARIO (role === 'user') en el historial
+ */
+function isWindowExpired(historial) {
+  if (!Array.isArray(historial) || historial.length === 0) return true;
+  // Buscar el último mensaje del usuario (no del bot/admin)
+  const lastUserMsg = [...historial]
+    .reverse()
+    .find(m => m.role === 'user');
+  if (!lastUserMsg || !lastUserMsg.timestamp) return true;
+  const lastTime = new Date(lastUserMsg.timestamp).getTime();
+  return (Date.now() - lastTime) > HOURS_24;
+}
+
 // Helper: headers para Supabase
 const supabaseHeaders = () => ({
   'apikey': SUPABASE_SERVICE_KEY,
@@ -77,10 +97,6 @@ export const toggleModoHumano = asyncHandler(async (req, res) => {
 });
 
 /**
- * POST /api/v1/whatsapp/send
- * Enviar mensaje por WhatsApp y guardar en historial
- */
-/**
  * GET /api/v1/whatsapp/leads-status
  * Devuelve un mapa de leads con estado_sofia para cruzar con HubSpot
  */
@@ -122,6 +138,37 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
     throw new Error(`Error actualizando estado: ${err}`);
   }
   res.json({ success: true, estado_sofia });
+});
+
+/**
+ * GET /api/v1/whatsapp/leads/:waId/window-status
+ * Verificar si la ventana de 24h está activa o expirada
+ */
+export const getWindowStatus = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=historial_chat,nombre&limit=1`;
+  const response = await fetch(url, { headers: supabaseHeaders() });
+  if (!response.ok) {
+    res.status(response.status);
+    throw new Error('Error al obtener lead');
+  }
+  const data = await response.json();
+  if (!data.length) {
+    return res.json({ expired: true, lastUserMessage: null });
+  }
+  let historial = [];
+  const raw = data[0]?.historial_chat;
+  if (Array.isArray(raw)) {
+    historial = raw;
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+  }
+  const expired = isWindowExpired(historial);
+  const lastUserMsg = [...historial].reverse().find(m => m.role === 'user');
+  res.json({
+    expired,
+    lastUserMessage: lastUserMsg?.timestamp || null,
+  });
 });
 
 /**
@@ -170,12 +217,77 @@ export const sendMessage = asyncHandler(async (req, res) => {
     mediaType = isDoc ? 'document' : 'image';
   }
 
-  // 1. Enviar mensaje por WhatsApp Business API
+  // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
+  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre&limit=1`;
+  const getResponsePre = await fetch(getUrlPre, { headers: supabaseHeaders() });
+  let historialPre = [];
+  let leadExistsPre = false;
+  let leadNombre = '';
+  if (getResponsePre.ok) {
+    const leadDataPre = await getResponsePre.json();
+    if (leadDataPre.length > 0) {
+      leadExistsPre = true;
+      leadNombre = leadDataPre[0]?.nombre || '';
+      if (leadDataPre[0]?.historial_chat) {
+        const raw = leadDataPre[0].historial_chat;
+        if (Array.isArray(raw)) {
+          historialPre = raw;
+        } else if (typeof raw === 'string' && raw.trim()) {
+          try { historialPre = JSON.parse(raw.replace(/^=/, '')); } catch { historialPre = []; }
+        }
+      }
+    }
+  }
+
+  const windowExpired = isWindowExpired(historialPre);
+  let templateSent = false;
+
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
-  
+  const cleanNumber = wa_id.replace(/\D/g, '');
+
+  // Si la ventana de 24h expiró, enviar primero la plantilla de seguimiento
+  if (windowExpired) {
+    const firstName = (leadNombre || '').split(' ')[0] || 'cliente';
+    const templatePayload = {
+      messaging_product: 'whatsapp',
+      to: cleanNumber,
+      type: 'template',
+      template: {
+        name: WA_TEMPLATE_NAME,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          {
+            type: 'body',
+            parameters: [{ type: 'text', text: firstName }],
+          },
+        ],
+      },
+    };
+
+    const templateResponse = await fetch(waUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WA_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(templatePayload),
+    });
+
+    if (!templateResponse.ok) {
+      const templateErr = await templateResponse.text();
+      console.error('WhatsApp Template error:', templateErr);
+      // No bloqueamos — intentaremos enviar normal de todos modos
+      console.warn('Template falló, intentando enviar mensaje normal...');
+    } else {
+      templateSent = true;
+      console.log('✅ Template de seguimiento enviado (ventana 24h expirada)');
+    }
+  }
+
+  // Enviar el mensaje normal (texto/media)
   const payload = {
     messaging_product: 'whatsapp',
-    to: wa_id.replace(/\D/g, ''),
+    to: cleanNumber,
   };
 
   if (mediaUrl) {
@@ -197,34 +309,25 @@ export const sendMessage = asyncHandler(async (req, res) => {
     body: JSON.stringify(payload),
   });
 
+  let waResult;
   if (!waResponse.ok) {
     const errorData = await waResponse.text();
     console.error('WhatsApp API error:', errorData);
-    res.status(waResponse.status);
-    throw new Error(`Error al enviar WhatsApp: ${errorData}`);
-  }
-
-  const waResult = await waResponse.json();
-
-  // 2. Obtener historial actual del lead (o crear uno si no existe)
-  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id&limit=1`;
-  const getResponse = await fetch(getUrl, { headers: supabaseHeaders() });
-  let historial = [];
-  let leadExists = false;
-  if (getResponse.ok) {
-    const leadData = await getResponse.json();
-    if (leadData.length > 0) {
-      leadExists = true;
-      if (leadData[0]?.historial_chat) {
-        const raw = leadData[0].historial_chat;
-        if (Array.isArray(raw)) {
-          historial = raw;
-        } else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
-        }
-      }
+    // Si el template ya fue enviado, no fallar del todo
+    if (templateSent) {
+      console.warn('Mensaje normal falló pero template ya fue enviado');
+      waResult = { messages: [] };
+    } else {
+      res.status(waResponse.status);
+      throw new Error(`Error al enviar WhatsApp: ${errorData}`);
     }
+  } else {
+    waResult = await waResponse.json();
   }
+
+  // 2. Usar historial ya obtenido arriba (evitar doble fetch)
+  let historial = [...historialPre];
+  let leadExists = leadExistsPre;
 
   // Si no existe lead para este wa_id, crearlo (permite ver conversaciones con cualquier número)
   if (!leadExists) {
@@ -244,8 +347,19 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  // 3. Agregar mensaje al historial (con nombre del admin)
+  // 3. Si se envió template, registrarlo en historial
   const adminName = req.user?.name || 'Admin';
+  if (templateSent) {
+    const firstName = (leadNombre || '').split(' ')[0] || 'cliente';
+    historial.push({
+      role: 'assistant',
+      content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico. Si sigues interesado o tienes alguna duda, respondenos a este mensaje y con gusto te ayudamos.`,
+      timestamp: new Date().toISOString(),
+      isTemplate: true,
+    });
+  }
+
+  // 4. Agregar mensaje del admin al historial
   const newMsg = {
     role: 'assistant',
     content: mensaje ? `[HUMANO:${adminName}] ${mensaje}` : `[HUMANO:${adminName}] (Archivo)`,
@@ -260,7 +374,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   historial.push(newMsg);
 
-  // 4. Guardar historial actualizado en Supabase + quién atendió
+  // 5. Guardar historial actualizado en Supabase + quién atendió
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
   await fetch(patchUrl, {
     method: 'PATCH',
@@ -275,5 +389,107 @@ export const sendMessage = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message_id: waResult.messages?.[0]?.id || null,
+    templateSent,
+    windowExpired,
+  });
+});
+
+/**
+ * POST /api/v1/whatsapp/send-template
+ * Enviar SOLO la plantilla de seguimiento para revivir una conversación
+ * (sin mensaje de texto adicional)
+ */
+export const sendTemplate = asyncHandler(async (req, res) => {
+  const { wa_id } = req.body;
+
+  if (!wa_id) {
+    res.status(400);
+    throw new Error('wa_id es requerido');
+  }
+
+  // 1. Obtener lead para nombre y historial
+  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,nombre&limit=1`;
+  const getResponse = await fetch(getUrl, { headers: supabaseHeaders() });
+  let historial = [];
+  let leadNombre = '';
+
+  if (getResponse.ok) {
+    const leadData = await getResponse.json();
+    if (leadData.length > 0) {
+      leadNombre = leadData[0]?.nombre || '';
+      const raw = leadData[0]?.historial_chat;
+      if (Array.isArray(raw)) {
+        historial = raw;
+      } else if (typeof raw === 'string' && raw.trim()) {
+        try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+      }
+    }
+  }
+
+  // 2. Enviar la plantilla
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  const cleanNumber = wa_id.replace(/\D/g, '');
+  const firstName = (leadNombre || '').split(' ')[0] || 'cliente';
+
+  const templatePayload = {
+    messaging_product: 'whatsapp',
+    to: cleanNumber,
+    type: 'template',
+    template: {
+      name: WA_TEMPLATE_NAME,
+      language: { code: WA_TEMPLATE_LANG },
+      components: [
+        {
+          type: 'body',
+          parameters: [{ type: 'text', text: firstName }],
+        },
+      ],
+    },
+  };
+
+  const templateResponse = await fetch(waUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${WA_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(templatePayload),
+  });
+
+  if (!templateResponse.ok) {
+    const templateErr = await templateResponse.text();
+    console.error('WhatsApp Template error:', templateErr);
+    res.status(templateResponse.status);
+    throw new Error(`Error al enviar plantilla: ${templateErr}`);
+  }
+
+  const waResult = await templateResponse.json();
+  console.log('✅ Template de seguimiento enviado manualmente');
+
+  // 3. Registrar en historial
+  historial.push({
+    role: 'assistant',
+    content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico. Si sigues interesado o tienes alguna duda, respondenos a este mensaje y con gusto te ayudamos.`,
+    timestamp: new Date().toISOString(),
+    isTemplate: true,
+  });
+
+  // 4. Guardar historial actualizado
+  const adminName = req.user?.name || 'Admin';
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+  await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      historial_chat: JSON.stringify(historial),
+      atendido_por: adminName.toLowerCase(),
+      updated_at: new Date().toISOString(),
+    }),
+  });
+
+  res.json({
+    success: true,
+    message_id: waResult.messages?.[0]?.id || null,
+    templateSent: true,
   });
 });

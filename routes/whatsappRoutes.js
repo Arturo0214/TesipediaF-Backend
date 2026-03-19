@@ -5,9 +5,11 @@ import {
   getLeads,
   getLeadByWaId,
   getLeadsStatus,
+  getWindowStatus,
   toggleModoHumano,
   updateLeadEstado,
   sendMessage,
+  sendTemplate,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -20,6 +22,7 @@ router.use(adminOnly);
 router.get('/leads', getLeads);
 router.get('/leads-status', getLeadsStatus);
 router.get('/leads/:waId', getLeadByWaId);
+router.get('/leads/:waId/window-status', getWindowStatus);
 
 // Toggle modo humano
 router.patch('/leads/:waId/modo-humano', toggleModoHumano);
@@ -29,5 +32,8 @@ router.patch('/leads/:waId/estado', updateLeadEstado);
 
 // Enviar mensaje con soporte para archivo adjunto
 router.post('/send', upload.single('file'), sendMessage);
+
+// Enviar solo la plantilla de seguimiento (revivir conversación)
+router.post('/send-template', sendTemplate);
 
 export default router;
