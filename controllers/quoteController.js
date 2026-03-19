@@ -1368,7 +1368,9 @@ export const generateAndUploadQuotePDF = async (req, res) => {
         {
           resource_type: 'raw',
           folder: 'tesipedia/cotizaciones',
-          public_id: `cotizacion-${data.nombre ? data.nombre.replace(/\s+/g, '-').toLowerCase() : 'cliente'}-${timestamp}`,
+          public_id: data.pdfFilename
+            ? data.pdfFilename.replace(/\s+/g, '-').toLowerCase()
+            : `cotizacion-${(data.nombre || data.clientName || 'cliente').replace(/\s+/g, '-').toLowerCase()}-${timestamp}`,
           format: 'pdf',
           access_mode: 'public',
         },
