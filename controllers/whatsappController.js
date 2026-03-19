@@ -216,10 +216,11 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  // 3. Agregar mensaje al historial
+  // 3. Agregar mensaje al historial (con nombre del admin)
+  const adminName = req.user?.name || 'Admin';
   const newMsg = {
     role: 'assistant',
-    content: mensaje ? `[HUMANO] ${mensaje}` : '[HUMANO] (Archivo)',
+    content: mensaje ? `[HUMANO:${adminName}] ${mensaje}` : `[HUMANO:${adminName}] (Archivo)`,
     timestamp: new Date().toISOString(),
   };
 
@@ -231,13 +232,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   historial.push(newMsg);
 
-  // 4. Guardar historial actualizado en Supabase
+  // 4. Guardar historial actualizado en Supabase + quién atendió
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
   await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
     body: JSON.stringify({
       historial_chat: JSON.stringify(historial),
+      atendido_por: adminName.toLowerCase(),
       updated_at: new Date().toISOString(),
     }),
   });
