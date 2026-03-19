@@ -18,17 +18,42 @@ const HOURS_24 = 24 * 60 * 60 * 1000;
 
 /**
  * Helper: determinar si la ventana de 24h expiró
- * Busca el último mensaje del USUARIO (role === 'user') en el historial
+ * Busca el último mensaje del USUARIO (role === 'user') en el historial.
+ * Usa updated_at del lead como fallback cuando los mensajes no tienen timestamp
+ * (ej. conversaciones que llegan por n8n/Sofía).
  */
-function isWindowExpired(historial) {
-  if (!Array.isArray(historial) || historial.length === 0) return true;
+function isWindowExpired(historial, updatedAt) {
+  if (!Array.isArray(historial) || historial.length === 0) {
+    // Sin historial: usar updated_at como fallback
+    if (updatedAt) {
+      const updTime = new Date(updatedAt).getTime();
+      return (Date.now() - updTime) > HOURS_24;
+    }
+    return true;
+  }
   // Buscar el último mensaje del usuario (no del bot/admin)
   const lastUserMsg = [...historial]
     .reverse()
     .find(m => m.role === 'user');
-  if (!lastUserMsg || !lastUserMsg.timestamp) return true;
-  const lastTime = new Date(lastUserMsg.timestamp).getTime();
-  return (Date.now() - lastTime) > HOURS_24;
+  if (!lastUserMsg) {
+    // No hay mensajes de usuario: usar updated_at como fallback
+    if (updatedAt) {
+      const updTime = new Date(updatedAt).getTime();
+      return (Date.now() - updTime) > HOURS_24;
+    }
+    return true;
+  }
+  // Si el mensaje tiene timestamp, usarlo; si no, usar updated_at como fallback
+  if (lastUserMsg.timestamp) {
+    const lastTime = new Date(lastUserMsg.timestamp).getTime();
+    return (Date.now() - lastTime) > HOURS_24;
+  }
+  // Sin timestamp en el mensaje: usar updated_at del lead
+  if (updatedAt) {
+    const updTime = new Date(updatedAt).getTime();
+    return (Date.now() - updTime) > HOURS_24;
+  }
+  return true;
 }
 
 // Helper: headers para Supabase
@@ -146,7 +171,7 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
  */
 export const getWindowStatus = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=historial_chat,nombre&limit=1`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=historial_chat,nombre,updated_at&limit=1`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(response.status);
@@ -156,6 +181,7 @@ export const getWindowStatus = asyncHandler(async (req, res) => {
   if (!data.length) {
     return res.json({ expired: true, lastUserMessage: null });
   }
+  const updatedAt = data[0]?.updated_at || null;
   let historial = [];
   const raw = data[0]?.historial_chat;
   if (Array.isArray(raw)) {
@@ -163,11 +189,11 @@ export const getWindowStatus = asyncHandler(async (req, res) => {
   } else if (typeof raw === 'string' && raw.trim()) {
     try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
   }
-  const expired = isWindowExpired(historial);
+  const expired = isWindowExpired(historial, updatedAt);
   const lastUserMsg = [...historial].reverse().find(m => m.role === 'user');
   res.json({
     expired,
-    lastUserMessage: lastUserMsg?.timestamp || null,
+    lastUserMessage: lastUserMsg?.timestamp || updatedAt || null,
   });
 });
 
@@ -218,16 +244,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
   }
 
   // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
-  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre&limit=1`;
+  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre,updated_at&limit=1`;
   const getResponsePre = await fetch(getUrlPre, { headers: supabaseHeaders() });
   let historialPre = [];
   let leadExistsPre = false;
   let leadNombre = '';
+  let leadUpdatedAt = null;
   if (getResponsePre.ok) {
     const leadDataPre = await getResponsePre.json();
     if (leadDataPre.length > 0) {
       leadExistsPre = true;
       leadNombre = leadDataPre[0]?.nombre || '';
+      leadUpdatedAt = leadDataPre[0]?.updated_at || null;
       if (leadDataPre[0]?.historial_chat) {
         const raw = leadDataPre[0].historial_chat;
         if (Array.isArray(raw)) {
@@ -239,7 +267,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     }
   }
 
-  const windowExpired = isWindowExpired(historialPre);
+  const windowExpired = isWindowExpired(historialPre, leadUpdatedAt);
   let templateSent = false;
 
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
