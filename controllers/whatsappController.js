@@ -97,6 +97,34 @@ export const getLeadsStatus = asyncHandler(async (req, res) => {
 });
 
 /**
+ * PATCH /api/v1/whatsapp/leads/:waId/estado
+ * Actualizar el estado_sofia de un lead
+ */
+export const updateLeadEstado = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { estado_sofia } = req.body;
+  if (!waId || !estado_sofia) {
+    res.status(400);
+    throw new Error('wa_id y estado_sofia son requeridos');
+  }
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const response = await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      estado_sofia,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    res.status(response.status);
+    throw new Error(`Error actualizando estado: ${err}`);
+  }
+  res.json({ success: true, estado_sofia });
+});
+
+/**
  * POST /api/v1/whatsapp/send
  * Enviar mensaje por WhatsApp y guardar en historial
  */
