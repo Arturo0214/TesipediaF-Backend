@@ -387,11 +387,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  // 4. Agregar mensaje del admin al historial
+  // 4. Agregar mensaje del admin al historial (con delivery status)
+  const waMessageId = waResult.messages?.[0]?.id || null;
   const newMsg = {
     role: 'assistant',
     content: mensaje ? `[HUMANO:${adminName}] ${mensaje}` : `[HUMANO:${adminName}] (Archivo)`,
     timestamp: new Date().toISOString(),
+    wa_message_id: waMessageId,
+    delivery_status: waMessageId ? 'sent' : (templateSent ? 'template_only' : 'failed'),
   };
 
   if (mediaUrl) {
@@ -416,7 +419,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    message_id: waResult.messages?.[0]?.id || null,
+    message_id: waMessageId,
+    delivery_status: waMessageId ? 'sent' : (templateSent ? 'template_only' : 'failed'),
     templateSent,
     windowExpired,
   });
