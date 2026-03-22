@@ -273,7 +273,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
   const cleanNumber = wa_id.replace(/\D/g, '');
 
-  // Si la ventana de 24h expiró, enviar primero la plantilla de seguimiento
+  // ── VENTANA 24h EXPIRADA: enviar template + encolar mensaje pendiente ──
   if (windowExpired) {
     const firstName = (leadNombre || '').split(' ')[0] || 'cliente';
     const templatePayload = {
@@ -304,15 +304,95 @@ export const sendMessage = asyncHandler(async (req, res) => {
     if (!templateResponse.ok) {
       const templateErr = await templateResponse.text();
       console.error('WhatsApp Template error:', templateErr);
-      // No bloqueamos — intentaremos enviar normal de todos modos
-      console.warn('Template falló, intentando enviar mensaje normal...');
-    } else {
-      templateSent = true;
-      console.log('✅ Template de seguimiento enviado (ventana 24h expirada)');
+      res.status(templateResponse.status);
+      throw new Error(`Error al enviar plantilla de seguimiento: ${templateErr}`);
     }
+
+    templateSent = true;
+    console.log('✅ Template de seguimiento enviado (ventana 24h expirada)');
+
+    // NO intentar enviar el mensaje normal — la ventana solo se reabre
+    // cuando el cliente RESPONDE al template.
+    // Guardamos el mensaje como pendiente para enviarlo cuando el cliente responda.
+
+    let historial = [...historialPre];
+    let leadExists = leadExistsPre;
+    const adminName = req.user?.name || 'Admin';
+
+    if (!leadExists) {
+      const createUrl = `${SUPABASE_URL}/rest/v1/leads`;
+      await fetch(createUrl, {
+        method: 'POST',
+        headers: { ...supabaseHeaders(), 'Prefer': 'return=minimal' },
+        body: JSON.stringify({
+          wa_id,
+          nombre: `+${wa_id}`,
+          estado_sofia: 'modo_humano',
+          modo_humano: true,
+          historial_chat: '[]',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    }
+
+    // Registrar template en historial
+    historial.push({
+      role: 'assistant',
+      content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico. Si sigues interesado o tienes alguna duda, respondenos a este mensaje y con gusto te ayudamos.`,
+      timestamp: new Date().toISOString(),
+      isTemplate: true,
+    });
+
+    // Registrar mensaje del admin como PENDIENTE en historial
+    const pendingMsg = {
+      role: 'assistant',
+      content: mensaje ? `[HUMANO:${adminName}] ${mensaje}` : `[HUMANO:${adminName}] (Archivo)`,
+      timestamp: new Date().toISOString(),
+      delivery_status: 'pending',
+    };
+    if (mediaUrl) {
+      pendingMsg.mediaUrl = mediaUrl;
+      pendingMsg.mimetype = mimetype;
+      pendingMsg.filename = filename;
+    }
+    historial.push(pendingMsg);
+
+    // Guardar historial + mensaje pendiente en campo separado para que n8n lo detecte
+    const mensajePendiente = {
+      mensaje: mensaje || '',
+      mediaUrl: mediaUrl || null,
+      mediaType: mediaType || null,
+      mimetype: mimetype || null,
+      filename: filename || null,
+      adminName: adminName,
+      timestamp: new Date().toISOString(),
+    };
+
+    const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+    await fetch(patchUrl, {
+      method: 'PATCH',
+      headers: supabaseHeaders(),
+      body: JSON.stringify({
+        historial_chat: JSON.stringify(historial),
+        atendido_por: adminName.toLowerCase(),
+        modo_humano: true,
+        mensaje_pendiente: JSON.stringify(mensajePendiente),
+        updated_at: new Date().toISOString(),
+      }),
+    });
+
+    return res.json({
+      success: true,
+      message_id: null,
+      delivery_status: 'pending',
+      templateSent: true,
+      windowExpired: true,
+      pendingMessage: true,
+    });
   }
 
-  // Enviar el mensaje normal (texto/media)
+  // ── VENTANA ABIERTA: enviar mensaje normal directamente ──
   const payload = {
     messaging_product: 'whatsapp',
     to: cleanNumber,
@@ -341,14 +421,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (!waResponse.ok) {
     const errorData = await waResponse.text();
     console.error('WhatsApp API error:', errorData);
-    // Si el template ya fue enviado, no fallar del todo
-    if (templateSent) {
-      console.warn('Mensaje normal falló pero template ya fue enviado');
-      waResult = { messages: [] };
-    } else {
-      res.status(waResponse.status);
-      throw new Error(`Error al enviar WhatsApp: ${errorData}`);
-    }
+    res.status(waResponse.status);
+    throw new Error(`Error al enviar WhatsApp: ${errorData}`);
   } else {
     waResult = await waResponse.json();
   }
@@ -357,7 +431,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   let historial = [...historialPre];
   let leadExists = leadExistsPre;
 
-  // Si no existe lead para este wa_id, crearlo (permite ver conversaciones con cualquier número)
+  // Si no existe lead para este wa_id, crearlo
   if (!leadExists) {
     const createUrl = `${SUPABASE_URL}/rest/v1/leads`;
     await fetch(createUrl, {
@@ -375,26 +449,15 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  // 3. Si se envió template, registrarlo en historial
+  // 3. Agregar mensaje del admin al historial
   const adminName = req.user?.name || 'Admin';
-  if (templateSent) {
-    const firstName = (leadNombre || '').split(' ')[0] || 'cliente';
-    historial.push({
-      role: 'assistant',
-      content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico. Si sigues interesado o tienes alguna duda, respondenos a este mensaje y con gusto te ayudamos.`,
-      timestamp: new Date().toISOString(),
-      isTemplate: true,
-    });
-  }
-
-  // 4. Agregar mensaje del admin al historial (con delivery status)
   const waMessageId = waResult.messages?.[0]?.id || null;
   const newMsg = {
     role: 'assistant',
     content: mensaje ? `[HUMANO:${adminName}] ${mensaje}` : `[HUMANO:${adminName}] (Archivo)`,
     timestamp: new Date().toISOString(),
     wa_message_id: waMessageId,
-    delivery_status: waMessageId ? 'sent' : (templateSent ? 'template_only' : 'failed'),
+    delivery_status: 'sent',
   };
 
   if (mediaUrl) {
@@ -405,7 +468,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   historial.push(newMsg);
 
-  // 5. Guardar historial actualizado en Supabase + quién atendió
+  // 4. Guardar historial actualizado en Supabase + quién atendió
+  //    Auto-activar modo_humano para detener a Sofía bot cuando un admin envía mensaje
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
   await fetch(patchUrl, {
     method: 'PATCH',
@@ -413,6 +477,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     body: JSON.stringify({
       historial_chat: JSON.stringify(historial),
       atendido_por: adminName.toLowerCase(),
+      modo_humano: true,
       updated_at: new Date().toISOString(),
     }),
   });
@@ -420,9 +485,9 @@ export const sendMessage = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message_id: waMessageId,
-    delivery_status: waMessageId ? 'sent' : (templateSent ? 'template_only' : 'failed'),
-    templateSent,
-    windowExpired,
+    delivery_status: 'sent',
+    templateSent: false,
+    windowExpired: false,
   });
 });
 
@@ -506,7 +571,7 @@ export const sendTemplate = asyncHandler(async (req, res) => {
     isTemplate: true,
   });
 
-  // 4. Guardar historial actualizado
+  // 4. Guardar historial actualizado + auto-activar modo_humano
   const adminName = req.user?.name || 'Admin';
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
   await fetch(patchUrl, {
@@ -515,6 +580,7 @@ export const sendTemplate = asyncHandler(async (req, res) => {
     body: JSON.stringify({
       historial_chat: JSON.stringify(historial),
       atendido_por: adminName.toLowerCase(),
+      modo_humano: true,
       updated_at: new Date().toISOString(),
     }),
   });
@@ -524,4 +590,99 @@ export const sendTemplate = asyncHandler(async (req, res) => {
     message_id: waResult.messages?.[0]?.id || null,
     templateSent: true,
   });
+});
+
+/**
+ * POST /api/v1/whatsapp/reengagement
+ * Re-enviar plantilla de seguimiento a todos los leads atascados en bienvenida/cotizando
+ * Solo envía a leads que llevan más de 2 horas sin actividad (para no molestar activos)
+ */
+export const sendReengagement = asyncHandler(async (req, res) => {
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+
+  // 1. Obtener leads en bienvenida o cotizando
+  const url = `${SUPABASE_URL}/rest/v1/leads?etapa=in.(bienvenida,cotizando)&select=wa_id,nombre,etapa,updated_at,historial_chat`;
+  const response = await fetch(url, { headers: supabaseHeaders() });
+  if (!response.ok) {
+    res.status(500);
+    throw new Error('Error al consultar leads en Supabase');
+  }
+  const leads = await response.json();
+
+  // 2. Filtrar admins y leads recientes (menos de 2h)
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const stuckLeads = leads.filter(l => !ADMIN_IDS.includes(l.wa_id) && l.updated_at < cutoff);
+
+  if (stuckLeads.length === 0) {
+    return res.json({ success: true, sent: 0, results: [], message: 'No hay leads inactivos para reactivar' });
+  }
+
+  // 3. Enviar plantilla a cada lead
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  const results = [];
+
+  for (const lead of stuckLeads) {
+    const cleanNumber = lead.wa_id.replace(/\D/g, '');
+    const firstName = (lead.nombre || '').split(' ')[0] || 'cliente';
+
+    try {
+      const templatePayload = {
+        messaging_product: 'whatsapp',
+        to: cleanNumber,
+        type: 'template',
+        template: {
+          name: WA_TEMPLATE_NAME,
+          language: { code: WA_TEMPLATE_LANG },
+          components: [
+            { type: 'body', parameters: [{ type: 'text', text: firstName }] },
+          ],
+        },
+      };
+
+      const waResp = await fetch(waUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(templatePayload),
+      });
+      const waData = await waResp.json();
+      const success = !!waData.messages;
+
+      if (success) {
+        // Actualizar historial del lead
+        let historial = [];
+        const raw = lead.historial_chat;
+        if (Array.isArray(raw)) historial = raw;
+        else if (typeof raw === 'string' && raw.trim()) {
+          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        }
+
+        historial.push({
+          role: 'assistant',
+          content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico.`,
+          timestamp: new Date().toISOString(),
+          isTemplate: true,
+          isReengagement: true,
+        });
+
+        await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+          method: 'PATCH',
+          headers: supabaseHeaders(),
+          body: JSON.stringify({
+            historial_chat: JSON.stringify(historial),
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      }
+
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, etapa: lead.etapa, success, error: waData.error?.message || null });
+    } catch (e) {
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, etapa: lead.etapa, success: false, error: e.message });
+    }
+  }
+
+  const sent = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  console.log(`📣 Re-engagement: ${sent} enviados, ${failed} fallidos de ${stuckLeads.length} leads`);
+
+  res.json({ success: true, sent, failed, total: stuckLeads.length, results });
 });

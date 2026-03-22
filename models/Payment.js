@@ -94,6 +94,10 @@ const paymentSchema = new mongoose.Schema({
     default: null,
   },
   schedule: [installmentSchema],
+  vendedor: {
+    type: String,
+    default: '',
+  },
   notes: {
     type: String,
     default: '',

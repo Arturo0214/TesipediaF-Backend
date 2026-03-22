@@ -231,6 +231,9 @@ export const updatePayment = asyncHandler(async (req, res) => {
     payment.amount = req.body.amount || payment.amount;
     payment.transactionId = req.body.transactionId || payment.transactionId;
     payment.status = req.body.status || payment.status;
+    if (req.body.vendedor !== undefined) {
+      payment.vendedor = req.body.vendedor;
+    }
 
     const updatedPayment = await payment.save();
     res.json(updatedPayment);
@@ -466,6 +469,7 @@ export const checkGuestPaymentStatus = asyncHandler(async (req, res) => {
 export const createManualPayment = asyncHandler(async (req, res) => {
   const {
     clientName, clientEmail, clientPhone, title, amount, method, esquemaPago, paymentDate, notes,
+    vendedor,
     // Campos de proyecto (opcionales)
     taskType, studyArea, career, educationLevel, pages, dueDate, requirements, priority,
   } = req.body;
@@ -482,10 +486,10 @@ export const createManualPayment = asyncHandler(async (req, res) => {
   const normalizeEsquemaKey = (raw) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
-    if (lower.includes('50')) return '50-50';
-    if (lower.includes('33')) return '33-33-34';
     if (lower.includes('quincena')) return '6-quincenas';
     if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    if (lower.includes('33%') || lower.includes('33-33') || lower.includes('33')) return '33-33-34';
+    if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50')) return '50-50';
     return 'unico';
   };
 
@@ -572,6 +576,7 @@ export const createManualPayment = asyncHandler(async (req, res) => {
     paymentDate: startDate,
     schedule,
     notes: notes || '',
+    vendedor: vendedor || req.user?.name?.toLowerCase() || '',
   });
 
   // 3. Crear proyecto vinculado automáticamente
@@ -651,6 +656,160 @@ export const deleteDashboardPayment = asyncHandler(async (req, res) => {
   }
 
   res.json({ message: 'Pago eliminado correctamente' });
+});
+
+// 👤 Asignar vendedor a un pago de cualquier fuente (admin)
+export const assignVendedor = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { source } = req.query;
+  const { vendedor } = req.body;
+
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400);
+    throw new Error('ID de pago inválido');
+  }
+
+  if (vendedor === undefined) {
+    res.status(400);
+    throw new Error('Campo vendedor es requerido');
+  }
+
+  let updated = false;
+
+  if (source === 'sofia') {
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const doc = await GeneratedQuote.findById(id);
+    if (doc) {
+      doc.vendedor = vendedor;
+      await doc.save();
+      updated = true;
+    }
+  } else if (source === 'guest') {
+    const doc = await GuestPayment.findById(id);
+    if (doc) {
+      doc.vendedor = vendedor;
+      await doc.save();
+      updated = true;
+    }
+  } else {
+    const doc = await Payment.findById(id);
+    if (doc) {
+      doc.vendedor = vendedor;
+      await doc.save();
+      updated = true;
+    }
+  }
+
+  if (!updated) {
+    res.status(404);
+    throw new Error('Pago no encontrado');
+  }
+
+  res.json({ message: `Vendedor asignado: ${vendedor}` });
+});
+
+// 🔗 Create project from an existing dashboard payment (for payments missing a linked project)
+export const createProjectFromPayment = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { source } = req.query;
+  const { dueDate, taskType, studyArea, career, educationLevel, requirements } = req.body;
+
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400);
+    throw new Error('ID de pago inválido');
+  }
+
+  let clientName = '';
+  let clientEmail = '';
+  let clientPhone = '';
+  let title = '';
+  let amount = 0;
+  let paymentRef = null; // Payment ObjectId to link to project.payment
+
+  if (source === 'sofia') {
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const quote = await GeneratedQuote.findById(id);
+    if (!quote) { res.status(404); throw new Error('Cotización Sofia no encontrada'); }
+    clientName = quote.clientName || '';
+    clientEmail = quote.clientEmail || '';
+    clientPhone = quote.clientPhone || '';
+    title = quote.tituloTrabajo || quote.tipoTrabajo || 'Proyecto Sofia';
+    amount = quote.precioConDescuento || quote.precioConRecargo || quote.precioBase || 0;
+    // Check if there's already a linked Payment record auto-created by handleQuotePaid
+    const autoPayment = await Payment.findOne({
+      notes: { $regex: quote._id.toString() },
+    });
+    if (autoPayment) paymentRef = autoPayment._id;
+  } else if (source === 'guest') {
+    const guest = await GuestPayment.findById(id);
+    if (!guest) { res.status(404); throw new Error('Pago de invitado no encontrado'); }
+    clientName = `${guest.nombres || ''} ${guest.apellidos || ''}`.trim() || 'Invitado';
+    clientEmail = guest.correo || '';
+    clientPhone = guest.telefonoContacto || '';
+    title = guest.quoteId?.taskTitle || 'Pago Invitado';
+    amount = guest.amount || 0;
+  } else {
+    // stripe or manual — Payment model
+    const payment = await Payment.findById(id);
+    if (!payment) { res.status(404); throw new Error('Pago no encontrado'); }
+    clientName = payment.clientName || payment.order?.user?.name || '';
+    clientEmail = payment.clientEmail || '';
+    clientPhone = payment.clientPhone || '';
+    title = payment.title || 'Proyecto';
+    amount = payment.amount || 0;
+    paymentRef = payment._id;
+  }
+
+  // Check for duplicate project
+  const existingProject = await Project.findOne({
+    $or: [
+      ...(paymentRef ? [{ payment: paymentRef }] : []),
+      { clientEmail, taskTitle: title },
+    ]
+  });
+  if (existingProject) {
+    res.status(400);
+    throw new Error('Ya existe un proyecto vinculado a este pago');
+  }
+
+  // Auto-create client user if email provided
+  let clientUser = null;
+  if (clientEmail) {
+    const { user } = await autoCreateClientUser({
+      clientName: clientName || 'Cliente',
+      clientEmail,
+      clientPhone,
+      projectTitle: title,
+    });
+    clientUser = user;
+  }
+
+  // Determine due date — from body, or 30 days from now
+  const projectDueDate = dueDate ? new Date(dueDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+  const project = await Project.create({
+    quote: null,
+    taskType: taskType || 'Tesis',
+    studyArea: studyArea || 'General',
+    career: career || 'General',
+    educationLevel: educationLevel || 'licenciatura',
+    taskTitle: title,
+    requirements: { text: requirements || 'Proyecto creado desde pago existente' },
+    pages: 1,
+    dueDate: projectDueDate,
+    priority: 'medium',
+    status: 'pending',
+    clientName,
+    clientEmail,
+    clientPhone,
+    client: clientUser?._id || null,
+    payment: paymentRef || null,
+  });
+
+  res.status(201).json({
+    project,
+    message: `Proyecto "${title}" creado exitosamente`,
+  });
 });
 
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
@@ -733,13 +892,14 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   };
 
   // Normalize esquemaPago from GeneratedQuote free text to our keys
+  // IMPORTANT: check '33' before '50' because price amounts like $3,085.50 contain '50' in cents
   const normalizeEsquema = (raw) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
-    if (lower.includes('50') && lower.includes('50')) return '50-50';
-    if (lower.includes('33')) return '33-33-34';
     if (lower.includes('quincena') || lower.includes('6 quincena')) return '6-quincenas';
     if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+    if (lower.includes('33%') || lower.includes('33-33')) return '33-33-34';
+    if (lower.includes('50%') || lower.includes('50-50')) return '50-50';
     return 'unico';
   };
 
@@ -763,6 +923,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       commission: Math.round(amount * 0.15),
       date: p.createdAt,
       dueDate: p.order?.dueDate || null,
+      vendedor: p.vendedor || '',
     });
   }
 
@@ -787,6 +948,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       dueDate: q.fechaEntrega || null,
       tipoServicio: q.tipoServicio || '',
       carrera: q.carrera || '',
+      vendedor: '',
     });
   }
 
@@ -807,6 +969,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       commission: Math.round(amount * 0.15),
       date: g.createdAt,
       dueDate: g.quoteId?.dueDate || null,
+      vendedor: '',
     });
   }
 
@@ -851,7 +1014,45 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       date: m.paymentDate || m.createdAt,
       dueDate: null,
       notes,
+      vendedor: m.vendedor || '',
     });
+  }
+
+  // --- Detect which payments already have a linked project ---
+  // 1. Projects linked to a Payment _id
+  const paymentIds = unified.filter(p => p.source === 'stripe' || p.source === 'manual').map(p => p._id);
+  const projectsWithPayment = paymentIds.length > 0
+    ? await Project.find({ payment: { $in: paymentIds } }).select('payment').lean()
+    : [];
+  const paymentIdsWithProject = new Set(projectsWithPayment.map(p => p.payment?.toString()));
+
+  // 2. For sofia quotes — check if handleQuotePaid created a project (via quote ref or matching title+email)
+  const sofiaIds = unified.filter(p => p.source === 'sofia').map(p => p._id);
+  // handleQuotePaid creates Payment with notes containing the quote id, and Project with that payment
+  // Simpler: just look for projects matching clientEmail + taskTitle
+  const sofiaProjectLookup = new Map();
+  if (sofiaIds.length > 0) {
+    for (const p of unified.filter(u => u.source === 'sofia')) {
+      const matchingProject = await Project.findOne({
+        $or: [
+          { clientEmail: p.clientEmail, taskTitle: p.title },
+          { clientName: p.clientName, taskTitle: p.title },
+        ]
+      }).select('_id').lean();
+      if (matchingProject) sofiaProjectLookup.set(p._id.toString(), matchingProject._id.toString());
+    }
+  }
+
+  // Tag each payment with hasProject
+  for (const p of unified) {
+    if (p.source === 'stripe' || p.source === 'manual') {
+      p.hasProject = paymentIdsWithProject.has(p._id.toString());
+    } else if (p.source === 'sofia') {
+      p.hasProject = sofiaProjectLookup.has(p._id.toString());
+      if (p.hasProject) p.projectId = sofiaProjectLookup.get(p._id.toString());
+    } else {
+      p.hasProject = false;
+    }
   }
 
   // Sort by date descending

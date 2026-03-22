@@ -437,16 +437,21 @@ export const generateQuotePDF = async (data) => {
             doc.text(line, tableX + 5, yPos + 4 + (index * lineHeight));
         } else {
             // Justificar línea distribuyendo espacio entre palabras
-            const words = line.trim().split(' ');
-            const lineWidthWithoutSpaces = words.reduce((sum, word) => sum + doc.getTextWidth(word), 0);
-            const totalSpaceNeeded = maxLineWidth - lineWidthWithoutSpaces;
-            const spaceBetweenWords = totalSpaceNeeded / (words.length - 1);
+            const words = line.trim().split(' ').filter(w => w);
+            if (words.length <= 1) {
+                // Palabra sola — no justificar, solo imprimir
+                doc.text(line.trim(), tableX + 5, yPos + 4 + (index * lineHeight));
+            } else {
+                const lineWidthWithoutSpaces = words.reduce((sum, word) => sum + doc.getTextWidth(word), 0);
+                const totalSpaceNeeded = maxLineWidth - lineWidthWithoutSpaces;
+                const spaceBetweenWords = Math.max(0, totalSpaceNeeded / (words.length - 1));
 
-            let currentX = tableX + 5;
-            words.forEach((word, wordIndex) => {
-                doc.text(word, currentX, yPos + 4 + (index * lineHeight));
-                currentX += doc.getTextWidth(word) + spaceBetweenWords;
-            });
+                let currentX = tableX + 5;
+                words.forEach((word, wordIndex) => {
+                    doc.text(word, currentX, yPos + 4 + (index * lineHeight));
+                    currentX += doc.getTextWidth(word) + spaceBetweenWords;
+                });
+            }
         }
     });
 

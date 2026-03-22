@@ -1347,6 +1347,7 @@ export const uploadQuotePDF = asyncHandler(async (req, res) => {
 
 // 📄 Generar PDF de cotización server-side y subir a Cloudinary (para n8n/WhatsApp)
 export const generateAndUploadQuotePDF = async (req, res) => {
+  let step = 'validacion';
   try {
     const data = req.body;
 
@@ -1357,42 +1358,89 @@ export const generateAndUploadQuotePDF = async (req, res) => {
       });
     }
 
+    // Sanitizar datos numéricos para evitar NaN en el PDF
+    if (data.precioBase) data.precioBase = Number(data.precioBase) || 0;
+    if (data.descuentoEfectivo) data.descuentoEfectivo = Number(data.descuentoEfectivo) || 0;
+    if (data.recargoPorcentaje) data.recargoPorcentaje = Number(data.recargoPorcentaje) || 0;
+    if (data.extensionEstimada) data.extensionEstimada = String(data.extensionEstimada || '');
+
     // 1. Generar el PDF en memoria
+    step = 'generacion_pdf';
+    console.log('[QuotePDF] Generando PDF para:', data.clientName || data.nombre);
     const pdfBuffer = await generateQuotePDF(data);
+    console.log('[QuotePDF] PDF generado, tamaño:', pdfBuffer?.length || 0, 'bytes');
 
-    // 2. Subir a Cloudinary como raw upload
-    const uploadResult = await new Promise((resolve, reject) => {
-      const timestamp = Date.now();
+    if (!pdfBuffer || pdfBuffer.length === 0) {
+      return res.status(500).json({
+        success: false,
+        message: 'El PDF se generó vacío',
+        step,
+      });
+    }
 
+    // 2. Subir a Cloudinary con retry (hasta 2 intentos)
+    step = 'upload_cloudinary';
+    const timestamp = Date.now();
+    const publicId = data.pdfFilename
+      ? data.pdfFilename.replace(/\s+/g, '-').toLowerCase()
+      : `cotizacion-${(data.nombre || data.clientName || 'cliente').replace(/\s+/g, '-').toLowerCase()}-${timestamp}`;
+
+    const uploadToCloudinary = () => new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: 'raw',
           folder: 'tesipedia/cotizaciones',
-          public_id: data.pdfFilename
-            ? data.pdfFilename.replace(/\s+/g, '-').toLowerCase()
-            : `cotizacion-${(data.nombre || data.clientName || 'cliente').replace(/\s+/g, '-').toLowerCase()}-${timestamp}`,
+          public_id: publicId,
           format: 'pdf',
           access_mode: 'public',
+          timeout: 30000,
         },
         (error, result) => {
           if (error) reject(error);
           else resolve(result);
         }
       );
-
       uploadStream.end(pdfBuffer);
     });
 
-    // 3. Generar URL de descarga privada (bypass de restricciones PDF en Cloudinary)
-    const downloadUrl = cloudinary.utils.private_download_url(
-      uploadResult.public_id,
-      'pdf',
-      {
-        resource_type: 'raw',
-        type: 'upload',
-        expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 días
+    let uploadResult;
+    try {
+      uploadResult = await uploadToCloudinary();
+    } catch (firstErr) {
+      console.warn('[QuotePDF] Primer intento de upload falló, reintentando...', firstErr.message);
+      // Segundo intento con un public_id ligeramente diferente
+      try {
+        uploadResult = await uploadToCloudinary();
+      } catch (retryErr) {
+        console.error('[QuotePDF] Upload a Cloudinary falló 2 veces:', retryErr.message);
+        return res.status(500).json({
+          success: false,
+          message: 'Error al subir PDF a Cloudinary (2 intentos fallidos)',
+          step,
+          error: retryErr.message,
+        });
       }
-    );
+    }
+
+    console.log('[QuotePDF] Upload exitoso, public_id:', uploadResult.public_id);
+
+    // 3. Generar URL de descarga — intentar private_download_url, si falla usar secure_url
+    step = 'generar_url';
+    let downloadUrl;
+    try {
+      downloadUrl = cloudinary.utils.private_download_url(
+        uploadResult.public_id,
+        'pdf',
+        {
+          resource_type: 'raw',
+          type: 'upload',
+          expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
+        }
+      );
+    } catch (urlErr) {
+      console.warn('[QuotePDF] private_download_url falló, usando secure_url:', urlErr.message);
+      downloadUrl = uploadResult.secure_url;
+    }
 
     // 4. Devolver la URL de descarga
     return res.status(200).json({
@@ -1402,10 +1450,11 @@ export const generateAndUploadQuotePDF = async (req, res) => {
       publicId: uploadResult.public_id,
     });
   } catch (error) {
-    console.error('Error generando PDF de cotización:', error);
+    console.error(`[QuotePDF] Error en paso "${step}":`, error.message, error.stack?.split('\n').slice(0, 3).join('\n'));
     return res.status(500).json({
       success: false,
-      message: 'Error al generar el PDF',
+      message: `Error al generar el PDF (paso: ${step})`,
+      step,
       error: error.message,
     });
   }

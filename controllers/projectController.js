@@ -240,10 +240,10 @@ export const createManualProject = asyncHandler(async (req, res) => {
         const normalizeEsquemaKey = (raw) => {
             if (!raw) return 'unico';
             const lower = raw.toLowerCase();
-            if (lower.includes('50')) return '50-50';
-            if (lower.includes('33')) return '33-33-34';
             if (lower.includes('quincena')) return '6-quincenas';
             if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+            if (lower.includes('33%') || lower.includes('33-33') || lower.includes('33')) return '33-33-34';
+            if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50')) return '50-50';
             return 'unico';
         };
 

@@ -10,6 +10,7 @@ import {
   updateLeadEstado,
   sendMessage,
   sendTemplate,
+  sendReengagement,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -35,5 +36,8 @@ router.post('/send', upload.single('file'), sendMessage);
 
 // Enviar solo la plantilla de seguimiento (revivir conversación)
 router.post('/send-template', sendTemplate);
+
+// Re-engagement masivo: enviar plantilla a leads inactivos en bienvenida/cotizando
+router.post('/reengagement', sendReengagement);
 
 export default router;

@@ -19,7 +19,9 @@ import {
     checkGuestPaymentStatus,
     getPaymentsDashboard,
     createManualPayment,
-    deleteDashboardPayment
+    deleteDashboardPayment,
+    assignVendedor,
+    createProjectFromPayment
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -49,6 +51,8 @@ router.post('/manual', createManualPayment);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);
 router.delete('/:id', deletePayment);
+router.put('/dashboard/:id/vendedor', superAdminOnly, assignVendedor);
+router.post('/dashboard/:id/create-project', createProjectFromPayment);
 router.delete('/dashboard/:id', superAdminOnly, deleteDashboardPayment);
 router.post('/:id/refund', refundPayment);
 router.get('/:id/refund-status', getRefundStatus);
