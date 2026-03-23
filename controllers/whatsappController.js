@@ -615,11 +615,12 @@ export const sendTemplate = asyncHandler(async (req, res) => {
  */
 export const claimLead = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const { atendido_por } = req.body;
+  const { atendido_por, force } = req.body;
+  const isSuperAdmin = req.user?.role === 'superadmin';
 
-  if (!waId || !atendido_por) {
+  if (!waId) {
     res.status(400);
-    throw new Error('wa_id y atendido_por son requeridos');
+    throw new Error('wa_id es requerido');
   }
 
   // 1. Verificar dueño actual
@@ -636,8 +637,9 @@ export const claimLead = asyncHandler(async (req, res) => {
   }
 
   const currentOwner = leadData[0]?.atendido_por;
-  if (currentOwner && currentOwner.trim()) {
-    // Ya tiene dueño — no reasignar
+
+  // Si ya tiene dueño y NO es superadmin, rechazar
+  if (currentOwner && currentOwner.trim() && !isSuperAdmin) {
     return res.json({
       success: false,
       claimed: false,
@@ -646,13 +648,14 @@ export const claimLead = asyncHandler(async (req, res) => {
     });
   }
 
-  // 2. Asignar dueño
+  // 2. Asignar dueño (SuperAdmin puede reasignar o desasignar)
+  const newOwner = (atendido_por || '').toLowerCase().trim();
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
   const patchResp = await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
     body: JSON.stringify({
-      atendido_por: atendido_por.toLowerCase(),
+      atendido_por: newOwner,
       updated_at: new Date().toISOString(),
     }),
   });
@@ -664,61 +667,76 @@ export const claimLead = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     claimed: true,
-    atendido_por: atendido_por.toLowerCase(),
+    atendido_por: newOwner,
+    reassigned: !!currentOwner,
   });
 });
 
 /**
  * POST /api/v1/whatsapp/reengagement
- * Re-enviar plantilla de seguimiento a todos los leads atascados en bienvenida/cotizando
- * Solo envía a leads que llevan más de 2 horas sin actividad (para no molestar activos)
+ * Sofia envia mensajes personalizados a leads estancados segun su estado.
+ * Body opcional: { hours: 24 } — ventana de tiempo (default 24h)
  */
 export const sendReengagement = asyncHandler(async (req, res) => {
   const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const hours = Number(req.body?.hours) || 24;
 
-  // 1. Obtener leads en bienvenida o cotizando
-  const url = `${SUPABASE_URL}/rest/v1/leads?etapa=in.(bienvenida,cotizando)&select=wa_id,nombre,etapa,updated_at,historial_chat`;
+  // Mensaje de Sofia personalizado por estado
+  function sofiaMessage(lead) {
+    const nombre = (lead.nombre || '').split(' ')[0];
+    if (lead.estado_sofia === 'bienvenida') {
+      return nombre
+        ? `Hola ${nombre}, soy Sofia de Tesipedia. Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, en que tema necesitas apoyo?`
+        : 'Hola! Soy Sofia de Tesipedia. Vi que nos contactaste pero no pudimos conversar. Me encantaria ayudarte con tu tesis. Cuentame, que necesitas?';
+    }
+    if (lead.estado_sofia === 'calificando') {
+      return nombre
+        ? `Hola ${nombre}, soy Sofia de Tesipedia. Estabamos platicando sobre tu proyecto de tesis. Para poder darte una cotizacion necesito algunos datos mas. Podemos continuar?`
+        : 'Hola! Soy Sofia de Tesipedia. Nos quedamos a medias con los datos de tu proyecto. Para cotizarte necesito un poco mas de info. Seguimos?';
+    }
+    // cotizando
+    return nombre
+      ? `Hola ${nombre}, soy Sofia de Tesipedia. Ya casi tenemos lista tu cotizacion! Solo necesito confirmar unos detalles para enviartela. Podemos continuar?`
+      : 'Hola! Soy Sofia de Tesipedia. Tu cotizacion esta casi lista, solo necesito confirmar unos detalles. Seguimos?';
+  }
+
+  // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(500);
     throw new Error('Error al consultar leads en Supabase');
   }
-  const leads = await response.json();
+  const allLeads = await response.json();
 
-  // 2. Filtrar admins y leads recientes (menos de 2h)
-  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-  const stuckLeads = leads.filter(l => !ADMIN_IDS.includes(l.wa_id) && l.updated_at < cutoff);
+  // 2. Filtrar admins
+  const stuckLeads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
 
   if (stuckLeads.length === 0) {
-    return res.json({ success: true, sent: 0, results: [], message: 'No hay leads inactivos para reactivar' });
+    return res.json({ success: true, sent: 0, failed: 0, total: 0, results: [], message: 'No hay leads para enviar recordatorio' });
   }
 
-  // 3. Enviar plantilla a cada lead
+  // 3. Enviar mensaje de Sofia a cada lead
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
   const results = [];
 
   for (const lead of stuckLeads) {
     const cleanNumber = lead.wa_id.replace(/\D/g, '');
-    const firstName = (lead.nombre || '').split(' ')[0] || 'cliente';
+    const msg = sofiaMessage(lead);
 
     try {
-      const templatePayload = {
+      const payload = {
         messaging_product: 'whatsapp',
         to: cleanNumber,
-        type: 'template',
-        template: {
-          name: WA_TEMPLATE_NAME,
-          language: { code: WA_TEMPLATE_LANG },
-          components: [
-            { type: 'body', parameters: [{ type: 'text', text: firstName }] },
-          ],
-        },
+        type: 'text',
+        text: { body: msg },
       };
 
       const waResp = await fetch(waUrl, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(templatePayload),
+        body: JSON.stringify(payload),
       });
       const waData = await waResp.json();
       const success = !!waData.messages;
@@ -734,9 +752,8 @@ export const sendReengagement = asyncHandler(async (req, res) => {
 
         historial.push({
           role: 'assistant',
-          content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico.`,
+          content: msg,
           timestamp: new Date().toISOString(),
-          isTemplate: true,
           isReengagement: true,
         });
 
@@ -750,15 +767,15 @@ export const sendReengagement = asyncHandler(async (req, res) => {
         });
       }
 
-      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, etapa: lead.etapa, success, error: waData.error?.message || null });
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success, error: waData.error?.message || null });
     } catch (e) {
-      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, etapa: lead.etapa, success: false, error: e.message });
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success: false, error: e.message });
     }
   }
 
   const sent = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
-  console.log(`📣 Re-engagement: ${sent} enviados, ${failed} fallidos de ${stuckLeads.length} leads`);
+  console.log(`📣 Sofia Recordatorio: ${sent} enviados, ${failed} fallidos de ${stuckLeads.length} leads (ventana: ${hours}h)`);
 
   res.json({ success: true, sent, failed, total: stuckLeads.length, results });
 });
