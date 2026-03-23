@@ -12,6 +12,8 @@ import {
   sendTemplate,
   sendReengagement,
   claimLead,
+  getAutoReminderStatus,
+  configAutoReminder,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -41,7 +43,11 @@ router.post('/send', upload.single('file'), sendMessage);
 // Enviar solo la plantilla de seguimiento (revivir conversación)
 router.post('/send-template', sendTemplate);
 
-// Re-engagement masivo: enviar plantilla a leads inactivos en bienvenida/cotizando
+// Re-engagement masivo: Sofia envia recordatorios a leads estancados
 router.post('/reengagement', sendReengagement);
+
+// Auto-reminder de Sofia: config y status
+router.get('/auto-reminder', getAutoReminderStatus);
+router.post('/auto-reminder', configAutoReminder);
 
 export default router;

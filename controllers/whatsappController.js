@@ -17,6 +17,63 @@ const WA_TEMPLATE_LANG = 'es_MX';
 const HOURS_24 = 24 * 60 * 60 * 1000;
 
 /**
+ * Helper: Genera un mensaje contextual de Sofia basado en el ultimo dato recabado del lead.
+ * Flujo de calificacion: nombre → tipo_servicio → tipo_proyecto → nivel → carrera → tema → paginas → fecha_entrega
+ * El mensaje retoma justo donde el lead se quedo.
+ */
+function buildSofiaContextualMessage(lead) {
+  const nombre = (lead.nombre || '').split(' ')[0];
+  const saludo = nombre ? `Hola ${nombre}, soy Sofia de Tesipedia.` : 'Hola! Soy Sofia de Tesipedia.';
+
+  // Estado bienvenida: el lead apenas llego, no ha dado datos
+  if (lead.estado_sofia === 'bienvenida') {
+    return `${saludo} Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, que tipo de servicio necesitas? Ofrecemos redaccion completa, correccion de estilo, y asesoria.`;
+  }
+
+  // Estado cotizando: ya tiene todos los datos, falta cerrar
+  if (lead.estado_sofia === 'cotizando') {
+    return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
+  }
+
+  // Estado calificando: detectar el ultimo campo llenado para pedir el siguiente
+  // Orden: tipo_servicio → tipo_proyecto → nivel → carrera → tema → paginas → fecha_entrega
+  if (!lead.tipo_servicio) {
+    return `${saludo} Estabamos platicando sobre tu proyecto. Para ayudarte mejor, cuentame: que tipo de servicio necesitas? Tenemos redaccion completa, correccion de estilo, o asesoria.`;
+  }
+
+  const servicioLabel = { servicio_1: 'redaccion completa', servicio_2: 'correccion de estilo', servicio_3: 'asesoria' }[lead.tipo_servicio] || lead.tipo_servicio;
+
+  if (!lead.tipo_proyecto) {
+    return `${saludo} Ya me comentaste que necesitas ${servicioLabel}. Ahora cuentame, que tipo de trabajo es? Por ejemplo: tesis, tesina, articulo cientifico, ensayo...`;
+  }
+
+  const proyectoLabel = lead.tipo_proyecto || 'tu proyecto';
+
+  if (!lead.nivel) {
+    return `${saludo} Veo que estas trabajando en ${proyectoLabel.toLowerCase() === 'otro' ? 'tu proyecto' : 'tu ' + proyectoLabel.toLowerCase()}. De que nivel academico es? Licenciatura, maestria o doctorado?`;
+  }
+
+  if (!lead.carrera) {
+    return `${saludo} Ya tengo que es ${proyectoLabel.toLowerCase()} de ${lead.nivel}. Que carrera o programa cursas?`;
+  }
+
+  if (!lead.tema) {
+    return `${saludo} Excelente, ${lead.carrera} de ${lead.nivel}. Y cual es el tema de tu ${proyectoLabel.toLowerCase()}?`;
+  }
+
+  if (!lead.paginas) {
+    return `${saludo} Tu tema sobre "${lead.tema}" suena muy interesante. Aproximadamente cuantas paginas necesitas?`;
+  }
+
+  if (!lead.fecha_entrega) {
+    return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel.toLowerCase()} de ${lead.paginas} paginas?`;
+  }
+
+  // Tiene todos los datos pero sigue en calificando (caso raro)
+  return `${saludo} Ya tengo todos tus datos para cotizarte. Voy a preparar tu cotizacion en un momento. Tienes alguna duda mientras tanto?`;
+}
+
+/**
  * Helper: determinar si la ventana de 24h expiró
  * Busca el último mensaje del USUARIO (role === 'user') en el historial.
  * Usa updated_at del lead como fallback cuando los mensajes no tienen timestamp
@@ -681,28 +738,9 @@ export const sendReengagement = asyncHandler(async (req, res) => {
   const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
   const hours = Number(req.body?.hours) || 24;
 
-  // Mensaje de Sofia personalizado por estado
-  function sofiaMessage(lead) {
-    const nombre = (lead.nombre || '').split(' ')[0];
-    if (lead.estado_sofia === 'bienvenida') {
-      return nombre
-        ? `Hola ${nombre}, soy Sofia de Tesipedia. Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, en que tema necesitas apoyo?`
-        : 'Hola! Soy Sofia de Tesipedia. Vi que nos contactaste pero no pudimos conversar. Me encantaria ayudarte con tu tesis. Cuentame, que necesitas?';
-    }
-    if (lead.estado_sofia === 'calificando') {
-      return nombre
-        ? `Hola ${nombre}, soy Sofia de Tesipedia. Estabamos platicando sobre tu proyecto de tesis. Para poder darte una cotizacion necesito algunos datos mas. Podemos continuar?`
-        : 'Hola! Soy Sofia de Tesipedia. Nos quedamos a medias con los datos de tu proyecto. Para cotizarte necesito un poco mas de info. Seguimos?';
-    }
-    // cotizando
-    return nombre
-      ? `Hola ${nombre}, soy Sofia de Tesipedia. Ya casi tenemos lista tu cotizacion! Solo necesito confirmar unos detalles para enviartela. Podemos continuar?`
-      : 'Hola! Soy Sofia de Tesipedia. Tu cotizacion esta casi lista, solo necesito confirmar unos detalles. Seguimos?';
-  }
-
   // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(500);
@@ -723,7 +761,7 @@ export const sendReengagement = asyncHandler(async (req, res) => {
 
   for (const lead of stuckLeads) {
     const cleanNumber = lead.wa_id.replace(/\D/g, '');
-    const msg = sofiaMessage(lead);
+    const msg = buildSofiaContextualMessage(lead);
 
     try {
       const payload = {
@@ -779,3 +817,161 @@ export const sendReengagement = asyncHandler(async (req, res) => {
 
   res.json({ success: true, sent, failed, total: stuckLeads.length, results });
 });
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  AUTO-REMINDER — Sofia automatica
+ *  Corre en background cada N minutos, detecta leads estancados
+ *  y les manda recordatorio personalizado.
+ *  Controlable via API desde el panel de admin.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+// Estado en memoria — arranca activo cada 6h por defecto
+const autoReminder = {
+  active: false,            // se activa abajo con startAutoReminder()
+  intervalMinutes: 360,     // cada 6 horas
+  staleMinutes: 360,        // leads sin actividad por mas de 6 horas
+  maxPerRun: 50,            // maximo de mensajes por ejecucion
+  lastRun: null,
+  lastResult: null,
+  _timer: null,
+};
+
+// Reutiliza la funcion contextual buildSofiaContextualMessage definida arriba
+
+// Funcion interna que ejecuta el ciclo de recordatorios
+async function runAutoReminder() {
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const since = new Date(Date.now() - autoReminder.staleMinutes * 60 * 1000).toISOString();
+
+  try {
+    // Leads que NO se han actualizado en los ultimos N minutos
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${autoReminder.maxPerRun}`;
+    const resp = await fetch(url, { headers: supabaseHeaders() });
+    if (!resp.ok) {
+      console.error('Auto-reminder: error Supabase', resp.status);
+      autoReminder.lastResult = { error: 'Supabase error ' + resp.status, time: new Date().toISOString() };
+      return;
+    }
+    const allLeads = await resp.json();
+    const leads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
+
+    if (leads.length === 0) {
+      autoReminder.lastRun = new Date().toISOString();
+      autoReminder.lastResult = { sent: 0, failed: 0, total: 0, time: new Date().toISOString() };
+      console.log('🤖 Auto-reminder: 0 leads estancados');
+      return;
+    }
+
+    const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+    let sent = 0, failed = 0;
+
+    for (const lead of leads) {
+      const cleanNumber = lead.wa_id.replace(/\D/g, '');
+      const msg = buildSofiaContextualMessage(lead);
+
+      try {
+        const waResp = await fetch(waUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+        });
+        const waData = await waResp.json();
+
+        if (waData.messages) {
+          sent++;
+
+          // Actualizar historial
+          let historial = [];
+          const raw = lead.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
+          historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
+
+          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
+          });
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+
+    autoReminder.lastRun = new Date().toISOString();
+    autoReminder.lastResult = { sent, failed, total: leads.length, time: new Date().toISOString() };
+    console.log(`🤖 Auto-reminder: ${sent} enviados, ${failed} fallidos de ${leads.length} leads`);
+  } catch (e) {
+    console.error('Auto-reminder error:', e.message);
+    autoReminder.lastResult = { error: e.message, time: new Date().toISOString() };
+  }
+}
+
+function startAutoReminder() {
+  if (autoReminder._timer) clearInterval(autoReminder._timer);
+  autoReminder.active = true;
+  autoReminder._timer = setInterval(runAutoReminder, autoReminder.intervalMinutes * 60 * 1000);
+  // Ejecutar inmediatamente la primera vez
+  runAutoReminder();
+  console.log(`🤖 Auto-reminder ACTIVADO — cada ${autoReminder.intervalMinutes} min, leads >  ${autoReminder.staleMinutes} min sin actividad`);
+}
+
+function stopAutoReminder() {
+  if (autoReminder._timer) clearInterval(autoReminder._timer);
+  autoReminder._timer = null;
+  autoReminder.active = false;
+  console.log('🤖 Auto-reminder DESACTIVADO');
+}
+
+/**
+ * GET /api/v1/whatsapp/auto-reminder
+ * Obtener estado y config del auto-reminder
+ */
+export const getAutoReminderStatus = asyncHandler(async (req, res) => {
+  res.json({
+    active: autoReminder.active,
+    intervalMinutes: autoReminder.intervalMinutes,
+    staleMinutes: autoReminder.staleMinutes,
+    maxPerRun: autoReminder.maxPerRun,
+    lastRun: autoReminder.lastRun,
+    lastResult: autoReminder.lastResult,
+  });
+});
+
+/**
+ * POST /api/v1/whatsapp/auto-reminder
+ * Activar/desactivar y configurar el auto-reminder
+ * Body: { active, intervalMinutes, staleMinutes, maxPerRun }
+ */
+export const configAutoReminder = asyncHandler(async (req, res) => {
+  const { active, intervalMinutes, staleMinutes, maxPerRun } = req.body;
+
+  if (intervalMinutes !== undefined) autoReminder.intervalMinutes = Math.max(5, Number(intervalMinutes) || 30);
+  if (staleMinutes !== undefined) autoReminder.staleMinutes = Math.max(5, Number(staleMinutes) || 30);
+  if (maxPerRun !== undefined) autoReminder.maxPerRun = Math.max(1, Math.min(100, Number(maxPerRun) || 20));
+
+  if (active === true) {
+    startAutoReminder();
+  } else if (active === false) {
+    stopAutoReminder();
+  } else if (autoReminder.active) {
+    // Si solo cambiaron params, reiniciar con nuevos valores
+    startAutoReminder();
+  }
+
+  res.json({
+    success: true,
+    active: autoReminder.active,
+    intervalMinutes: autoReminder.intervalMinutes,
+    staleMinutes: autoReminder.staleMinutes,
+    maxPerRun: autoReminder.maxPerRun,
+  });
+});
+
+// Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
+startAutoReminder();

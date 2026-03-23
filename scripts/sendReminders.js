@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Script de recordatorio masivo — Sofia envia mensajes personalizados
- * a todos los leads de las ultimas 24h segun su estado.
+ * Script de recordatorio masivo — Sofia envia mensajes contextuales
+ * basados en el ultimo dato recabado de cada lead.
  *
  * Ejecutar: node scripts/sendReminders.js
  */
@@ -20,33 +20,63 @@ if (!SUPABASE_SERVICE_KEY || !WA_TOKEN) {
   process.exit(1);
 }
 
-// Mensajes de Sofia personalizados por estado
-function sofiaMessage(lead) {
+/**
+ * Genera mensaje contextual segun el ultimo dato recabado del lead.
+ * Flujo: nombre → tipo_servicio → tipo_proyecto → nivel → carrera → tema → paginas → fecha_entrega
+ */
+function buildSofiaContextualMessage(lead) {
   const nombre = (lead.nombre || '').split(' ')[0];
+  const saludo = nombre ? `Hola ${nombre}, soy Sofia de Tesipedia.` : 'Hola! Soy Sofia de Tesipedia.';
 
   if (lead.estado_sofia === 'bienvenida') {
-    return nombre
-      ? `Hola ${nombre}, soy Sofia de Tesipedia. Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, en que tema necesitas apoyo?`
-      : `Hola! Soy Sofia de Tesipedia. Vi que nos contactaste pero no pudimos conversar. Me encantaria ayudarte con tu tesis. Cuentame, que necesitas?`;
+    return `${saludo} Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, que tipo de servicio necesitas? Ofrecemos redaccion completa, correccion de estilo, y asesoria.`;
   }
 
-  if (lead.estado_sofia === 'calificando') {
-    return nombre
-      ? `Hola ${nombre}, soy Sofia de Tesipedia. Estabamos platicando sobre tu proyecto de tesis. Para poder darte una cotizacion necesito algunos datos mas. Podemos continuar?`
-      : `Hola! Soy Sofia de Tesipedia. Nos quedamos a medias con los datos de tu proyecto. Para cotizarte necesito un poco mas de info. Seguimos?`;
+  if (lead.estado_sofia === 'cotizando') {
+    return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
   }
 
-  // cotizando
-  return nombre
-    ? `Hola ${nombre}, soy Sofia de Tesipedia. Ya casi tenemos lista tu cotizacion! Solo necesito confirmar unos detalles para enviartela. Podemos continuar?`
-    : `Hola! Soy Sofia de Tesipedia. Tu cotizacion esta casi lista, solo necesito confirmar unos detalles. Seguimos?`;
+  // calificando — detectar donde se quedo
+  if (!lead.tipo_servicio) {
+    return `${saludo} Estabamos platicando sobre tu proyecto. Para ayudarte mejor, cuentame: que tipo de servicio necesitas? Tenemos redaccion completa, correccion de estilo, o asesoria.`;
+  }
+
+  const servicioLabel = { servicio_1: 'redaccion completa', servicio_2: 'correccion de estilo', servicio_3: 'asesoria' }[lead.tipo_servicio] || lead.tipo_servicio;
+
+  if (!lead.tipo_proyecto) {
+    return `${saludo} Ya me comentaste que necesitas ${servicioLabel}. Ahora cuentame, que tipo de trabajo es? Por ejemplo: tesis, tesina, articulo cientifico, ensayo...`;
+  }
+
+  const proyectoLabel = lead.tipo_proyecto || 'tu proyecto';
+
+  if (!lead.nivel) {
+    return `${saludo} Veo que estas trabajando en ${proyectoLabel.toLowerCase() === 'otro' ? 'tu proyecto' : 'tu ' + proyectoLabel.toLowerCase()}. De que nivel academico es? Licenciatura, maestria o doctorado?`;
+  }
+
+  if (!lead.carrera) {
+    return `${saludo} Ya tengo que es ${proyectoLabel.toLowerCase()} de ${lead.nivel}. Que carrera o programa cursas?`;
+  }
+
+  if (!lead.tema) {
+    return `${saludo} Excelente, ${lead.carrera} de ${lead.nivel}. Y cual es el tema de tu ${proyectoLabel.toLowerCase()}?`;
+  }
+
+  if (!lead.paginas) {
+    return `${saludo} Tu tema sobre "${lead.tema}" suena muy interesante. Aproximadamente cuantas paginas necesitas?`;
+  }
+
+  if (!lead.fecha_entrega) {
+    return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel.toLowerCase()} de ${lead.paginas} paginas?`;
+  }
+
+  return `${saludo} Ya tengo todos tus datos para cotizarte. Voy a preparar tu cotizacion en un momento. Tienes alguna duda mientras tanto?`;
 }
 
 async function main() {
   console.log('Consultando leads de las ultimas 24h...\n');
 
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
 
   const resp = await fetch(url, {
     headers: {
@@ -77,9 +107,8 @@ async function main() {
 
   for (const lead of leads) {
     const cleanNumber = lead.wa_id.replace(/\D/g, '');
-    const msg = sofiaMessage(lead);
+    const msg = buildSofiaContextualMessage(lead);
 
-    // Mensaje de texto normal (como Sofia)
     const payload = {
       messaging_product: 'whatsapp',
       to: cleanNumber,
@@ -100,22 +129,18 @@ async function main() {
 
       if (waData.messages) {
         sent++;
-        console.log(`  OK: ${lead.nombre || lead.wa_id} (${lead.estado_sofia})`);
+        // Mostrar donde se quedo el lead
+        const missingField = !lead.tipo_servicio ? 'tipo_servicio' : !lead.tipo_proyecto ? 'tipo_proyecto' : !lead.nivel ? 'nivel' : !lead.carrera ? 'carrera' : !lead.tema ? 'tema' : !lead.paginas ? 'paginas' : !lead.fecha_entrega ? 'fecha_entrega' : 'completo';
+        console.log(`  OK: ${lead.nombre || lead.wa_id} (${lead.estado_sofia}) — falta: ${missingField}`);
 
-        // Actualizar historial del lead en Supabase
+        // Actualizar historial
         let historial = [];
         const raw = lead.historial_chat;
         if (Array.isArray(raw)) historial = raw;
         else if (typeof raw === 'string' && raw.trim()) {
           try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
         }
-
-        historial.push({
-          role: 'assistant',
-          content: msg,
-          timestamp: new Date().toISOString(),
-          isReengagement: true,
-        });
+        historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
 
         await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
           method: 'PATCH',
@@ -125,22 +150,17 @@ async function main() {
             'Content-Type': 'application/json',
             'Prefer': 'resolution=merge-duplicates',
           },
-          body: JSON.stringify({
-            historial_chat: JSON.stringify(historial),
-            updated_at: new Date().toISOString(),
-          }),
+          body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
         });
       } else {
         failed++;
-        const errMsg = waData.error?.message || JSON.stringify(waData).substring(0, 150);
-        console.log(`  FAIL: ${lead.nombre || lead.wa_id} (${lead.estado_sofia}) — ${errMsg}`);
+        console.log(`  FAIL: ${lead.nombre || lead.wa_id} — ${waData.error?.message || JSON.stringify(waData).substring(0, 150)}`);
       }
     } catch (e) {
       failed++;
       console.log(`  ERROR: ${lead.nombre || lead.wa_id} — ${e.message}`);
     }
 
-    // Pausa entre mensajes para no saturar la API
     await new Promise(r => setTimeout(r, 200));
   }
 
