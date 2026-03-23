@@ -5,6 +5,18 @@ import sendEmail from '../utils/emailSender.js';
 import crypto from 'crypto';
 import { SUPER_ADMIN_EMAIL } from '../middleware/authMiddleware.js';
 
+// Helper: opciones de cookie consistentes para toda la app
+const getCookieOptions = (maxAge = 365 * 24 * 60 * 60 * 1000) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge,
+    path: '/',
+  };
+};
+
 // 📌 Registrar un nuevo usuario
 const register = asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
@@ -20,13 +32,7 @@ const register = asyncHandler(async (req, res) => {
   if (user) {
     const token = generateToken(user);
 
-    res.cookie('jwt', token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 365 * 24 * 60 * 60 * 1000, // 1 año
-      path: '/',
-    });
+    res.cookie('jwt', token, getCookieOptions());
 
     res.status(201).json({
       _id: user._id,
@@ -123,10 +129,7 @@ const login = asyncHandler(async (req, res) => {
 
   const token = generateToken(user);
 
-  // Establecer la cookie de manera más explícita
-  res.setHeader('Set-Cookie', [
-    `jwt=${token}; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=${365 * 24 * 60 * 60}; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
-  ]);
+  res.cookie('jwt', token, getCookieOptions());
 
   res.status(200).json({
     _id: user._id,
@@ -139,9 +142,7 @@ const login = asyncHandler(async (req, res) => {
 
 // 🔒 Logout
 const logout = asyncHandler(async (req, res) => {
-  res.setHeader('Set-Cookie', [
-    `jwt=; Path=/; HttpOnly=false; Secure=${process.env.NODE_ENV === 'production'}; SameSite=None; Max-Age=0; Domain=${process.env.NODE_ENV === 'production' ? '.tesipedia.com' : 'localhost'}`
-  ]);
+  res.cookie('jwt', '', getCookieOptions(0));
 
   res.status(200).json({ message: 'Sesión cerrada exitosamente' });
 });

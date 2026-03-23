@@ -8,7 +8,12 @@ let io;
 const initializeSocket = (server) => {
     io = socketIO(server, {
         cors: {
-            origin: "*",
+            origin: [
+                'https://tesipedia.com',
+                'https://www.tesipedia.com',
+                'http://localhost:5173',
+                'http://localhost:3000'
+            ],
             methods: ["GET", "POST"],
             allowedHeaders: ["Authorization", "Content-Type"],
             credentials: true

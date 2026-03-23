@@ -132,14 +132,16 @@ export const getOrders = asyncHandler(async (req, res) => {
 // 📋 Obtener todos los pedidos (admin) con paginación
 export const getAllOrders = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 100);
   const skip = (page - 1) * limit;
+
+  const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   const keyword = req.query.keyword
     ? {
       $or: [
-        { title: { $regex: req.query.keyword, $options: 'i' } },
-        { status: { $regex: req.query.keyword, $options: 'i' } },
+        { title: { $regex: escapeRegex(req.query.keyword), $options: 'i' } },
+        { status: { $regex: escapeRegex(req.query.keyword), $options: 'i' } },
       ],
     }
     : {};
@@ -232,11 +234,13 @@ export const deleteOrder = asyncHandler(async (req, res) => {
 // 🔍 Buscar pedidos
 export const searchOrders = asyncHandler(async (req, res) => {
   const { query } = req.query;
+  const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   const orders = await Order.find({
     $or: [
-      { title: { $regex: query, $options: 'i' } },
-      { studyArea: { $regex: query, $options: 'i' } },
-      { status: { $regex: query, $options: 'i' } },
+      { title: { $regex: escapeRegex(query), $options: 'i' } },
+      { studyArea: { $regex: escapeRegex(query), $options: 'i' } },
+      { status: { $regex: escapeRegex(query), $options: 'i' } },
     ],
   }).populate('user', 'name email');
   res.json(orders);

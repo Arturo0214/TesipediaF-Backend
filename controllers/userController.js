@@ -21,7 +21,7 @@ export const getUserProfile = asyncHandler(async (req, res) => {
 
 // 🔄 Actualizar perfil
 export const updateUserProfile = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id);
+  const user = await User.findById(req.user._id).select('+password');
 
   if (!user) {
     res.status(404);
@@ -31,6 +31,18 @@ export const updateUserProfile = asyncHandler(async (req, res) => {
   user.name = req.body.name || user.name;
 
   if (req.body.password) {
+    // Require current password verification before allowing password change
+    if (!req.body.currentPassword) {
+      res.status(400);
+      throw new Error('La contraseña actual es requerida para cambiar la contraseña');
+    }
+
+    const isPasswordMatch = await user.matchPassword(req.body.currentPassword);
+    if (!isPasswordMatch) {
+      res.status(401);
+      throw new Error('La contraseña actual es incorrecta');
+    }
+
     user.password = req.body.password;
   }
 
@@ -126,10 +138,12 @@ export const deleteUser = asyncHandler(async (req, res) => {
 // 🔍 Buscar usuarios
 export const searchUsers = asyncHandler(async (req, res) => {
   const { query } = req.query;
+  const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   const users = await User.find({
     $or: [
-      { name: { $regex: query, $options: 'i' } },
-      { email: { $regex: query, $options: 'i' } },
+      { name: { $regex: escapeRegex(query), $options: 'i' } },
+      { email: { $regex: escapeRegex(query), $options: 'i' } },
     ],
   }).select('-password');
   res.json(users);
