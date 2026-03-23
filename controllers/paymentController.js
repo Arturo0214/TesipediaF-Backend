@@ -948,7 +948,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       dueDate: q.fechaEntrega || null,
       tipoServicio: q.tipoServicio || '',
       carrera: q.carrera || '',
-      vendedor: '',
+      vendedor: q.vendedor || '',
     });
   }
 
@@ -969,7 +969,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       commission: Math.round(amount * 0.15),
       date: g.createdAt,
       dueDate: g.quoteId?.dueDate || null,
-      vendedor: '',
+      vendedor: g.vendedor || '',
     });
   }
 
