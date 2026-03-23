@@ -11,6 +11,7 @@ import {
   sendMessage,
   sendTemplate,
   sendReengagement,
+  claimLead,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -30,6 +31,9 @@ router.patch('/leads/:waId/modo-humano', toggleModoHumano);
 
 // Actualizar estado del lead
 router.patch('/leads/:waId/estado', updateLeadEstado);
+
+// Reclamar un lead (asignar dueño, solo si no tiene)
+router.patch('/leads/:waId/claim', claimLead);
 
 // Enviar mensaje con soporte para archivo adjunto
 router.post('/send', upload.single('file'), sendMessage);

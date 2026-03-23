@@ -244,18 +244,20 @@ export const sendMessage = asyncHandler(async (req, res) => {
   }
 
   // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
-  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre,updated_at&limit=1`;
+  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre,updated_at,atendido_por&limit=1`;
   const getResponsePre = await fetch(getUrlPre, { headers: supabaseHeaders() });
   let historialPre = [];
   let leadExistsPre = false;
   let leadNombre = '';
   let leadUpdatedAt = null;
+  let leadAtendidoPor = null;
   if (getResponsePre.ok) {
     const leadDataPre = await getResponsePre.json();
     if (leadDataPre.length > 0) {
       leadExistsPre = true;
       leadNombre = leadDataPre[0]?.nombre || '';
       leadUpdatedAt = leadDataPre[0]?.updated_at || null;
+      leadAtendidoPor = leadDataPre[0]?.atendido_por || null;
       if (leadDataPre[0]?.historial_chat) {
         const raw = leadDataPre[0].historial_chat;
         if (Array.isArray(raw)) {
@@ -370,16 +372,20 @@ export const sendMessage = asyncHandler(async (req, res) => {
     };
 
     const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+    const patchBody = {
+      historial_chat: JSON.stringify(historial),
+      modo_humano: true,
+      mensaje_pendiente: JSON.stringify(mensajePendiente),
+      updated_at: new Date().toISOString(),
+    };
+    // Solo asignar dueño si el lead no tiene uno
+    if (!leadAtendidoPor) {
+      patchBody.atendido_por = adminName.toLowerCase();
+    }
     await fetch(patchUrl, {
       method: 'PATCH',
       headers: supabaseHeaders(),
-      body: JSON.stringify({
-        historial_chat: JSON.stringify(historial),
-        atendido_por: adminName.toLowerCase(),
-        modo_humano: true,
-        mensaje_pendiente: JSON.stringify(mensajePendiente),
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify(patchBody),
     });
 
     return res.json({
@@ -470,16 +476,20 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   // 4. Guardar historial actualizado en Supabase + quién atendió
   //    Auto-activar modo_humano para detener a Sofía bot cuando un admin envía mensaje
+  //    Solo asignar dueño si el lead no tiene uno (primer agente = dueño permanente)
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+  const patchBody = {
+    historial_chat: JSON.stringify(historial),
+    modo_humano: true,
+    updated_at: new Date().toISOString(),
+  };
+  if (!leadAtendidoPor) {
+    patchBody.atendido_por = adminName.toLowerCase();
+  }
   await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
-    body: JSON.stringify({
-      historial_chat: JSON.stringify(historial),
-      atendido_por: adminName.toLowerCase(),
-      modo_humano: true,
-      updated_at: new Date().toISOString(),
-    }),
+    body: JSON.stringify(patchBody),
   });
 
   res.json({
@@ -505,15 +515,17 @@ export const sendTemplate = asyncHandler(async (req, res) => {
   }
 
   // 1. Obtener lead para nombre y historial
-  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,nombre&limit=1`;
+  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,nombre,atendido_por&limit=1`;
   const getResponse = await fetch(getUrl, { headers: supabaseHeaders() });
   let historial = [];
   let leadNombre = '';
+  let templateLeadAtendidoPor = null;
 
   if (getResponse.ok) {
     const leadData = await getResponse.json();
     if (leadData.length > 0) {
       leadNombre = leadData[0]?.nombre || '';
+      templateLeadAtendidoPor = leadData[0]?.atendido_por || null;
       const raw = leadData[0]?.historial_chat;
       if (Array.isArray(raw)) {
         historial = raw;
@@ -572,23 +584,87 @@ export const sendTemplate = asyncHandler(async (req, res) => {
   });
 
   // 4. Guardar historial actualizado + auto-activar modo_humano
+  //    Solo asignar dueño si el lead no tiene uno
   const adminName = req.user?.name || 'Admin';
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+  const templatePatchBody = {
+    historial_chat: JSON.stringify(historial),
+    modo_humano: true,
+    updated_at: new Date().toISOString(),
+  };
+  if (!templateLeadAtendidoPor) {
+    templatePatchBody.atendido_por = adminName.toLowerCase();
+  }
   await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
-    body: JSON.stringify({
-      historial_chat: JSON.stringify(historial),
-      atendido_por: adminName.toLowerCase(),
-      modo_humano: true,
-      updated_at: new Date().toISOString(),
-    }),
+    body: JSON.stringify(templatePatchBody),
   });
 
   res.json({
     success: true,
     message_id: waResult.messages?.[0]?.id || null,
     templateSent: true,
+  });
+});
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/claim
+ * Reclamar un lead — solo si no tiene dueño.
+ * Si ya tiene dueño, devuelve error con el nombre del dueño actual.
+ */
+export const claimLead = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { atendido_por } = req.body;
+
+  if (!waId || !atendido_por) {
+    res.status(400);
+    throw new Error('wa_id y atendido_por son requeridos');
+  }
+
+  // 1. Verificar dueño actual
+  const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=atendido_por&limit=1`;
+  const getResp = await fetch(getUrl, { headers: supabaseHeaders() });
+  if (!getResp.ok) {
+    res.status(500);
+    throw new Error('Error al consultar lead');
+  }
+  const leadData = await getResp.json();
+  if (!leadData.length) {
+    res.status(404);
+    throw new Error('Lead no encontrado');
+  }
+
+  const currentOwner = leadData[0]?.atendido_por;
+  if (currentOwner && currentOwner.trim()) {
+    // Ya tiene dueño — no reasignar
+    return res.json({
+      success: false,
+      claimed: false,
+      current_owner: currentOwner,
+      message: `Lead ya pertenece a ${currentOwner}`,
+    });
+  }
+
+  // 2. Asignar dueño
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const patchResp = await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      atendido_por: atendido_por.toLowerCase(),
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!patchResp.ok) {
+    res.status(500);
+    throw new Error('Error al reclamar lead');
+  }
+
+  res.json({
+    success: true,
+    claimed: true,
+    atendido_por: atendido_por.toLowerCase(),
   });
 });
 
