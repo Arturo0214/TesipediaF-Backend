@@ -127,7 +127,8 @@ const supabaseHeaders = () => ({
  * El historial se carga individualmente al seleccionar un lead.
  */
 export const getLeads = asyncHandler(async (req, res) => {
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=id,wa_id,nombre,email,telefono,estado_sofia,modo_humano,atendido_por,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,created_at,updated_at,mensaje_pendiente&order=updated_at.desc&limit=100`;
+  // Usar select=* y filtrar historial_chat en JS — más robusto que enumerar columnas
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=*&order=updated_at.desc&limit=100`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
@@ -135,7 +136,9 @@ export const getLeads = asyncHandler(async (req, res) => {
     throw new Error(`Error de Supabase: ${errorText}`);
   }
   const data = await response.json();
-  res.json(data);
+  // Eliminar historial_chat de cada lead para reducir payload al frontend
+  const cleaned = data.map(({ historial_chat, ...rest }) => rest);
+  res.json(cleaned);
 });
 
 /**
