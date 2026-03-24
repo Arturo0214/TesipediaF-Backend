@@ -50,7 +50,7 @@ function buildSofiaContextualMessage(lead) {
   const proyectoLabel = lead.tipo_proyecto || 'tu proyecto';
 
   if (!lead.nivel) {
-    return `${saludo} Veo que estas trabajando en ${proyectoLabel.toLowerCase() === 'otro' ? 'tu proyecto' : 'tu ' + proyectoLabel.toLowerCase()}. De que nivel academico es? Licenciatura, maestria o doctorado?`;
+    return `${saludo} Veo que estas trabajando en ${proyectoLabel.toLowerCase() === 'otro' ? 'tu proyecto' : 'tu ' + proyectoLabel.toLowerCase()}. De que nivel academico es? Preparatoria, licenciatura, maestria, especialidad, diplomado o doctorado?`;
   }
 
   if (!lead.carrera) {

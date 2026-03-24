@@ -27,7 +27,7 @@ const orderSchema = new mongoose.Schema(
     },
     educationLevel: {
       type: String,
-      enum: ['Licenciatura', 'Maestría', 'Doctorado'],
+      enum: ['Preparatoria', 'Licenciatura', 'Maestría', 'Especialidad', 'Diplomado', 'Doctorado'],
       required: true,
     },
     pages: {

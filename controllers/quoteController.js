@@ -1035,51 +1035,58 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
 
   // Si es Artículo Científico, usar precios especiales
   if (isArticuloCientifico) {
-    // Precios especiales para artículos científicos
-    // Basados en: $12,500 final (con desc. 10%) ÷ 35 págs = $400/pág base
+    // Precios especiales para artículos científicos (ACTUALIZADOS 50%)
     switch (educationLevel.toLowerCase()) {
+      case 'preparatoria':
+        pricePerPage = isSaludOrMath ? 150 : 135;
+        break;
       case 'licenciatura':
-        pricePerPage = isSaludOrMath ? 435 : 400;
+        pricePerPage = isSaludOrMath ? 190 : 175;
         break;
       case 'maestría':
       case 'maestria':
-        pricePerPage = isSaludOrMath ? 510 : 470;
+      case 'diplomado':
+        pricePerPage = isSaludOrMath ? 225 : 205;
         break;
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = isSaludOrMath ? 510 : 470; // Mismo precio que maestría
+        pricePerPage = isSaludOrMath ? 225 : 205; // Mismo precio que maestría
         break;
       case 'doctorado':
-        pricePerPage = isSaludOrMath ? 590 : 540;
+        pricePerPage = isSaludOrMath ? 260 : 240;
         break;
       case 'doctorado / área de la salud':
-        pricePerPage = 590;
+        pricePerPage = 260;
         break;
       default:
         res.status(400);
         throw new Error('Nivel académico no válido');
     }
   } else {
-    // Precios normales para Tesis, Tesina, y otros trabajos
+    // Precios normales para Tesis, Tesina, y otros trabajos (ACTUALIZADOS 50%)
     switch (educationLevel.toLowerCase()) {
+      case 'preparatoria':
+        pricePerPage = isSaludOrMath ? 100 : 85;
+        break;
       case 'licenciatura':
-        pricePerPage = isSaludOrMath ? 250 : 220;
+        pricePerPage = isSaludOrMath ? 125 : 110;
         break;
       case 'maestría':
       case 'maestria':
-        pricePerPage = isSaludOrMath ? 300 : 270;
+      case 'diplomado':
+        pricePerPage = isSaludOrMath ? 150 : 135;
         break;
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = isSaludOrMath ? 300 : 270; // Mismo precio que maestría
+        pricePerPage = isSaludOrMath ? 150 : 135; // Mismo precio que maestría
         break;
       case 'doctorado':
-        pricePerPage = isSaludOrMath ? 350 : 320;
+        pricePerPage = isSaludOrMath ? 175 : 160;
         break;
       case 'doctorado / área de la salud':
-        pricePerPage = 350;
+        pricePerPage = 175;
         break;
       default:
         res.status(400);

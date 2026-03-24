@@ -5,36 +5,46 @@ const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, pa
   const isArticulo = taskType && taskType.toLowerCase().includes('artículo');
 
   // Determinar precio por página según tipo, área y nivel
+  // PRECIOS ACTUALIZADOS (50% de los anteriores)
   if (isArticulo) {
     // Precios especiales para Artículos Científicos
     switch (nivelEstudios) {
+      case 'Preparatoria':
+        precioPorPagina = isSaludOrMath ? 150 : 135;
+        break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 380 : 350;
+        precioPorPagina = isSaludOrMath ? 190 : 175;
         break;
       case 'Maestría':
-        precioPorPagina = isSaludOrMath ? 450 : 410;
+      case 'Especialidad':
+      case 'Diplomado':
+        precioPorPagina = isSaludOrMath ? 225 : 205;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 520 : 480;
+        precioPorPagina = isSaludOrMath ? 260 : 240;
         break;
-      default: // Especialidad y otros
-        precioPorPagina = 450;
+      default:
+        precioPorPagina = 225;
     }
   } else {
     // Precios estándar para Tesis, Tesinas, etc.
-    // Estandarizando lógica con quoteController
     switch (nivelEstudios) {
+      case 'Preparatoria':
+        precioPorPagina = isSaludOrMath ? 100 : 85;
+        break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 250 : 220;
+        precioPorPagina = isSaludOrMath ? 125 : 110;
         break;
       case 'Maestría':
-        precioPorPagina = isSaludOrMath ? 300 : 270;
+      case 'Especialidad':
+      case 'Diplomado':
+        precioPorPagina = isSaludOrMath ? 150 : 135;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 350 : 320;
+        precioPorPagina = isSaludOrMath ? 175 : 160;
         break;
-      default: // Especialidad y otros
-        precioPorPagina = 300;
+      default:
+        precioPorPagina = 150;
     }
   }
 
