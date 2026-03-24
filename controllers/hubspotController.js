@@ -35,32 +35,69 @@ const hubspotFetch = async (endpoint, params = {}) => {
   return data;
 };
 
+// Helper: paginar automáticamente para traer TODOS los registros de HubSpot
+const hubspotFetchAll = async (endpoint, params = {}) => {
+  let allResults = [];
+  let after = undefined;
+
+  do {
+    const pageParams = { ...params, limit: 100 };
+    if (after) pageParams.after = after;
+
+    const data = await hubspotFetch(endpoint, pageParams);
+    allResults = allResults.concat(data.results || []);
+    after = data.paging?.next?.after || null;
+  } while (after);
+
+  console.log(`[HubSpot] ${endpoint} => TOTAL: ${allResults.length} results (all pages)`);
+  return allResults;
+};
+
 // @desc    Get HubSpot deals
 // @route   GET /api/v1/hubspot/deals
 // @access  Admin
 export const getDeals = asyncHandler(async (req, res) => {
-  const { limit = 50, after } = req.query;
-  const params = {
-    limit,
+  const results = await hubspotFetchAll('/crm/v3/objects/deals', {
     properties: ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline', 'createdate', 'hs_lastmodifieddate', 'hubspot_owner_id'],
-  };
-  if (after) params.after = after;
-  const data = await hubspotFetch('/crm/v3/objects/deals', params);
-  res.json({ results: data.results || [], paging: data.paging || null, total: data.total || data.results?.length || 0 });
+  });
+  res.json({ results, paging: null, total: results.length });
 });
+
+// Prioridad de lead status: menor número = mayor prioridad
+const LEAD_STATUS_PRIORITY = {
+  'calificando': 1,
+  'cotización enviada': 2,
+  'cotizacion enviada': 2,
+  'negociación': 3,
+  'negociacion': 3,
+  'en seguimiento': 4,
+  'nuevo': 5,
+  'bienvenida': 6,
+  '': 7,
+};
+
+const getLeadPriority = (contact) => {
+  const status = (contact.properties?.hs_lead_status || '').toLowerCase().trim();
+  return LEAD_STATUS_PRIORITY[status] ?? 6;
+};
 
 // @desc    Get HubSpot contacts
 // @route   GET /api/v1/hubspot/contacts
 // @access  Admin
 export const getContacts = asyncHandler(async (req, res) => {
-  const { limit = 100, after } = req.query;
-  const params = {
-    limit,
+  const results = await hubspotFetchAll('/crm/v3/objects/contacts', {
     properties: ['firstname', 'lastname', 'email', 'phone', 'createdate', 'hs_lead_status', 'lifecyclestage', 'company'],
-  };
-  if (after) params.after = after;
-  const data = await hubspotFetch('/crm/v3/objects/contacts', params);
-  res.json({ results: data.results || [], paging: data.paging || null, total: data.total || data.results?.length || 0 });
+  });
+
+  // Ordenar: priorizar "calificando" y "cotización enviada" sobre "bienvenida"
+  results.sort((a, b) => {
+    const priorityDiff = getLeadPriority(a) - getLeadPriority(b);
+    if (priorityDiff !== 0) return priorityDiff;
+    // Mismo status: más reciente primero
+    return new Date(b.properties?.createdate || 0) - new Date(a.properties?.createdate || 0);
+  });
+
+  res.json({ results, paging: null, total: results.length });
 });
 
 // @desc    Get HubSpot deal pipelines
@@ -76,19 +113,17 @@ export const getPipelines = asyncHandler(async (req, res) => {
 // @access  Admin
 export const getSummary = asyncHandler(async (req, res) => {
   const [dealsResult, contactsResult, pipelinesResult] = await Promise.allSettled([
-    hubspotFetch('/crm/v3/objects/deals', {
-      limit: 100,
+    hubspotFetchAll('/crm/v3/objects/deals', {
       properties: ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline', 'createdate', 'hs_lastmodifieddate'],
     }),
-    hubspotFetch('/crm/v3/objects/contacts', {
-      limit: 100,
+    hubspotFetchAll('/crm/v3/objects/contacts', {
       properties: ['firstname', 'lastname', 'email', 'phone', 'createdate', 'lifecyclestage', 'hs_lead_status', 'company', 'hs_lastmodifieddate'],
     }),
     hubspotFetch('/crm/v3/pipelines/deals'),
   ]);
 
-  const deals = dealsResult.status === 'fulfilled' ? (dealsResult.value.results || []) : [];
-  const contacts = contactsResult.status === 'fulfilled' ? (contactsResult.value.results || []) : [];
+  const deals = dealsResult.status === 'fulfilled' ? dealsResult.value : [];
+  const contacts = contactsResult.status === 'fulfilled' ? contactsResult.value : [];
   const pipelines = pipelinesResult.status === 'fulfilled' ? (pipelinesResult.value.results || []) : [];
 
   if (dealsResult.status === 'rejected') console.error('[HubSpot] Deals failed:', dealsResult.reason?.message);
@@ -254,8 +289,14 @@ export const getSummary = asyncHandler(async (req, res) => {
     deals: monthlyDeals[key] || 0,
   }));
 
-  // ── Full contact/deal arrays for table views ──
-  const allContacts = contacts.map(c => ({
+  // ── Full contact/deal arrays for table views (priorizados) ──
+  const sortedContacts = [...contacts].sort((a, b) => {
+    const priorityDiff = getLeadPriority(a) - getLeadPriority(b);
+    if (priorityDiff !== 0) return priorityDiff;
+    return new Date(b.properties?.createdate || 0) - new Date(a.properties?.createdate || 0);
+  });
+
+  const allContacts = sortedContacts.map(c => ({
     id: c.id,
     properties: c.properties || {},
   }));
