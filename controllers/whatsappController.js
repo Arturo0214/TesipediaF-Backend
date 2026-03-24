@@ -123,10 +123,11 @@ const supabaseHeaders = () => ({
 
 /**
  * GET /api/v1/whatsapp/leads
- * Obtener todos los leads con conversaciones
+ * Obtener todos los leads SIN historial_chat para reducir egress de Supabase.
+ * El historial se carga individualmente al seleccionar un lead.
  */
 export const getLeads = asyncHandler(async (req, res) => {
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=*&order=updated_at.desc`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=id,wa_id,nombre,email,telefono,estado_sofia,modo_humano,atendido_por,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,created_at,updated_at,mensaje_pendiente&order=updated_at.desc&limit=100`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
