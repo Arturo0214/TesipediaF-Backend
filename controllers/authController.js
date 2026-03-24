@@ -14,6 +14,7 @@ const getCookieOptions = (maxAge = 365 * 24 * 60 * 60 * 1000) => {
     sameSite: isProduction ? 'none' : 'lax',
     maxAge,
     path: '/',
+    ...(isProduction && { domain: '.tesipedia.com' }),
   };
 };
 

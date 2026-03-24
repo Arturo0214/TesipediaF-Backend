@@ -70,7 +70,8 @@ app.use(setCookie);
 const allowedOrigins = [
   'http://localhost:5173',
   'https://tesipedia.com',
-  'https://www.tesipedia.com'
+  'https://www.tesipedia.com',
+  'https://api.tesipedia.com'
 ];
 
 app.use(cors({

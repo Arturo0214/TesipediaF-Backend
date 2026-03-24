@@ -4,7 +4,11 @@ import jwt from 'jsonwebtoken';
 export const configureSocket = (server) => {
     const io = new Server(server, {
         cors: {
-            origin: process.env.CLIENT_URL || 'http://localhost:5173',
+            origin: [
+                'http://localhost:5173',
+                'https://tesipedia.com',
+                'https://www.tesipedia.com',
+            ],
             credentials: true,
         },
         pingTimeout: 60000, // 1 minute
