@@ -130,6 +130,10 @@ const generatedQuoteSchema = new mongoose.Schema(
             ref: 'User',
             default: null,
         },
+        vendedor: {
+            type: String,
+            default: '',
+        },
         status: {
             type: String,
             enum: ['pending', 'approved', 'rejected', 'paid', 'cancelled'],

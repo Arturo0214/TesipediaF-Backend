@@ -70,6 +70,10 @@ const guestPaymentSchema = new mongoose.Schema({
     accountCreatedAt: {
         type: Date,
         default: null
+    },
+    vendedor: {
+        type: String,
+        default: ''
     }
 }, { timestamps: true });
 
