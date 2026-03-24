@@ -128,7 +128,8 @@ const supabaseHeaders = () => ({
  */
 export const getLeads = asyncHandler(async (req, res) => {
   // Usar select=* y filtrar historial_chat en JS — más robusto que enumerar columnas
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=*&order=updated_at.desc&limit=100`;
+  // Sin limit: traer TODOS los leads de Supabase
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=*&order=updated_at.desc`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
