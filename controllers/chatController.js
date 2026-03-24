@@ -46,7 +46,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     senderName = req.user.name;
     console.log('👤 Usuario autenticado:', { sender, senderName, role: req.user.role });
 
-    if (req.user.role === 'admin') {
+    if (req.user.role === 'admin' || req.user.role === 'superadmin') {
       if (!receiver) throw new Error('Se requiere un ID de receptor');
 
       const isValidMongoId = mongoose.Types.ObjectId.isValid(receiver);
@@ -145,6 +145,28 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   await savedMessage.populate('sender', 'name role');
   await savedMessage.populate('receiver', 'name role');
+
+  // Emitir evento socket para que los clientes conectados reciban el mensaje en tiempo real
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const msgPayload = savedMessage.toObject();
+      if (isPublic) {
+        // Mensaje público → emitir al admin y a la sala pública del usuario
+        io.to(`public:${sender}`).emit('message', msgPayload);
+        io.to(`user:${finalReceiver.toString()}`).emit('message', msgPayload);
+        // También emitir a todos los admins conectados (broadcast)
+        io.emit('newPublicMessage', msgPayload);
+      } else {
+        // Mensaje privado → emitir a ambos participantes
+        io.to(`user:${sender.toString()}`).emit('message', msgPayload);
+        io.to(`user:${finalReceiver.toString()}`).emit('message', msgPayload);
+      }
+      console.log('📡 Mensaje emitido via socket a destinatarios');
+    }
+  } catch (socketErr) {
+    console.warn('⚠️ Error emitiendo socket (no crítico):', socketErr.message);
+  }
 
   res.status(201).json(savedMessage);
 });

@@ -46,7 +46,17 @@ export const configureSocket = (server) => {
             }
 
             // Para usuarios autenticados, verificar el token
-            const token = socket.handshake.auth.token;
+            // Intentar obtener token de auth, o de cookies del handshake (httpOnly)
+            let token = socket.handshake.auth.token;
+            if (!token) {
+                // Extraer JWT de la cookie en los headers del handshake
+                const cookieHeader = socket.handshake.headers?.cookie || '';
+                const jwtMatch = cookieHeader.match(/(?:^|;\s*)jwt=([^;]*)/);
+                if (jwtMatch) {
+                    token = decodeURIComponent(jwtMatch[1]);
+                    console.log('🍪 Token extraído de cookie httpOnly para socket');
+                }
+            }
             if (!token) {
                 console.error('❌ Token no proporcionado para socket');
                 return next(new Error('Token no proporcionado'));
