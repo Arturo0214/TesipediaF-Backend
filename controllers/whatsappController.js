@@ -144,7 +144,7 @@ export const getLeads = asyncHandler(async (req, res) => {
  */
 export const getLeadByWaId = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&limit=1`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=id,wa_id,nombre,email,telefono,estado_sofia,modo_humano,atendido_por,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,created_at,updated_at,mensaje_pendiente,historial_chat&limit=1`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(response.status);
@@ -184,7 +184,7 @@ export const toggleModoHumano = asyncHandler(async (req, res) => {
  * Devuelve un mapa de leads con estado_sofia para cruzar con HubSpot
  */
 export const getLeadsStatus = asyncHandler(async (req, res) => {
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,nombre,estado_sofia,updated_at`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,nombre,estado_sofia,updated_at&order=updated_at.desc&limit=200`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
@@ -741,7 +741,8 @@ export const sendReengagement = asyncHandler(async (req, res) => {
 
   // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
+  // Optimizado: NO traer historial_chat en la query masiva — se obtiene individualmente al enviar
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(500);
@@ -781,12 +782,16 @@ export const sendReengagement = asyncHandler(async (req, res) => {
       const success = !!waData.messages;
 
       if (success) {
-        // Actualizar historial del lead
+        // Obtener historial individualmente SOLO si el envío fue exitoso
         let historial = [];
-        const raw = lead.historial_chat;
-        if (Array.isArray(raw)) historial = raw;
-        else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+        if (histResp.ok) {
+          const histData = await histResp.json();
+          const raw = histData[0]?.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
         }
 
         historial.push({
@@ -847,7 +852,8 @@ async function runAutoReminder() {
 
   try {
     // Leads que NO se han actualizado en los ultimos N minutos
-    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${autoReminder.maxPerRun}`;
+    // Optimizado: NO traer historial_chat en query masiva — se obtiene individualmente
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${autoReminder.maxPerRun}`;
     const resp = await fetch(url, { headers: supabaseHeaders() });
     if (!resp.ok) {
       console.error('Auto-reminder: error Supabase', resp.status);
@@ -882,12 +888,16 @@ async function runAutoReminder() {
         if (waData.messages) {
           sent++;
 
-          // Actualizar historial
+          // Obtener historial individualmente SOLO si el envío fue exitoso
           let historial = [];
-          const raw = lead.historial_chat;
-          if (Array.isArray(raw)) historial = raw;
-          else if (typeof raw === 'string' && raw.trim()) {
-            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+          if (histResp.ok) {
+            const histData = await histResp.json();
+            const raw = histData[0]?.historial_chat;
+            if (Array.isArray(raw)) historial = raw;
+            else if (typeof raw === 'string' && raw.trim()) {
+              try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+            }
           }
           historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
 

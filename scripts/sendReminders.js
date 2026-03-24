@@ -76,7 +76,8 @@ async function main() {
   console.log('Consultando leads de las ultimas 24h...\n');
 
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,historial_chat,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
+  // Optimizado: NO traer historial_chat en query masiva — se obtiene individualmente al actualizar
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
 
   const resp = await fetch(url, {
     headers: {
@@ -133,12 +134,18 @@ async function main() {
         const missingField = !lead.tipo_servicio ? 'tipo_servicio' : !lead.tipo_proyecto ? 'tipo_proyecto' : !lead.nivel ? 'nivel' : !lead.carrera ? 'carrera' : !lead.tema ? 'tema' : !lead.paginas ? 'paginas' : !lead.fecha_entrega ? 'fecha_entrega' : 'completo';
         console.log(`  OK: ${lead.nombre || lead.wa_id} (${lead.estado_sofia}) — falta: ${missingField}`);
 
-        // Actualizar historial
+        // Obtener historial individualmente SOLO si el envío fue exitoso
         let historial = [];
-        const raw = lead.historial_chat;
-        if (Array.isArray(raw)) historial = raw;
-        else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, {
+          headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
+        });
+        if (histResp.ok) {
+          const histData = await histResp.json();
+          const raw = histData[0]?.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
         }
         historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
 
