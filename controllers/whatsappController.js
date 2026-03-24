@@ -136,8 +136,24 @@ export const getLeads = asyncHandler(async (req, res) => {
     throw new Error(`Error de Supabase: ${errorText}`);
   }
   const data = await response.json();
-  // Eliminar historial_chat de cada lead para reducir payload al frontend
-  const cleaned = data.map(({ historial_chat, ...rest }) => rest);
+  // Reducir historial_chat a los últimos 3 mensajes para el listado (preview + unread)
+  // El historial completo se obtiene vía getLeadByWaId al seleccionar un lead
+  const cleaned = data.map(({ historial_chat, ...rest }) => {
+    let trimmedChat = null;
+    if (historial_chat) {
+      try {
+        const parsed = typeof historial_chat === 'string' ? JSON.parse(historial_chat) : historial_chat;
+        if (Array.isArray(parsed)) {
+          trimmedChat = JSON.stringify(parsed.slice(-3));
+        } else {
+          trimmedChat = historial_chat; // formato inesperado, mandar tal cual
+        }
+      } catch {
+        trimmedChat = null; // JSON inválido, omitir
+      }
+    }
+    return { ...rest, historial_chat: trimmedChat };
+  });
   res.json(cleaned);
 });
 
@@ -147,7 +163,7 @@ export const getLeads = asyncHandler(async (req, res) => {
  */
 export const getLeadByWaId = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=id,wa_id,nombre,email,telefono,estado_sofia,modo_humano,atendido_por,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,created_at,updated_at,mensaje_pendiente,historial_chat&limit=1`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=*&limit=1`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(response.status);
