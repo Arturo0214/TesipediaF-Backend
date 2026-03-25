@@ -1231,6 +1231,10 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   // Update status if provided
   if (newStatus) {
     quote.status = newStatus;
+    // Registrar la fecha exacta en que se marcó como pagada (no depender de updatedAt)
+    if (newStatus === 'paid' && previousStatus !== 'paid') {
+      quote.paidAt = new Date();
+    }
   }
 
   const updatedQuote = await quote.save();

@@ -678,10 +678,13 @@ export const assignVendedor = asyncHandler(async (req, res) => {
 
   if (source === 'sofia') {
     const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
-    const doc = await GeneratedQuote.findById(id);
-    if (doc) {
-      doc.vendedor = vendedor;
-      await doc.save();
+    // Usar updateOne con timestamps:false para no cambiar updatedAt (afecta fechas de pago)
+    const result = await GeneratedQuote.updateOne(
+      { _id: id },
+      { $set: { vendedor } },
+      { timestamps: false }
+    );
+    if (result.matchedCount > 0) {
       updated = true;
     }
   } else if (source === 'guest') {
@@ -833,6 +836,24 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
     .sort({ updatedAt: -1 });
 
+  // Backfill paidAt para cotizaciones pagadas que no lo tienen (sin tocar updatedAt)
+  const quotesNeedingBackfill = paidQuotes.filter(q => !q.paidAt);
+  if (quotesNeedingBackfill.length > 0) {
+    for (const q of quotesNeedingBackfill) {
+      // Intentar buscar el Payment vinculado (tiene la fecha real de pago)
+      const linkedPayment = await Payment.findOne({
+        notes: { $regex: q._id.toString() }
+      }).select('paymentDate createdAt').lean();
+      const bestDate = linkedPayment?.paymentDate || linkedPayment?.createdAt || q.updatedAt;
+      await GeneratedQuote.updateOne(
+        { _id: q._id },
+        { $set: { paidAt: bestDate } },
+        { timestamps: false } // No modificar updatedAt
+      );
+      q.paidAt = bestDate; // Actualizar en memoria para uso inmediato
+    }
+  }
+
   // 3. Get all completed GuestPayments
   const guestPayments = await GuestPayment.find({ paymentStatus: 'completed' })
     .populate('quoteId', 'taskTitle taskType estimatedPrice dueDate')
@@ -931,6 +952,8 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   for (const q of paidQuotes) {
     const amount = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
     const esquema = normalizeEsquema(q.esquemaPago);
+    // Usar paidAt (fecha exacta de pago) en vez de updatedAt (que cambia con cada edición)
+    const payDate = q.paidAt || q.updatedAt;
     unified.push({
       _id: q._id,
       source: 'sofia',
@@ -942,9 +965,9 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       status: 'paid',
       esquema,
       esquemaRaw: q.esquemaPago || '',
-      schedule: generateSchedule(amount, esquema, q.updatedAt),
+      schedule: generateSchedule(amount, esquema, payDate),
       commission: Math.round(amount * 0.15),
-      date: q.updatedAt,
+      date: payDate,
       dueDate: q.fechaEntrega || null,
       tipoServicio: q.tipoServicio || '',
       carrera: q.carrera || '',

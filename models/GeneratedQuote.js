@@ -134,6 +134,10 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: String,
             default: '',
         },
+        paidAt: {
+            type: Date,
+            default: null,
+        },
         status: {
             type: String,
             enum: ['pending', 'approved', 'rejected', 'paid', 'cancelled'],
