@@ -1,51 +1,57 @@
-const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, paymentMethod = 'card', taskType = '') => {
+const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, paymentMethod = 'card', taskType = '', modalidadCaptacion = 'tesipedia') => {
   let precioPorPagina = 0;
   const areaLower = areaEstudios.toLowerCase();
   const isSaludOrMath = areaLower.includes('salud') || areaLower.includes('matemáticas') || areaLower.includes('área 2');
   const isArticulo = taskType && taskType.toLowerCase().includes('artículo');
 
   // Determinar precio por página según tipo, área y nivel
-  // PRECIOS ACTUALIZADOS (50% de los anteriores)
+  // PRECIOS BASE AL 100% (Modalidad Tesipedia)
   if (isArticulo) {
     // Precios especiales para Artículos Científicos
     switch (nivelEstudios) {
       case 'Preparatoria':
-        precioPorPagina = isSaludOrMath ? 150 : 135;
+        precioPorPagina = isSaludOrMath ? 300 : 270;
         break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 190 : 175;
+        precioPorPagina = isSaludOrMath ? 380 : 350;
         break;
       case 'Maestría':
       case 'Especialidad':
       case 'Diplomado':
-        precioPorPagina = isSaludOrMath ? 225 : 205;
+        precioPorPagina = isSaludOrMath ? 450 : 410;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 260 : 240;
+        precioPorPagina = isSaludOrMath ? 520 : 480;
         break;
       default:
-        precioPorPagina = 225;
+        precioPorPagina = 450;
     }
   } else {
     // Precios estándar para Tesis, Tesinas, etc.
     switch (nivelEstudios) {
       case 'Preparatoria':
-        precioPorPagina = isSaludOrMath ? 100 : 85;
+        precioPorPagina = isSaludOrMath ? 200 : 170;
         break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 125 : 110;
+        precioPorPagina = isSaludOrMath ? 250 : 220;
         break;
       case 'Maestría':
       case 'Especialidad':
       case 'Diplomado':
-        precioPorPagina = isSaludOrMath ? 150 : 135;
+        precioPorPagina = isSaludOrMath ? 300 : 270;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 175 : 160;
+        precioPorPagina = isSaludOrMath ? 350 : 320;
         break;
       default:
-        precioPorPagina = 150;
+        precioPorPagina = 300;
     }
+  }
+
+  // Aplicar descuento por modalidad de captación
+  // Tesipedia (web/orgánico) = 100% | ManyChat (ads/redes) = 50%
+  if (modalidadCaptacion === 'manychat') {
+    precioPorPagina = precioPorPagina * 0.5;
   }
 
   // Calcular precio base

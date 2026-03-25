@@ -990,7 +990,7 @@ const detectStudyAreaFromCareer = (career) => {
 
 // �💰 Calcular precio para cotización de venta
 export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
-  const { educationLevel, pages, serviceType, taskType, career } = req.body;
+  const { educationLevel, pages, serviceType, taskType, career, modalidadCaptacion } = req.body;
   let { studyArea } = req.body;
 
   // Validar campos requeridos mínimos
@@ -1035,63 +1035,70 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
 
   // Si es Artículo Científico, usar precios especiales
   if (isArticuloCientifico) {
-    // Precios especiales para artículos científicos (ACTUALIZADOS 50%)
+    // Precios base al 100% para artículos científicos (Modalidad Tesipedia)
     switch (educationLevel.toLowerCase()) {
       case 'preparatoria':
-        pricePerPage = isSaludOrMath ? 150 : 135;
+        pricePerPage = isSaludOrMath ? 300 : 270;
         break;
       case 'licenciatura':
-        pricePerPage = isSaludOrMath ? 190 : 175;
+        pricePerPage = isSaludOrMath ? 380 : 350;
         break;
       case 'maestría':
       case 'maestria':
       case 'diplomado':
-        pricePerPage = isSaludOrMath ? 225 : 205;
+        pricePerPage = isSaludOrMath ? 450 : 410;
         break;
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = isSaludOrMath ? 225 : 205; // Mismo precio que maestría
+        pricePerPage = isSaludOrMath ? 450 : 410;
         break;
       case 'doctorado':
-        pricePerPage = isSaludOrMath ? 260 : 240;
+        pricePerPage = isSaludOrMath ? 520 : 480;
         break;
       case 'doctorado / área de la salud':
-        pricePerPage = 260;
+        pricePerPage = 520;
         break;
       default:
         res.status(400);
         throw new Error('Nivel académico no válido');
     }
   } else {
-    // Precios normales para Tesis, Tesina, y otros trabajos (ACTUALIZADOS 50%)
+    // Precios base al 100% para Tesis, Tesina, etc. (Modalidad Tesipedia)
     switch (educationLevel.toLowerCase()) {
       case 'preparatoria':
-        pricePerPage = isSaludOrMath ? 100 : 85;
+        pricePerPage = isSaludOrMath ? 200 : 170;
         break;
       case 'licenciatura':
-        pricePerPage = isSaludOrMath ? 125 : 110;
+        pricePerPage = isSaludOrMath ? 250 : 220;
         break;
       case 'maestría':
       case 'maestria':
       case 'diplomado':
-        pricePerPage = isSaludOrMath ? 150 : 135;
+        pricePerPage = isSaludOrMath ? 300 : 270;
         break;
       case 'maestría / especialidad salud':
       case 'maestria / especialidad salud':
       case 'especialidad':
-        pricePerPage = isSaludOrMath ? 150 : 135; // Mismo precio que maestría
+        pricePerPage = isSaludOrMath ? 300 : 270;
         break;
       case 'doctorado':
-        pricePerPage = isSaludOrMath ? 175 : 160;
+        pricePerPage = isSaludOrMath ? 350 : 320;
         break;
       case 'doctorado / área de la salud':
-        pricePerPage = 175;
+        pricePerPage = 350;
         break;
       default:
         res.status(400);
         throw new Error('Nivel académico no válido');
     }
+  }
+
+  // Aplicar descuento por modalidad de captación
+  // Tesipedia (web/orgánico) = 100% | ManyChat (ads/redes) = 50%
+  const captacion = (modalidadCaptacion || 'tesipedia').toLowerCase();
+  if (captacion === 'manychat') {
+    pricePerPage = pricePerPage * 0.5;
   }
 
   // Aplicar modificador según el tipo de servicio
@@ -1130,6 +1137,7 @@ export const calculateSalesQuotePrice = asyncHandler(async (req, res) => {
       pages: numPages,
       taskType: taskType || 'No especificado',
       serviceType: serviceTypeDescription,
+      modalidadCaptacion: captacion === 'manychat' ? 'ManyChat (50%)' : 'Tesipedia (100%)',
       pricePerPage,
       totalPrice,
       formattedPrice: `$${totalPrice.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`

@@ -95,6 +95,11 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: String,
             default: '',
         },
+        modalidadCaptacion: {
+            type: String,
+            enum: ['tesipedia', 'manychat'],
+            default: 'tesipedia',
+        },
         serviciosIncluidos: {
             type: [String],
             default: [],
