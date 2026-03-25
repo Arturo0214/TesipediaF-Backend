@@ -777,43 +777,58 @@ export const sendReengagement = asyncHandler(async (req, res) => {
     return res.json({ success: true, sent: 0, failed: 0, total: 0, results: [], message: 'No hay leads para enviar recordatorio' });
   }
 
-  // 3. Enviar mensaje de Sofia a cada lead
+  // 3. Enviar mensaje de Sofia a cada lead (respetando límite de 2 intentos sin respuesta)
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
   const results = [];
 
   for (const lead of stuckLeads) {
+    // ── Verificar historial: si ya se mandaron 2+ recordatorios sin respuesta, saltar ──
+    let historial = [];
+    try {
+      const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+      if (histResp.ok) {
+        const histData = await histResp.json();
+        const raw = histData[0]?.historial_chat;
+        if (Array.isArray(raw)) historial = raw;
+        else if (typeof raw === 'string' && raw.trim()) {
+          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        }
+      }
+    } catch { /* continuar */ }
+
+    let consecutiveReminders = 0;
+    for (let i = historial.length - 1; i >= 0; i--) {
+      const m = historial[i];
+      if (m.role === 'user') break;
+      if (m.isReengagement || m.isTemplate) consecutiveReminders++;
+    }
+
+    if (consecutiveReminders >= 2) {
+      // Marcar como descartado para no evaluarlo mas
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+          method: 'PATCH',
+          headers: supabaseHeaders(),
+          body: JSON.stringify({ estado_sofia: 'descartado' }),
+        });
+      } catch { /* no critical */ }
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success: false, error: 'Descartado: 2+ recordatorios sin respuesta' });
+      continue;
+    }
+
     const cleanNumber = lead.wa_id.replace(/\D/g, '');
     const msg = buildSofiaContextualMessage(lead);
 
     try {
-      const payload = {
-        messaging_product: 'whatsapp',
-        to: cleanNumber,
-        type: 'text',
-        text: { body: msg },
-      };
-
       const waResp = await fetch(waUrl, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
       });
       const waData = await waResp.json();
       const success = !!waData.messages;
 
       if (success) {
-        // Obtener historial individualmente SOLO si el envío fue exitoso
-        let historial = [];
-        const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
-        if (histResp.ok) {
-          const histData = await histResp.json();
-          const raw = histData[0]?.historial_chat;
-          if (Array.isArray(raw)) historial = raw;
-          else if (typeof raw === 'string' && raw.trim()) {
-            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
-          }
-        }
-
         historial.push({
           role: 'assistant',
           content: msg,
@@ -838,10 +853,11 @@ export const sendReengagement = asyncHandler(async (req, res) => {
   }
 
   const sent = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
-  console.log(`📣 Sofia Recordatorio: ${sent} enviados, ${failed} fallidos de ${stuckLeads.length} leads (ventana: ${hours}h)`);
+  const skippedR = results.filter(r => r.error?.includes('Descartado')).length;
+  const failed = results.filter(r => !r.success && !r.error?.includes('Descartado')).length;
+  console.log(`📣 Sofia Recordatorio: ${sent} enviados, ${failed} fallidos, ${skippedR} descartados de ${stuckLeads.length} leads (ventana: ${hours}h)`);
 
-  res.json({ success: true, sent, failed, total: stuckLeads.length, results });
+  res.json({ success: true, sent, failed, skipped: skippedR, total: stuckLeads.length, results });
 });
 
 
@@ -885,15 +901,51 @@ async function runAutoReminder() {
 
     if (leads.length === 0) {
       autoReminder.lastRun = new Date().toISOString();
-      autoReminder.lastResult = { sent: 0, failed: 0, total: 0, time: new Date().toISOString() };
+      autoReminder.lastResult = { sent: 0, failed: 0, total: 0, skipped: 0, time: new Date().toISOString() };
       console.log('🤖 Auto-reminder: 0 leads estancados');
       return;
     }
 
     const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
-    let sent = 0, failed = 0;
+    let sent = 0, failed = 0, skipped = 0;
 
     for (const lead of leads) {
+      // ── Verificar historial: si ya se mandaron 2+ recordatorios sin respuesta, saltar ──
+      let historial = [];
+      try {
+        const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+        if (histResp.ok) {
+          const histData = await histResp.json();
+          const raw = histData[0]?.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
+        }
+      } catch { /* continuar sin historial */ }
+
+      // Contar recordatorios consecutivos al final del chat (sin respuesta del cliente en medio)
+      let consecutiveReminders = 0;
+      for (let i = historial.length - 1; i >= 0; i--) {
+        const m = historial[i];
+        if (m.role === 'user') break; // el cliente respondió, dejar de contar
+        if (m.isReengagement || m.isTemplate) consecutiveReminders++;
+      }
+
+      if (consecutiveReminders >= 2) {
+        skipped++;
+        console.log(`🤖 Auto-reminder: SKIP ${lead.nombre || lead.wa_id} — ya tiene ${consecutiveReminders} recordatorios sin respuesta`);
+        // Marcar como descartado automáticamente para no volverlo a evaluar
+        try {
+          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({ estado_sofia: 'descartado' }),
+          });
+        } catch { /* no critical */ }
+        continue;
+      }
+
       const cleanNumber = lead.wa_id.replace(/\D/g, '');
       const msg = buildSofiaContextualMessage(lead);
 
@@ -908,17 +960,7 @@ async function runAutoReminder() {
         if (waData.messages) {
           sent++;
 
-          // Obtener historial individualmente SOLO si el envío fue exitoso
-          let historial = [];
-          const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
-          if (histResp.ok) {
-            const histData = await histResp.json();
-            const raw = histData[0]?.historial_chat;
-            if (Array.isArray(raw)) historial = raw;
-            else if (typeof raw === 'string' && raw.trim()) {
-              try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
-            }
-          }
+          // Reusar el historial ya obtenido arriba (antes del check de 2 intentos)
           historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
 
           await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
@@ -935,8 +977,8 @@ async function runAutoReminder() {
     }
 
     autoReminder.lastRun = new Date().toISOString();
-    autoReminder.lastResult = { sent, failed, total: leads.length, time: new Date().toISOString() };
-    console.log(`🤖 Auto-reminder: ${sent} enviados, ${failed} fallidos de ${leads.length} leads`);
+    autoReminder.lastResult = { sent, failed, skipped, total: leads.length, time: new Date().toISOString() };
+    console.log(`🤖 Auto-reminder: ${sent} enviados, ${failed} fallidos, ${skipped} descartados de ${leads.length} leads`);
   } catch (e) {
     console.error('Auto-reminder error:', e.message);
     autoReminder.lastResult = { error: e.message, time: new Date().toISOString() };
