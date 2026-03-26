@@ -36,6 +36,8 @@ const visitSchema = new mongoose.Schema(
 visitSchema.index({ ip: 1 });
 // Índice para búsquedas por fecha
 visitSchema.index({ createdAt: -1 });
+// TTL Index: elimina automáticamente visitas con más de 30 días
+visitSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 const Visit = mongoose.model('Visit', visitSchema);
 
