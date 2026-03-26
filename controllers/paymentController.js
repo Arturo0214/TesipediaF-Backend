@@ -792,6 +792,7 @@ export const createProjectFromPayment = asyncHandler(async (req, res) => {
 
   const project = await Project.create({
     quote: null,
+    generatedQuote: source === 'sofia' ? id : null,
     taskType: taskType || 'Tesis',
     studyArea: studyArea || 'General',
     career: career || 'General',

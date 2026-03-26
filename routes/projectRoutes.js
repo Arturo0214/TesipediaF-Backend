@@ -11,7 +11,8 @@ import {
     updateProgress,
     addComment,
     updateProject,
-    createClientFromProject
+    createClientFromProject,
+    migrateFixQuoteIndex
 } from '../controllers/projectController.js';
 import { protect, admin, writer } from '../middleware/authMiddleware.js';
 
@@ -23,6 +24,7 @@ router.route('/')
     .get(protect, admin, getAllProjects);
 
 router.post('/manual', protect, admin, createManualProject);
+router.post('/migrate-fix-index', protect, admin, migrateFixQuoteIndex);
 
 router.route('/writer')
     .get(protect, writer, getWriterProjects);

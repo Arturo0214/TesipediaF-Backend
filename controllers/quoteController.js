@@ -36,25 +36,10 @@ const handleQuotePaid = async ({
       return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
     }
   } else if (quoteType === 'generated' && quoteId) {
-    // Para generatedquotes, buscar por quoteId exacto en el campo generatedQuoteId
-    // o por combinación estricta de email + título
-    const searchQuery = { quote: null };
-    const titleToSearch = title?.trim() || 'Proyecto Tesipedia';
-
-    if (clientEmail) {
-      searchQuery.clientEmail = clientEmail;
-      searchQuery.taskTitle = titleToSearch;
-    } else if (clientPhone) {
-      searchQuery.clientPhone = clientPhone;
-      searchQuery.taskTitle = titleToSearch;
-    } else {
-      // Sin email ni phone no podemos verificar duplicados fiablemente → permitir creación
-      searchQuery._id = null; // query que no matchea nada
-    }
-
-    const existingProject = await Project.findOne(searchQuery);
+    // Para generatedquotes, buscar por generatedQuote ID directamente
+    const existingProject = await Project.findOne({ generatedQuote: quoteId });
     if (existingProject) {
-      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para el cliente ${clientEmail || clientPhone || clientName} con título "${title}". Saltando creación.`);
+      console.log(`[handleQuotePaid] ⚠️ Ya existe un proyecto (${existingProject._id}) para la cotización generada ${quoteId}. Saltando creación.`);
       return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
     }
   }
@@ -244,10 +229,9 @@ const handleQuotePaid = async ({
   let linkedProject = null;
   let projectError = null;
   try {
-    const quoteRef = quoteType === 'regular' ? quoteId : null;
-
     const projectData = {
-      quote: quoteRef,
+      quote: quoteType === 'regular' ? quoteId : null,
+      generatedQuote: quoteType === 'generated' ? quoteId : null,
       taskType: taskType?.trim() || 'Trabajo Académico',
       studyArea: studyArea?.trim() || 'General',
       career: career?.trim() || 'General',

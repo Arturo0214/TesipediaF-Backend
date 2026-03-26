@@ -49,6 +49,7 @@ export const getAllProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find()
         .sort({ kanbanOrder: 1 })
         .populate('quote')
+        .populate('generatedQuote')
         .populate('writer', 'name email')
         .populate('client', 'name email');
     res.json(projects);
@@ -58,6 +59,7 @@ export const getAllProjects = asyncHandler(async (req, res) => {
 export const getWriterProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find({ writer: req.user._id })
         .populate('quote')
+        .populate('generatedQuote')
         .populate('client', 'name email')
         .populate('payment');
     res.json(projects);
@@ -68,6 +70,7 @@ export const getClientProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find({ client: req.user._id })
         .populate('writer', 'name')
         .populate('quote')
+        .populate('generatedQuote')
         .populate('payment');
     res.json(projects);
 });
@@ -76,6 +79,7 @@ export const getClientProjects = asyncHandler(async (req, res) => {
 export const getProjectById = asyncHandler(async (req, res) => {
     const project = await Project.findById(req.params.id)
         .populate('quote')
+        .populate('generatedQuote')
         .populate('writer', 'name email')
         .populate('client', 'name email');
 
@@ -383,6 +387,172 @@ export const createClientFromProject = asyncHandler(async (req, res) => {
         message: isNew
             ? `Usuario creado — Login: ${loginIdentifier || user.email} — Credenciales enviadas por WhatsApp`
             : `El usuario ya existía: ${user.email} — Se vinculó al proyecto`,
+    });
+});
+
+// 🔧 Migration: Fix quote_1 index and create missing projects for paid quotes
+export const migrateFixQuoteIndex = asyncHandler(async (req, res) => {
+    const mongoose = (await import('mongoose')).default;
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const { autoCreateClientUser } = await import('../utils/autoCreateClient.js');
+
+    const results = { indexDropped: false, projectsCreated: 0, skipped: 0, errors: [] };
+
+    // Step 1: Drop the problematic quote_1 unique index
+    try {
+        const collection = mongoose.connection.db.collection('projects');
+        const indexes = await collection.indexes();
+        const quoteIndex = indexes.find(idx => idx.name === 'quote_1');
+        if (quoteIndex) {
+            await collection.dropIndex('quote_1');
+            results.indexDropped = true;
+            console.log('[Migration] Dropped quote_1 index');
+        } else {
+            console.log('[Migration] quote_1 index not found (already removed)');
+        }
+    } catch (indexErr) {
+        console.error('[Migration] Error dropping index:', indexErr.message);
+        results.errors.push(`Index: ${indexErr.message}`);
+    }
+
+    // Step 2: Create missing projects for paid GeneratedQuotes
+    const paidGenerated = await GeneratedQuote.find({ status: 'paid' });
+
+    for (const quote of paidGenerated) {
+        // Check if project already exists for this generated quote
+        const existing = await Project.findOne({
+            $or: [
+                { generatedQuote: quote._id },
+                { clientName: quote.clientName, taskTitle: quote.tituloTrabajo || quote.tipoTrabajo || 'Proyecto Tesipedia' }
+            ]
+        });
+
+        if (existing) {
+            // Link generatedQuote if not already linked
+            if (!existing.generatedQuote) {
+                existing.generatedQuote = quote._id;
+                await existing.save();
+            }
+            results.skipped++;
+            continue;
+        }
+
+        try {
+            // Parse due date from Spanish format
+            let parsedDueDate = null;
+            if (quote.fechaEntrega) {
+                const meses = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
+                const match = quote.fechaEntrega.match(/(\d{1,2})\s+de\s+(\w+)(?:\s+de\s+(\d{4}))?/i);
+                if (match) {
+                    const day = parseInt(match[1]);
+                    const month = meses[match[2].toLowerCase()];
+                    const year = match[3] ? parseInt(match[3]) : new Date().getFullYear();
+                    if (month !== undefined) parsedDueDate = new Date(year, month, day);
+                }
+                if (!parsedDueDate) {
+                    const d = new Date(quote.fechaEntrega);
+                    if (!isNaN(d.getTime())) parsedDueDate = d;
+                }
+            }
+
+            // Auto-create client user if email or phone
+            let clientUser = null;
+            if (quote.clientEmail || quote.clientPhone) {
+                const result = await autoCreateClientUser({
+                    clientName: quote.clientName || 'Cliente',
+                    clientEmail: quote.clientEmail || '',
+                    clientPhone: quote.clientPhone || '',
+                    projectTitle: quote.tituloTrabajo || quote.tipoTrabajo,
+                });
+                clientUser = result.user;
+            }
+
+            // Find existing payment for this quote
+            const existingPayment = await Payment.findOne({
+                clientName: quote.clientName,
+                title: quote.tituloTrabajo || quote.tipoTrabajo,
+                isManual: true,
+            });
+
+            const project = await Project.create({
+                quote: null,
+                generatedQuote: quote._id,
+                taskType: quote.tipoTrabajo?.trim() || 'Trabajo Académico',
+                studyArea: quote.area?.trim() || 'General',
+                career: quote.carrera?.trim() || 'General',
+                educationLevel: 'licenciatura',
+                taskTitle: (quote.tituloTrabajo?.trim() || quote.tipoTrabajo?.trim() || 'Proyecto Tesipedia'),
+                requirements: { text: quote.descripcionServicio?.trim() || 'Proyecto creado por migración' },
+                pages: parseInt(quote.extensionEstimada) || 1,
+                dueDate: parsedDueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                priority: 'medium',
+                status: 'pending',
+                clientName: quote.clientName || '',
+                clientEmail: quote.clientEmail || '',
+                clientPhone: quote.clientPhone || '',
+                client: clientUser?._id || null,
+                payment: existingPayment?._id || null,
+            });
+
+            // Link payment to project
+            if (existingPayment && !existingPayment.project) {
+                existingPayment.project = project._id;
+                await existingPayment.save();
+            }
+
+            results.projectsCreated++;
+            console.log(`[Migration] Created project for: ${quote.clientName} - ${project.taskTitle}`);
+        } catch (err) {
+            console.error(`[Migration] Error for ${quote.clientName}:`, err.message);
+            results.errors.push(`${quote.clientName}: ${err.message}`);
+        }
+    }
+
+    // Step 3: Also check paid regular quotes
+    const paidRegular = await Quote.find({ status: 'paid' });
+    for (const quote of paidRegular) {
+        const existing = await Project.findOne({ quote: quote._id });
+        if (existing) { results.skipped++; continue; }
+
+        try {
+            let clientUser = null;
+            if (quote.email || quote.phone) {
+                const result = await autoCreateClientUser({
+                    clientName: quote.name || 'Cliente',
+                    clientEmail: quote.email || '',
+                    clientPhone: quote.phone || '',
+                    projectTitle: quote.taskTitle,
+                });
+                clientUser = result.user;
+            }
+
+            await Project.create({
+                quote: quote._id,
+                generatedQuote: null,
+                taskType: quote.taskType,
+                studyArea: quote.studyArea,
+                career: quote.career,
+                educationLevel: quote.educationLevel,
+                taskTitle: quote.taskTitle,
+                requirements: quote.requirements || { text: 'Proyecto creado por migración' },
+                pages: quote.pages,
+                dueDate: quote.dueDate,
+                priority: 'medium',
+                status: 'pending',
+                client: clientUser?._id || quote.user || null,
+                clientName: quote.name || '',
+                clientEmail: quote.email || '',
+                clientPhone: quote.phone || '',
+            });
+            results.projectsCreated++;
+        } catch (err) {
+            results.errors.push(`Regular ${quote.name}: ${err.message}`);
+        }
+    }
+
+    res.json({
+        message: 'Migración completada',
+        ...results,
     });
 });
 

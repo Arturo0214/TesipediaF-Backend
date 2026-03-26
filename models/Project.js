@@ -6,7 +6,11 @@ const projectSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Quote',
             default: null,
-            sparse: true,
+        },
+        generatedQuote: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'GeneratedQuote',
+            default: null,
         },
         clientName: {
             type: String,
