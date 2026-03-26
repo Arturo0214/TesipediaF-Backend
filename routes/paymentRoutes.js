@@ -21,7 +21,8 @@ import {
     createManualPayment,
     deleteDashboardPayment,
     assignVendedor,
-    createProjectFromPayment
+    createProjectFromPayment,
+    getSalesByVendedor
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -47,6 +48,7 @@ router.use(adminOnly);
 router.get('/', getPayments);
 router.get('/dashboard', getPaymentsDashboard);
 router.get('/stats', getPaymentStats);
+router.get('/vendedor-sales', getSalesByVendedor);
 router.post('/manual', createManualPayment);
 router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);

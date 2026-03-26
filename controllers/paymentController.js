@@ -1145,3 +1145,93 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     monthly,
   });
 });
+
+// 📊 Get sales performance by vendedor
+export const getSalesByVendedor = asyncHandler(async (req, res) => {
+  const { period = 'all' } = req.query;
+
+  // Determine date range based on period
+  let dateFilter = {};
+  const now = new Date();
+
+  switch (period) {
+    case 'thisMonth':
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      dateFilter = { $gte: monthStart };
+      break;
+    case 'last30days':
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      dateFilter = { $gte: thirtyDaysAgo };
+      break;
+    case 'last90days':
+      const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      dateFilter = { $gte: ninetyDaysAgo };
+      break;
+    case 'all':
+    default:
+      // No date filter
+      break;
+  }
+
+  // Apply date filter if present
+  const matchStage = dateFilter.$gte
+    ? { $match: { createdAt: dateFilter } }
+    : { $match: {} };
+
+  // Aggregate sales by vendedor
+  const vendedorStats = await Payment.aggregate([
+    matchStage,
+    {
+      $group: {
+        _id: '$vendedor',
+        totalSales: { $sum: '$amount' },
+        count: { $sum: 1 },
+        completedCount: {
+          $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+        },
+        completedAmount: {
+          $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$amount', 0] }
+        },
+      }
+    },
+    {
+      $project: {
+        vendedor: '$_id',
+        _id: 0,
+        totalSales: 1,
+        count: 1,
+        completedCount: 1,
+        completedAmount: 1,
+        averageSale: { $cond: [{ $gt: ['$count', 0] }, { $divide: ['$totalSales', '$count'] }, 0] },
+      }
+    },
+    { $sort: { totalSales: -1 } }
+  ]);
+
+  // Filter out empty vendedor and format
+  const formattedStats = vendedorStats
+    .filter(stat => stat.vendedor && stat.vendedor.trim())
+    .map(stat => ({
+      vendedor: stat.vendedor,
+      totalSales: Math.round(stat.totalSales),
+      averageSale: Math.round(stat.averageSale),
+      count: stat.count,
+      completedCount: stat.completedCount,
+      completedAmount: Math.round(stat.completedAmount),
+      conversionRate: stat.count > 0 ? (stat.completedCount / stat.count * 100).toFixed(1) : '0',
+    }));
+
+  // Calculate totals
+  const grandTotal = formattedStats.reduce((sum, v) => sum + v.totalSales, 0);
+  const totalTransactions = formattedStats.reduce((sum, v) => sum + v.count, 0);
+
+  res.json({
+    vendedors: formattedStats,
+    summary: {
+      totalSales: grandTotal,
+      totalTransactions,
+      totalVendedors: formattedStats.length,
+    },
+    period,
+  });
+});
