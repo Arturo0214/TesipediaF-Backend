@@ -212,7 +212,7 @@ export const getMessagesByOrder = asyncHandler(async (req, res) => {
       ]
     });
 
-    const isAdmin = req.user && req.user.role === 'admin';
+    const isAdmin = req.user && (req.user.role === 'admin' || req.user.role === 'superadmin');
     if (!order && !isAdmin) {
       res.status(403);
       throw new Error('No tienes acceso a estos mensajes');
@@ -404,7 +404,7 @@ export const markAsRead = asyncHandler(async (req, res) => {
 export const getConversations = asyncHandler(async (req, res) => {
   console.log('🔄 Iniciando getConversations para usuario:', req.user._id);
   const userId = req.user._id;
-  const isAdmin = req.user.role === 'admin';
+  const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
 
   // Consulta mejorada para encontrar todas las conversaciones relevantes
   let query = {
@@ -489,7 +489,7 @@ export const getConversations = asyncHandler(async (req, res) => {
       if (isPublic) {
         // Si el mensaje es público, determinar quién es el visitante
         const senderIsAdmin =
-          (typeof message.sender === 'object' && message.sender?.role === 'admin') ||
+          (typeof message.sender === 'object' && (message.sender?.role === 'admin' || message.sender?.role === 'superadmin')) ||
           message.sender?.toString() === userId.toString();
 
         if (senderIsAdmin) {

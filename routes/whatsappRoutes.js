@@ -14,6 +14,7 @@ import {
   claimLead,
   getAutoReminderStatus,
   configAutoReminder,
+  toggleBlockLead,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -36,6 +37,9 @@ router.patch('/leads/:waId/estado', updateLeadEstado);
 
 // Reclamar un lead (asignar dueño, solo si no tiene)
 router.patch('/leads/:waId/claim', claimLead);
+
+// Bloquear / desbloquear un contacto
+router.patch('/leads/:waId/block', toggleBlockLead);
 
 // Enviar mensaje con soporte para archivo adjunto
 router.post('/send', upload.single('file'), sendMessage);

@@ -300,25 +300,41 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   if (file) {
     const isDoc = !!file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
-    const fileBuffer = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-    
+    const isAudio = !!file.mimetype.match(/audio|ogg|opus|mp3|mpeg|wav|webm|aac/i);
+
+    // Limpiar MIME type: quitar parámetros como "; codecs=opus" que rompen el data URI
+    const cleanMimetype = file.mimetype.split(';')[0].trim();
+    const fileBuffer = `data:${cleanMimetype};base64,${file.buffer.toString('base64')}`;
+
     const uploadOptions = {
       folder: 'whatsapp_admin_media',
-      resource_type: isDoc ? 'raw' : 'auto',
+      resource_type: (isDoc || isAudio) ? 'raw' : 'auto',
     };
 
-    // Si es un documento, subimos como 'raw' y le damos un public_id que incluya su extensión
+    // Si es un documento o audio, subimos como 'raw' y le damos un public_id con extensión
     if (isDoc) {
       const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+    } else if (isAudio) {
+      // WhatsApp acepta audio/ogg; opus como nota de voz
+      const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'ogg';
+      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     }
 
-    const result = await cloudinary.uploader.upload(fileBuffer, uploadOptions);
-    
+    console.log(`📤 Subiendo archivo a Cloudinary: type=${cleanMimetype}, size=${file.buffer.length}, resource_type=${uploadOptions.resource_type}, isAudio=${isAudio}`);
+
+    let result;
+    try {
+      result = await cloudinary.uploader.upload(fileBuffer, uploadOptions);
+    } catch (uploadErr) {
+      console.error('❌ Cloudinary upload error:', uploadErr.message || uploadErr);
+      throw new Error(`Error al subir archivo a Cloudinary: ${uploadErr.message}`);
+    }
+
     mediaUrl = result.secure_url;
     mimetype = file.mimetype;
     filename = file.originalname;
-    mediaType = isDoc ? 'document' : 'image';
+    mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
   }
 
   // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
@@ -1043,6 +1059,64 @@ export const configAutoReminder = asyncHandler(async (req, res) => {
     intervalMinutes: autoReminder.intervalMinutes,
     staleMinutes: autoReminder.staleMinutes,
     maxPerRun: autoReminder.maxPerRun,
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// BLOQUEO / DESBLOQUEO DE CONTACTOS
+// ═══════════════════════════════════════════════════════
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/block
+ * Bloquear o desbloquear un contacto.
+ * Body: { blocked: true/false }
+ * Cuando blocked=true:
+ *  - Se marca bloqueado=true en Supabase
+ *  - Se desactiva modo_humano y Sofia (no más mensajes automáticos)
+ * Cuando blocked=false:
+ *  - Se desbloquea el contacto
+ */
+export const toggleBlockLead = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { blocked } = req.body;
+
+  if (!waId) {
+    res.status(400);
+    throw new Error('waId es requerido');
+  }
+  if (typeof blocked !== 'boolean') {
+    res.status(400);
+    throw new Error('blocked (boolean) es requerido');
+  }
+
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const patchBody = {
+    bloqueado: blocked,
+    updated_at: new Date().toISOString(),
+  };
+
+  // Si se bloquea, también desactivar interacciones
+  if (blocked) {
+    patchBody.modo_humano = true; // Detener Sofia
+  }
+
+  const patchResponse = await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify(patchBody),
+  });
+
+  if (!patchResponse.ok) {
+    const err = await patchResponse.text();
+    console.error('Error al actualizar bloqueo en Supabase:', err);
+    res.status(500);
+    throw new Error(`Error al ${blocked ? 'bloquear' : 'desbloquear'} contacto`);
+  }
+
+  res.json({
+    success: true,
+    blocked,
+    message: blocked ? 'Contacto bloqueado exitosamente' : 'Contacto desbloqueado exitosamente',
   });
 });
 
