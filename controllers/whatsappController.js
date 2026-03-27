@@ -308,17 +308,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
     const uploadOptions = {
       folder: 'whatsapp_admin_media',
-      resource_type: (isDoc || isAudio) ? 'raw' : 'auto',
+      resource_type: isDoc ? 'raw' : isAudio ? 'video' : 'auto',
     };
 
-    // Si es un documento o audio, subimos como 'raw' y le damos un public_id con extensión
+    // Si es un documento, subimos como 'raw' con extensión
     if (isDoc) {
       const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     } else if (isAudio) {
-      // WhatsApp acepta audio/ogg; opus como nota de voz
-      const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'ogg';
-      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+      // Audio se sube como 'video' (Cloudinary trata audio como subconjunto de video)
+      // Esto permite transformaciones de formato y sirve content-type correcto
+      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      uploadOptions.format = 'ogg'; // Convertir a OGG (formato soportado por WhatsApp API)
     }
 
     console.log(`📤 Subiendo archivo a Cloudinary: type=${cleanMimetype}, size=${file.buffer.length}, resource_type=${uploadOptions.resource_type}, isAudio=${isAudio}`);
@@ -331,9 +332,16 @@ export const sendMessage = asyncHandler(async (req, res) => {
       throw new Error(`Error al subir archivo a Cloudinary: ${uploadErr.message}`);
     }
 
-    mediaUrl = result.secure_url;
-    mimetype = file.mimetype;
-    filename = file.originalname;
+    // Para audio: asegurar que la URL use extensión .ogg para WhatsApp
+    let finalUrl = result.secure_url;
+    if (isAudio && finalUrl && !finalUrl.endsWith('.ogg')) {
+      // Reemplazar la extensión del archivo en la URL de Cloudinary
+      finalUrl = finalUrl.replace(/\.[^.]+$/, '.ogg');
+    }
+
+    mediaUrl = finalUrl;
+    mimetype = isAudio ? 'audio/ogg' : file.mimetype;
+    filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.ogg') : file.originalname;
     mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
   }
 
