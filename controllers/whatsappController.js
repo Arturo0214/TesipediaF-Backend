@@ -113,6 +113,23 @@ function isWindowExpired(historial, updatedAt) {
   return true;
 }
 
+// Helper: generar preview del último mensaje (para el sidebar, sin traer todo el historial)
+function buildLastMessagePreview(historial) {
+  if (!Array.isArray(historial) || historial.length === 0) return '';
+  const last = historial[historial.length - 1];
+  let text = last.content || '';
+  const role = last.role || '';
+  // Limpiar tags internos
+  text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
+  text = text.replace(/\[STATE:[\s\S]*?\]/g, '').replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
+  // Prefijo según rol
+  const prefix = role === 'user' ? '👤 ' : '';
+  if (!text && last.mediaUrl) text = '📎 Archivo';
+  // Truncar a 60 chars
+  if (text.length > 60) text = text.substring(0, 60) + '...';
+  return prefix + text;
+}
+
 // Helper: headers para Supabase
 const supabaseHeaders = () => ({
   'apikey': SUPABASE_SERVICE_KEY,
@@ -127,9 +144,12 @@ const supabaseHeaders = () => ({
  * El historial se carga individualmente al seleccionar un lead.
  */
 export const getLeads = asyncHandler(async (req, res) => {
-  // OPTIMIZADO: NO traer historial_chat de Supabase — ahorra ~90% de egress.
-  // El historial se carga individualmente al seleccionar un lead (getLeadByWaId).
-  const columns = [
+  // ESTRATEGIA HÍBRIDA para reducir egress sin perder el preview del último mensaje:
+  // 1. Traer metadata de TODOS los leads (sin historial_chat) — ~50-100 KB
+  // 2. Traer historial_chat SOLO de los 40 leads más recientes — para preview
+  // Resultado: ~80-90% menos egress vs traer todo, con previews funcionales.
+
+  const metaColumns = [
     'wa_id', 'nombre', 'etapa', 'precio', 'datos_cotizacion',
     'created_at', 'updated_at', 'estado_sofia', 'paso_sofia',
     'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto',
@@ -139,15 +159,56 @@ export const getLeads = asyncHandler(async (req, res) => {
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
   ].join(',');
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&order=updated_at.desc`;
-  const response = await fetch(url, { headers: supabaseHeaders() });
-  if (!response.ok) {
-    const errorText = await response.text();
-    res.status(response.status);
+
+  // Query 1: metadata de todos los leads
+  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}&order=updated_at.desc`;
+  // Query 2: historial solo de los 40 leads más recientes (para preview)
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat&order=updated_at.desc&limit=40`;
+
+  const [metaResp, previewResp] = await Promise.all([
+    fetch(metaUrl, { headers: supabaseHeaders() }),
+    fetch(previewUrl, { headers: supabaseHeaders() }),
+  ]);
+
+  if (!metaResp.ok) {
+    const errorText = await metaResp.text();
+    res.status(metaResp.status);
     throw new Error(`Error de Supabase: ${errorText}`);
   }
-  const data = await response.json();
-  res.json(data);
+
+  const allLeads = await metaResp.json();
+
+  // Extraer previews del último mensaje
+  const previewMap = new Map();
+  if (previewResp.ok) {
+    const previewData = await previewResp.json();
+    for (const row of previewData) {
+      let hist = row.historial_chat;
+      if (typeof hist === 'string') {
+        try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
+      }
+      if (Array.isArray(hist) && hist.length > 0) {
+        // Guardar último mensaje como preview + último como historial_chat recortado
+        previewMap.set(row.wa_id, {
+          preview: buildLastMessagePreview(hist),
+          lastMsg: hist[hist.length - 1],
+        });
+      }
+    }
+  }
+
+  // Enriquecer leads con preview
+  const enriched = allLeads.map(lead => {
+    const info = previewMap.get(lead.wa_id);
+    if (info) {
+      lead.ultimo_mensaje_preview = info.preview;
+      // Enviar solo el último mensaje como historial recortado (para unread detection)
+      lead.historial_chat = JSON.stringify([info.lastMsg]);
+    }
+    return lead;
+  });
+
+  res.json(enriched);
 });
 
 /**
@@ -471,6 +532,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       modo_humano: true,
       mensaje_pendiente: JSON.stringify(mensajePendiente),
       updated_at: new Date().toISOString(),
+      ultimo_mensaje_preview: buildLastMessagePreview(historial),
     };
     // Solo asignar dueño si el lead no tiene uno
     if (!leadAtendidoPor) {
@@ -576,6 +638,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     historial_chat: JSON.stringify(historial),
     modo_humano: true,
     updated_at: new Date().toISOString(),
+    ultimo_mensaje_preview: buildLastMessagePreview(historial),
   };
   if (!leadAtendidoPor) {
     patchBody.atendido_por = adminName.toLowerCase();

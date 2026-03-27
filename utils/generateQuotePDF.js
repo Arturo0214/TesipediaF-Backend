@@ -1,16 +1,57 @@
 import { jsPDF } from 'jspdf';
-import axios from 'axios';
+import https from 'https';
+import http from 'http';
 
-// Función para cargar imagen en Node.js (sustituye al fetch y FileReader del frontend)
-const loadImage = async (url) => {
-    try {
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
-        const format = url.toLowerCase().includes('png') ? 'png' : 'jpeg';
-        const base64 = Buffer.from(response.data).toString('base64');
-        return `data:image/${format};base64,${base64}`;
-    } catch (error) {
-        return null;
+// Cache de imágenes en memoria — evita re-descargar en cada PDF
+const imageCache = new Map();
+
+/**
+ * Cargar imagen remota con reintentos y cache.
+ * Usa módulos nativos https/http (más confiable que axios para binarios).
+ */
+const loadImage = async (url, retries = 2) => {
+    // Revisar cache primero
+    if (imageCache.has(url)) return imageCache.get(url);
+
+    const doFetch = (fetchUrl) => new Promise((resolve, reject) => {
+        const client = fetchUrl.startsWith('https') ? https : http;
+        const req = client.get(fetchUrl, { timeout: 10000 }, (res) => {
+            // Seguir redirects (301, 302, 307, 308)
+            if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+                doFetch(res.headers.location).then(resolve).catch(reject);
+                return;
+            }
+            if (res.statusCode !== 200) {
+                reject(new Error(`HTTP ${res.statusCode} for ${fetchUrl}`));
+                return;
+            }
+            const chunks = [];
+            res.on('data', (chunk) => chunks.push(chunk));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+            res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+    });
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const buffer = await doFetch(url);
+            const format = url.toLowerCase().includes('png') || url.includes('f_png') ? 'png' : 'jpeg';
+            const dataUri = `data:image/${format};base64,${buffer.toString('base64')}`;
+            imageCache.set(url, dataUri); // Cachear para futuros PDFs
+            return dataUri;
+        } catch (error) {
+            console.warn(`⚠️ loadImage intento ${attempt + 1}/${retries + 1} falló para ${url.substring(0, 60)}...: ${error.message}`);
+            if (attempt === retries) {
+                console.error(`❌ loadImage: no se pudo cargar ${url.substring(0, 80)}`);
+                return null;
+            }
+            // Esperar un poco antes de reintentar
+            await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        }
     }
+    return null;
 };
 
 /**
