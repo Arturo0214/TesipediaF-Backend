@@ -127,9 +127,19 @@ const supabaseHeaders = () => ({
  * El historial se carga individualmente al seleccionar un lead.
  */
 export const getLeads = asyncHandler(async (req, res) => {
-  // Usar select=* y filtrar historial_chat en JS — más robusto que enumerar columnas
-  // Sin limit: traer TODOS los leads de Supabase
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=*&order=updated_at.desc`;
+  // OPTIMIZADO: NO traer historial_chat de Supabase — ahorra ~90% de egress.
+  // El historial se carga individualmente al seleccionar un lead (getLeadByWaId).
+  const columns = [
+    'wa_id', 'nombre', 'etapa', 'precio', 'datos_cotizacion',
+    'created_at', 'updated_at', 'estado_sofia', 'paso_sofia',
+    'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto',
+    'paginas', 'paginas_avance', 'tipo_trabajo', 'fecha_entrega',
+    'tiene_tema', 'tiene_avance', 'boton_actual', 'control_humano',
+    'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
+    'tema', 'pdf_url', 'modo_humano', 'atendido_por',
+    'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
+  ].join(',');
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&order=updated_at.desc`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
@@ -137,25 +147,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     throw new Error(`Error de Supabase: ${errorText}`);
   }
   const data = await response.json();
-  // Reducir historial_chat a los últimos 3 mensajes para el listado (preview + unread)
-  // El historial completo se obtiene vía getLeadByWaId al seleccionar un lead
-  const cleaned = data.map(({ historial_chat, ...rest }) => {
-    let trimmedChat = null;
-    if (historial_chat) {
-      try {
-        const parsed = typeof historial_chat === 'string' ? JSON.parse(historial_chat) : historial_chat;
-        if (Array.isArray(parsed)) {
-          trimmedChat = JSON.stringify(parsed.slice(-3));
-        } else {
-          trimmedChat = historial_chat; // formato inesperado, mandar tal cual
-        }
-      } catch {
-        trimmedChat = null; // JSON inválido, omitir
-      }
-    }
-    return { ...rest, historial_chat: trimmedChat };
-  });
-  res.json(cleaned);
+  res.json(data);
 });
 
 /**
