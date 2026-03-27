@@ -158,6 +158,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
+    'ultimo_mensaje_preview',
   ].join(',');
 
   // Query 1: metadata de todos los leads
@@ -538,11 +539,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
     if (!leadAtendidoPor) {
       patchBody.atendido_por = adminName.toLowerCase();
     }
-    await fetch(patchUrl, {
+    const patchResp = await fetch(patchUrl, {
       method: 'PATCH',
       headers: supabaseHeaders(),
       body: JSON.stringify(patchBody),
     });
+
+    if (!patchResp.ok) {
+      const patchErr = await patchResp.text();
+      console.error('❌ Error guardando historial (template) en Supabase:', patchResp.status, patchErr);
+    } else {
+      console.log(`✅ Template + mensaje pendiente guardado en Supabase para ${wa_id}`);
+    }
 
     return res.json({
       success: true,
@@ -643,11 +651,27 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (!leadAtendidoPor) {
     patchBody.atendido_por = adminName.toLowerCase();
   }
-  await fetch(patchUrl, {
+  const patchResp = await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
     body: JSON.stringify(patchBody),
   });
+
+  if (!patchResp.ok) {
+    const patchErr = await patchResp.text();
+    console.error('❌ Error guardando historial en Supabase:', patchResp.status, patchErr);
+    // El mensaje ya se envió por WA, así que no lanzamos error — pero avisamos al frontend
+    return res.json({
+      success: true,
+      message_id: waMessageId,
+      delivery_status: 'sent',
+      templateSent: false,
+      windowExpired: false,
+      warning: 'Mensaje enviado por WhatsApp pero hubo error al guardar en historial',
+    });
+  }
+
+  console.log(`✅ Mensaje guardado en Supabase para ${wa_id} (historial: ${historial.length} msgs)`);
 
   res.json({
     success: true,
