@@ -1384,9 +1384,11 @@ export const generateAndUploadQuotePDF = async (req, res) => {
     // 2. Subir a Cloudinary con retry (hasta 2 intentos)
     step = 'upload_cloudinary';
     const timestamp = Date.now();
+    // Limpiar emojis y caracteres no-ASCII del publicId (Cloudinary no los soporta bien)
+    const sanitizeName = (str) => str.replace(/[^\w\s\-]/gi, '').replace(/\s+/g, '-').toLowerCase().trim() || 'cliente';
     const publicId = data.pdfFilename
-      ? data.pdfFilename.replace(/\s+/g, '-').toLowerCase()
-      : `cotizacion-${(data.nombre || data.clientName || 'cliente').replace(/\s+/g, '-').toLowerCase()}-${timestamp}`;
+      ? sanitizeName(data.pdfFilename)
+      : `cotizacion-${sanitizeName(data.nombre || data.clientName || 'cliente')}-${timestamp}`;
 
     const uploadToCloudinary = () => new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
