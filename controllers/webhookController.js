@@ -6,6 +6,7 @@ import GuestPayment from '../models/guestPayment.js';
 import Notification from '../models/Notification.js';
 import emailSender from '../utils/emailSender.js';
 import onPaymentComplete from '../utils/onPaymentComplete.js';
+import createNotification from '../utils/createNotification.js';
 
 // 🔔 Webhook de Stripe
 export const stripeWebhook = asyncHandler(async (req, res) => {
@@ -71,17 +72,21 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
                 );
                 console.log(`✅ Email de confirmación enviado a ${guestPayment.correo}`);
 
-                // Notificar al admin
-                await Notification.create({
-                    user: process.env.SUPER_ADMIN_ID,
-                    type: 'pago_invitado',
-                    message: `💰 Nuevo pago de invitado confirmado: ${guestPayment.nombres} ${guestPayment.apellidos}`,
-                    data: {
-                        guestPaymentId: guestPayment._id,
-                        quoteId: guestPayment.quoteId,
-                        amount: guestPayment.amount,
-                    },
-                });
+                // Notificar al admin (con socket real-time)
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'pago',
+                        message: `💰 Pago de invitado confirmado: ${guestPayment.nombres} ${guestPayment.apellidos} ($${guestPayment.amount} MXN)`,
+                        data: {
+                            guestPaymentId: guestPayment._id,
+                            quoteId: guestPayment.quoteId,
+                            amount: guestPayment.amount,
+                        },
+                        link: '/admin/pagos',
+                        priority: 'high',
+                    });
+                }
                 console.log(`✅ Notificación creada para el admin`);
 
                 // Actualizar cotización a 'paid' y crear deal en HubSpot
@@ -148,15 +153,14 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
                 console.log(`✅ Estado del pago actualizado a 'completed'`);
             }
 
-            // 🔔 Crear notificación para el cliente
-            await Notification.create({
+            // 🔔 Crear notificación para el cliente (con socket real-time)
+            await createNotification(req.app, {
                 user: order.user._id,
                 type: 'pago',
                 message: `💰 Pago confirmado para el pedido "${order.title}"`,
-                data: {
-                    orderId: order._id,
-                    amount: order.price,
-                },
+                data: { orderId: order._id, amount: order.price },
+                link: '/admin/pagos',
+                priority: 'high',
             });
             console.log(`✅ Notificación creada para el cliente`);
 
@@ -185,17 +189,17 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
             );
             console.log(`✅ Email de confirmación enviado a ${order.user.email}`);
 
-            // 🔔 Crear notificación para el admin
-            await Notification.create({
-                user: process.env.SUPER_ADMIN_ID,
-                type: 'pago',
-                message: `💰 Nuevo pago confirmado de ${order.user.name}`,
-                data: {
-                    orderId: order._id,
-                    userId: order.user._id,
-                    amount: order.price,
-                },
-            });
+            // 🔔 Crear notificación para el admin (con socket real-time)
+            if (process.env.SUPER_ADMIN_ID) {
+                await createNotification(req.app, {
+                    user: process.env.SUPER_ADMIN_ID,
+                    type: 'pago',
+                    message: `💰 Pago confirmado: ${order.user.name} — $${order.price} MXN (${order.title})`,
+                    data: { orderId: order._id, userId: order.user._id, amount: order.price },
+                    link: '/admin/pagos',
+                    priority: 'high',
+                });
+            }
             console.log(`✅ Notificación creada para el admin`);
 
             // Actualizar cotización a 'paid' y crear deal en HubSpot
@@ -221,6 +225,18 @@ export const stripeWebhook = asyncHandler(async (req, res) => {
                 await guestPayment.save();
                 console.log(`✅ Estado de pago de invitado actualizado a 'failed'`);
                 console.log(`📊 Nuevo estado del pago: ${guestPayment.paymentStatus}`);
+
+                // Notificar al admin del pago fallido
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'alerta',
+                        message: `❌ Pago fallido: ${guestPayment.nombres} ${guestPayment.apellidos} ($${guestPayment.amount} MXN)`,
+                        data: { guestPaymentId: guestPayment._id, amount: guestPayment.amount },
+                        link: '/admin/pagos',
+                        priority: 'high',
+                    });
+                }
 
                 // Enviar email de fallo al invitado
                 const emailMessage = `
@@ -291,15 +307,14 @@ export const paymentWebhook = asyncHandler(async (req, res) => {
                     { upsert: true, new: true }
                 );
 
-                // 🔔 Crear notificación para el cliente
-                await Notification.create({
+                // 🔔 Crear notificación para el cliente (socket real-time)
+                await createNotification(req.app, {
                     user: userId,
                     type: 'pago',
                     message: `💰 Pago confirmado para el pedido "${order.title}"`,
-                    data: {
-                        orderId: order._id,
-                        amount: order.price,
-                    },
+                    data: { orderId: order._id, amount: order.price },
+                    link: '/admin/pagos',
+                    priority: 'high',
                 });
 
                 // 📧 Enviar email de confirmación
@@ -327,17 +342,17 @@ export const paymentWebhook = asyncHandler(async (req, res) => {
                     successEmail
                 );
 
-                // 🔔 Notificar al admin
-                await Notification.create({
-                    user: process.env.SUPER_ADMIN_ID,
-                    type: 'pago',
-                    message: `💰 Nuevo pago confirmado de ${order.user.name}`,
-                    data: {
-                        orderId: order._id,
-                        userId: order.user._id,
-                        amount: order.price,
-                    },
-                });
+                // 🔔 Notificar al admin (socket real-time)
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'pago',
+                        message: `💰 Pago confirmado: ${order.user.name} — $${order.price} MXN (${order.title})`,
+                        data: { orderId: order._id, userId: order.user._id, amount: order.price },
+                        link: '/admin/pagos',
+                        priority: 'high',
+                    });
+                }
 
                 // Actualizar cotización a 'paid' y crear deal en HubSpot
                 await onPaymentComplete({
@@ -363,16 +378,25 @@ export const paymentWebhook = asyncHandler(async (req, res) => {
                     { upsert: true, new: true }
                 );
 
-                // 🔔 Notificar al cliente sobre el fallo
-                await Notification.create({
+                // 🔔 Notificar al cliente sobre el fallo (socket real-time)
+                await createNotification(req.app, {
                     user: userId,
-                    type: 'pago',
-                    message: `❌ El pago para el pedido "${order.title}" ha fallado`,
-                    data: {
-                        orderId: order._id,
-                        amount: order.price,
-                    },
+                    type: 'alerta',
+                    message: `❌ El pago para "${order.title}" ha fallado`,
+                    data: { orderId: order._id, amount: order.price },
+                    priority: 'high',
                 });
+                // Notificar al admin también
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'alerta',
+                        message: `❌ Pago fallido: ${order.user.name} — $${amount} MXN (${order.title})`,
+                        data: { orderId: order._id, userId: order.user._id, amount },
+                        link: '/admin/pagos',
+                        priority: 'high',
+                    });
+                }
 
                 // 📧 Enviar email de fallo
                 const failureEmail = `
@@ -470,15 +494,12 @@ export const orderWebhook = asyncHandler(async (req, res) => {
                     cancelled: '❌ Tu pedido ha sido cancelado'
                 };
 
-                await Notification.create({
+                await createNotification(req.app, {
                     user: order.user._id,
                     type: 'pedido',
                     message: statusMessages[status] || `Estado del pedido actualizado a: ${status}`,
-                    data: {
-                        orderId: order._id,
-                        status,
-                        title: order.title
-                    },
+                    data: { orderId: order._id, status, title: order.title },
+                    priority: status === 'completed' ? 'high' : 'medium',
                 });
 
                 // 📧 Enviar email de actualización
@@ -530,17 +551,16 @@ export const orderWebhook = asyncHandler(async (req, res) => {
                 );
 
                 // 🔔 Notificar al admin
-                await Notification.create({
-                    user: process.env.SUPER_ADMIN_ID,
-                    type: 'pedido',
-                    message: `📦 Estado del pedido "${order.title}" actualizado a: ${status}`,
-                    data: {
-                        orderId: order._id,
-                        userId: order.user._id,
-                        status,
-                        title: order.title
-                    },
-                });
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'pedido',
+                        message: `📦 Pedido "${order.title}" → ${status} (${order.user.name})`,
+                        data: { orderId: order._id, userId: order.user._id, status, title: order.title },
+                        link: '/admin/pagos',
+                        priority: status === 'completed' ? 'high' : 'medium',
+                    });
+                }
                 break;
 
             case 'payment_required':
@@ -549,15 +569,12 @@ export const orderWebhook = asyncHandler(async (req, res) => {
                 await order.save();
 
                 // 🔔 Notificar al cliente
-                await Notification.create({
+                await createNotification(req.app, {
                     user: order.user._id,
                     type: 'pedido',
                     message: `💰 Pago requerido para el pedido "${order.title}"`,
-                    data: {
-                        orderId: order._id,
-                        amount: order.price,
-                        title: order.title
-                    },
+                    data: { orderId: order._id, amount: order.price, title: order.title },
+                    priority: 'high',
                 });
 
                 // 📧 Enviar email de pago requerido
@@ -590,16 +607,16 @@ export const orderWebhook = asyncHandler(async (req, res) => {
                 await order.save();
 
                 // 🔔 Notificar al admin
-                await Notification.create({
-                    user: process.env.SUPER_ADMIN_ID,
-                    type: 'cotizacion',
-                    message: `📝 Nueva solicitud de cotización: "${order.title}"`,
-                    data: {
-                        orderId: order._id,
-                        userId: order.user._id,
-                        title: order.title
-                    },
-                });
+                if (process.env.SUPER_ADMIN_ID) {
+                    await createNotification(req.app, {
+                        user: process.env.SUPER_ADMIN_ID,
+                        type: 'cotizacion',
+                        message: `📝 Nueva solicitud de cotización: "${order.title}" (${order.user.name})`,
+                        data: { orderId: order._id, userId: order.user._id, title: order.title },
+                        link: '/admin/cotizaciones',
+                        priority: 'medium',
+                    });
+                }
                 break;
 
             default:

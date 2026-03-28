@@ -640,6 +640,20 @@ export const updateQuote = asyncHandler(async (req, res) => {
     }
   }
 
+  // 🔔 Notificar cambios de estado relevantes
+  if (SUPER_ADMIN_ID && req.body.status && req.body.status !== previousValues.status) {
+    const statusLabels = { pending: 'Pendiente', approved: 'Aprobada', paid: 'Pagada', rejected: 'Rechazada', cancelled: 'Cancelada' };
+    const priority = ['paid', 'rejected', 'cancelled'].includes(req.body.status) ? 'high' : 'medium';
+    await createNotification(req.app, {
+      user: SUPER_ADMIN_ID,
+      type: 'cotizacion',
+      message: `📋 Cotización "${quote.taskTitle || quote.name || 'Sin título'}" → ${statusLabels[req.body.status] || req.body.status}`,
+      data: { quoteId: quote._id, status: req.body.status },
+      link: '/admin/cotizaciones',
+      priority,
+    });
+  }
+
   res.json({
     ...updatedQuote.toObject(),
     _autoCreated: autoCreated || null,

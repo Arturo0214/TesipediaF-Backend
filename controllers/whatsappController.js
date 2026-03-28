@@ -5,6 +5,7 @@
 
 import asyncHandler from 'express-async-handler';
 import cloudinary from '../config/cloudinary.js';
+import createNotification from '../utils/createNotification.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -15,6 +16,7 @@ const WA_TOKEN = process.env.WA_TOKEN || '';
 const WA_TEMPLATE_NAME = 'seguimiento_tesipedia';
 const WA_TEMPLATE_LANG = 'es_MX';
 const HOURS_24 = 24 * 60 * 60 * 1000;
+const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
 /**
  * Helper: Genera un mensaje contextual de Sofia basado en el ultimo dato recabado del lead.
@@ -1649,6 +1651,46 @@ function stopAutoRevival() {
   autoRevival.active = false;
   console.log('🔄 Auto-revival DESACTIVADO');
 }
+
+/**
+ * POST /api/v1/whatsapp/incoming-webhook
+ * Webhook público (sin auth) que n8n/Sofia llama cuando un lead envía un mensaje.
+ * Crea una notificación para el admin en tiempo real.
+ * Body: { wa_id, nombre, mensaje, is_new_lead? }
+ */
+export const incomingMessageWebhook = asyncHandler(async (req, res) => {
+  const { wa_id, nombre, mensaje, is_new_lead } = req.body;
+  if (!wa_id) return res.status(400).json({ error: 'wa_id requerido' });
+
+  const displayName = nombre || `+${wa_id}`;
+  const preview = mensaje ? (mensaje.length > 80 ? mensaje.substring(0, 80) + '...' : mensaje) : '(mensaje)';
+
+  if (SUPER_ADMIN_ID) {
+    // Notificación de mensaje nuevo de WhatsApp
+    await createNotification(req.app, {
+      user: SUPER_ADMIN_ID,
+      type: 'whatsapp',
+      message: `💬 ${displayName}: ${preview}`,
+      data: { wa_id, nombre: displayName },
+      link: '/admin/whatsapp',
+      priority: 'medium',
+    });
+
+    // Si es un lead completamente nuevo, notificar aparte
+    if (is_new_lead) {
+      await createNotification(req.app, {
+        user: SUPER_ADMIN_ID,
+        type: 'lead',
+        message: `🆕 Nuevo lead: ${displayName}`,
+        data: { wa_id, nombre: displayName },
+        link: '/admin/whatsapp',
+        priority: 'high',
+      });
+    }
+  }
+
+  res.json({ ok: true });
+});
 
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();

@@ -8,9 +8,11 @@ const NOTIFICATION_TYPES = [
   'entrega',
   'mensaje',
   'pago',
-  'proyecto',  // ✅ Nuevo: para avances de proyecto
-  'alerta',    // ✅ Nuevo: para mensajes críticos o generales
-  'info',      // ✅ Nuevo: para notificaciones informativas generales
+  'proyecto',
+  'whatsapp',   // Mensajes entrantes de WhatsApp (leads)
+  'lead',       // Nuevo lead creado / lead actualizado
+  'alerta',
+  'info',
 ];
 
 // Prioridades sugeridas para ordenarlas visualmente

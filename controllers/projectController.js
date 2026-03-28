@@ -3,6 +3,9 @@ import Quote from '../models/Quote.js';
 import Payment from '../models/Payment.js';
 import asyncHandler from 'express-async-handler';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
+import createNotification from '../utils/createNotification.js';
+
+const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
 // Create a new project from a quote
 export const createProjectFromQuote = asyncHandler(async (req, res) => {
@@ -40,6 +43,17 @@ export const createProjectFromQuote = asyncHandler(async (req, res) => {
 
     quote.convertedToOrder = true;
     await quote.save();
+
+    if (SUPER_ADMIN_ID) {
+        await createNotification(req.app, {
+            user: SUPER_ADMIN_ID,
+            type: 'proyecto',
+            message: `🚀 Nuevo proyecto creado: ${quote.taskTitle || quote.taskType}`,
+            data: { projectId: project._id, quoteId: quote._id },
+            link: '/admin/proyectos',
+            priority: 'high',
+        });
+    }
 
     res.status(201).json(project);
 });
@@ -113,6 +127,16 @@ export const assignWriter = asyncHandler(async (req, res) => {
     project.status = 'in_progress';
     await project.save();
 
+    if (SUPER_ADMIN_ID) {
+        await createNotification(req.app, {
+            user: SUPER_ADMIN_ID,
+            type: 'proyecto',
+            message: `✍️ Redactor asignado al proyecto: ${project.taskTitle || project.taskType || 'Sin título'}`,
+            data: { projectId: project._id, writerId },
+            link: '/admin/proyectos',
+        });
+    }
+
     res.json(project);
 });
 
@@ -135,6 +159,22 @@ export const updateProjectStatus = asyncHandler(async (req, res) => {
     project.status = status;
     await project.save();
 
+    const statusLabels = {
+        pending: 'Pendiente', in_progress: 'En progreso', review: 'En revisión',
+        revision: 'En corrección', completed: 'Completado', cancelled: 'Cancelado',
+    };
+    if (SUPER_ADMIN_ID) {
+        const priority = ['completed', 'cancelled'].includes(status) ? 'high' : 'medium';
+        await createNotification(req.app, {
+            user: SUPER_ADMIN_ID,
+            type: 'proyecto',
+            message: `📋 Proyecto "${project.taskTitle || 'Sin título'}" → ${statusLabels[status] || status}`,
+            data: { projectId: project._id, status },
+            link: '/admin/proyectos',
+            priority,
+        });
+    }
+
     res.json(project);
 });
 
@@ -156,6 +196,18 @@ export const updateProgress = asyncHandler(async (req, res) => {
 
     project.progress = progress;
     await project.save();
+
+    // Notificar hitos importantes de progreso (25%, 50%, 75%, 100%)
+    if (SUPER_ADMIN_ID && [25, 50, 75, 100].includes(progress)) {
+        await createNotification(req.app, {
+            user: SUPER_ADMIN_ID,
+            type: 'proyecto',
+            message: `📊 Proyecto "${project.taskTitle || 'Sin título'}" alcanzó ${progress}% de avance`,
+            data: { projectId: project._id, progress },
+            link: '/admin/proyectos',
+            priority: progress === 100 ? 'high' : 'medium',
+        });
+    }
 
     res.json(project);
 });
@@ -327,6 +379,17 @@ export const createManualProject = asyncHandler(async (req, res) => {
         // Vincular pago al proyecto
         project.payment = linkedPayment._id;
         await project.save();
+    }
+
+    if (SUPER_ADMIN_ID) {
+        await createNotification(req.app, {
+            user: SUPER_ADMIN_ID,
+            type: 'proyecto',
+            message: `🆕 Proyecto manual creado: ${taskTitle}${clientName ? ` (${clientName})` : ''}`,
+            data: { projectId: project._id },
+            link: '/admin/proyectos',
+            priority: 'high',
+        });
     }
 
     res.status(201).json({

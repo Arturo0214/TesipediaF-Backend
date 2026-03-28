@@ -18,11 +18,15 @@ import {
   runRevival,
   getRevivalStatus,
   configRevival,
+  incomingMessageWebhook,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
 
-// Todas las rutas requieren autenticación de admin
+// ─── Rutas PÚBLICAS (sin auth) — webhooks llamados por n8n/Sofia ───
+router.post('/incoming-webhook', incomingMessageWebhook);
+
+// ─── Rutas protegidas (admin) ───
 router.use(protect);
 router.use(adminOnly);
 
