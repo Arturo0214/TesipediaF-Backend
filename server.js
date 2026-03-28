@@ -33,6 +33,7 @@ import hubspotRoutes from './routes/hubspotRoutes.js';
 import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import gaRoutes from './routes/gaRoutes.js';
+import cotizarLeadRoutes from './routes/cotizarLeadRoutes.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -130,6 +131,7 @@ app.use('/projects', projectRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
 app.use('/api/v1/hubspot', hubspotRoutes);
 app.use('/google', googleCalendarRoutes);
+app.use('/cotizar-leads', cotizarLeadRoutes);
 
 // Middlewares de error
 app.use(notFound);
