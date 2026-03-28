@@ -31,6 +31,7 @@ import projectRoutes from './routes/projectRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import hubspotRoutes from './routes/hubspotRoutes.js';
 import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
+import eventRoutes from './routes/eventRoutes.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -115,6 +116,7 @@ app.use('/admin', adminRoutes);
 app.use('/quotes', quoteRoutes);
 app.use('/orders', orderRoutes);
 app.use('/visits', visitRoutes);
+app.use('/events', eventRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/chat', chatRoutes);
 app.use('/notifications', notificationRoutes);
