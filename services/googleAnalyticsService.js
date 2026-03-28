@@ -249,9 +249,26 @@ export const getUsersByCountry = async (days = 7) => {
 };
 
 /**
- * Timeline de usuarios activos por día
+ * Timeline de usuarios activos por día (o por hora si days <= 1)
  */
 export const getUserTimeline = async (days = 30) => {
+  // For 1-day view, use dateHour dimension for hourly granularity
+  if (days <= 1) {
+    const response = await runReport({
+      dateRanges: [{ startDate: 'today', endDate: 'today' }],
+      dimensions: [{ name: 'dateHour' }],
+      metrics: [
+        { name: 'activeUsers' },
+        { name: 'sessions' },
+        { name: 'screenPageViews' },
+      ],
+      orderBys: [{ dimension: { dimensionName: 'dateHour' } }],
+    });
+    const rows = parseRows(response, ['dateHour'], ['users', 'sessions', 'pageViews']);
+    // Mark as hourly so the frontend knows
+    return { type: 'hourly', rows };
+  }
+
   const response = await runReport({
     dateRanges: [{ startDate: `${days}daysAgo`, endDate: 'today' }],
     dimensions: [{ name: 'date' }],
@@ -262,7 +279,30 @@ export const getUserTimeline = async (days = 30) => {
     ],
     orderBys: [{ dimension: { dimensionName: 'date' } }],
   });
-  return parseRows(response, ['date'], ['users', 'sessions', 'pageViews']);
+  const rows = parseRows(response, ['date'], ['users', 'sessions', 'pageViews']);
+  return { type: 'daily', rows };
+};
+
+/**
+ * Fuentes de tráfico (source/medium) para ver de dónde llegan las visitas
+ */
+export const getTrafficSources = async (days = 7) => {
+  const response = await runReport({
+    dateRanges: [{ startDate: `${days}daysAgo`, endDate: 'today' }],
+    dimensions: [
+      { name: 'sessionSource' },
+      { name: 'sessionMedium' },
+    ],
+    metrics: [
+      { name: 'sessions' },
+      { name: 'activeUsers' },
+      { name: 'newUsers' },
+      { name: 'bounceRate' },
+    ],
+    orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+    limit: 15,
+  });
+  return parseRows(response, ['source', 'medium'], ['sessions', 'users', 'newUsers', 'bounceRate']);
 };
 
 /**

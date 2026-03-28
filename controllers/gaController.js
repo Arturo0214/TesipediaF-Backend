@@ -7,7 +7,9 @@ import {
   getUsersByCountry,
   getUserTimeline,
   getDeviceBreakdown,
+  getTrafficSources,
 } from '../services/googleAnalyticsService.js';
+import { getSearchConsoleData } from '../services/googleSearchConsoleService.js';
 
 // ─── GET /ga/overview ───
 export const gaOverview = async (req, res) => {
@@ -109,7 +111,7 @@ export const gaDashboard = async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
 
-    const [overview, realtime, pages, events, channels, countries, devices] = await Promise.allSettled([
+    const [overview, realtime, pages, events, channels, countries, devices, sources, timeline, searchConsole] = await Promise.allSettled([
       getOverview(days),
       getRealtime(),
       getTopPages(days),
@@ -117,6 +119,9 @@ export const gaDashboard = async (req, res) => {
       getAcquisitionChannels(days),
       getUsersByCountry(days),
       getDeviceBreakdown(days),
+      getTrafficSources(days),
+      getUserTimeline(days),
+      getSearchConsoleData(days),
     ]);
 
     res.json({
@@ -127,6 +132,9 @@ export const gaDashboard = async (req, res) => {
       channels: channels.status === 'fulfilled' ? channels.value : null,
       countries: countries.status === 'fulfilled' ? countries.value : null,
       devices: devices.status === 'fulfilled' ? devices.value : null,
+      sources: sources.status === 'fulfilled' ? sources.value : null,
+      timeline: timeline.status === 'fulfilled' ? timeline.value : null,
+      searchConsole: searchConsole.status === 'fulfilled' ? searchConsole.value : null,
     });
   } catch (err) {
     console.error('GA Dashboard error:', err.message);
