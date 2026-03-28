@@ -19,6 +19,9 @@ import {
   getRevivalStatus,
   configRevival,
   incomingMessageWebhook,
+  runQuoteFollowUp,
+  getQuoteFollowUpStatus,
+  configQuoteFollowUp,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -65,5 +68,10 @@ router.post('/auto-reminder', configAutoReminder);
 router.post('/revival', runRevival);
 router.get('/revival/status', getRevivalStatus);
 router.post('/revival/config', configRevival);
+
+// Quote Follow-up — Seguimiento automático a leads con cotización
+router.post('/quote-followup', runQuoteFollowUp);
+router.get('/quote-followup/status', getQuoteFollowUpStatus);
+router.post('/quote-followup/config', configQuoteFollowUp);
 
 export default router;

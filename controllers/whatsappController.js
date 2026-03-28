@@ -1630,6 +1630,22 @@ async function runAutoRevivalCycle() {
     autoRevival.lastRun = new Date().toISOString();
     autoRevival.lastResult = { ...result, results: undefined, time: new Date().toISOString() };
     console.log(`🔄 Auto-revival: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} | Tiers: ${JSON.stringify(result.tierStats)}`);
+
+    // Notificar al admin si se enviaron mensajes
+    if (result.sent > 0 && SUPER_ADMIN_ID) {
+      try {
+        const app = global.__tesipediaApp;
+        if (app) {
+          await createNotification(app, {
+            user: SUPER_ADMIN_ID,
+            type: 'whatsapp',
+            message: `🔄 Revival automático: ${result.sent} leads fríos contactados`,
+            data: { tierStats: result.tierStats, sent: result.sent },
+            link: '/admin/whatsapp',
+          });
+        }
+      } catch { /* non-critical */ }
+    }
   } catch (e) {
     console.error('Auto-revival error:', e.message);
     autoRevival.lastResult = { error: e.message, time: new Date().toISOString() };
@@ -1692,8 +1708,370 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
   res.json({ ok: true });
 });
 
+/* ═══════════════════════════════════════════════════════════════════
+ *  QUOTE FOLLOW-UP — Seguimiento automático a leads con cotización
+ *  Envía recordatorios escalonados a leads que recibieron cotización
+ *  pero no han confirmado / pagado.
+ *  Tiers: 1d (recordatorio), 3d (beneficio), 7d (urgencia), 14d (oferta)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Clasifica un lead cotizado en su tier de seguimiento
+ */
+function getFollowUpTier(daysInactive) {
+  if (daysInactive >= 14) return 14;
+  if (daysInactive >= 7) return 7;
+  if (daysInactive >= 3) return 3;
+  if (daysInactive >= 1) return 1;
+  return null;
+}
+
+/**
+ * Genera mensaje de seguimiento personalizado para leads con cotización
+ */
+function buildQuoteFollowUpMessage(lead, tier) {
+  const nombre = (lead.nombre || '').split(' ')[0];
+  const saludo = nombre ? `Hola ${nombre}` : 'Hola';
+  const tieneTema = !!lead.tema;
+  const tienePrecio = !!lead.precio;
+  const tieneProyecto = !!lead.tipo_proyecto;
+  const proyectoLabel = (lead.tipo_proyecto || 'proyecto').toLowerCase();
+  const precioPrev = tienePrecio ? ` de $${lead.precio} MXN` : '';
+
+  // ── TIER 1 DÍA — Recordatorio suave ──
+  if (tier === 1) {
+    if (tieneTema) {
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Ayer te enviamos la cotizacion para tu ${proyectoLabel} sobre "${lead.tema}"${precioPrev}. Queria saber si tuviste oportunidad de revisarla. Tienes alguna duda? Estoy aqui para ayudarte!`;
+    }
+    return `${saludo}, soy Sofia de Tesipedia! 😊 Ayer te enviamos tu cotizacion${precioPrev} y queria saber si pudiste revisarla. Si tienes alguna pregunta sobre el servicio o los tiempos de entrega, con gusto te ayudo!`;
+  }
+
+  // ── TIER 3 DÍAS — Beneficio, resolver dudas ──
+  if (tier === 3) {
+    if (tieneTema) {
+      return `${saludo}, soy Sofia de Tesipedia! Han pasado unos dias desde que te enviamos la cotizacion para "${lead.tema}"${precioPrev}. Muchos estudiantes nos preguntan sobre los tiempos de entrega y la metodologia, si tienes alguna duda similar con gusto te oriento. Recuerda que mientras antes comiences, mejor calidad podemos garantizar. Que opinas?`;
+    }
+    return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${precioPrev} sigue vigente. Queria comentarte que nuestro equipo tiene experiencia en mas de 500 proyectos y ofrecemos revisiones incluidas. Si el precio o los tiempos te generan dudas, platiquemos para buscar una opcion que se ajuste a ti.`;
+  }
+
+  // ── TIER 7 DÍAS — Urgencia + disponibilidad ──
+  if (tier === 7) {
+    if (tieneTema) {
+      return `${saludo}, soy Sofia de Tesipedia! Ya paso una semana desde tu cotizacion para "${lead.tema}"${precioPrev}. Te escribo porque la disponibilidad de nuestros redactores cambia cada semana y no quiero que pierdas tu lugar. Si decides avanzar, podemos comenzar de inmediato. Te interesa?`;
+    }
+    return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${precioPrev} tiene una semana. Quiero ser transparente: los precios pueden ajustarse conforme se acercan las fechas de entrega. Si confirmas esta semana, te garantizamos el precio actual y disponibilidad inmediata. Que dices?`;
+  }
+
+  // ── TIER 14 DÍAS — Última oportunidad + oferta ──
+  if (tier >= 14) {
+    if (tieneTema) {
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Tu cotizacion para "${lead.tema}" ya tiene dos semanas. Como ultimo seguimiento, quiero ofrecerte un 10% de descuento especial si confirmas esta semana. ${tienePrecio ? `Tu precio pasaria de $${lead.precio} a $${Math.round(lead.precio * 0.9)} MXN.` : 'Aplicaria sobre tu cotizacion actual.'} Es nuestra forma de motivarte a no dejar tu proyecto para despues. Te interesa?`;
+    }
+    return `${saludo}, soy Sofia de Tesipedia! 🎓 Este es mi ultimo seguimiento sobre tu cotizacion${precioPrev}. Como incentivo especial, tenemos un 10% de descuento si confirmas esta semana. No dejes tu proyecto academico para el final, cada dia cuenta. Que opinas?`;
+  }
+
+  // Fallback
+  return `${saludo}, soy Sofia de Tesipedia! Queria dar seguimiento a la cotizacion que te enviamos. Si tienes alguna duda o quieres ajustar algo, estoy aqui para ayudarte!`;
+}
+
+// ── Estado en memoria del quote follow-up automático ──
+const autoQuoteFollowUp = {
+  active: false,
+  intervalHours: 12,        // Corre cada 12 horas
+  maxPerRun: 40,             // Max leads por ejecución
+  lastRun: null,
+  lastResult: null,
+  _timer: null,
+};
+
+/**
+ * Core: busca leads con cotización enviada y manda seguimiento escalonado
+ */
+async function runQuoteFollowUpCore(options = {}) {
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const maxPerRun = options.maxPerRun || autoQuoteFollowUp.maxPerRun;
+  const dryRun = options.dryRun || false;
+  const allowedTiers = options.tiers || [1, 3, 7, 14];
+
+  // Buscar leads que:
+  // 1. Tienen cotización enviada (cotizacion_enviada=true) O estado cotizando con precio
+  // 2. No están bloqueados
+  // 3. Se actualizaron hace más de 1 día (para dar tiempo a que respondan)
+  const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Query: leads cotizados que no han respondido en 1+ día
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&or=(cotizacion_enviada.eq.true,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
+
+  const resp = await fetch(url, { headers: supabaseHeaders() });
+  if (!resp.ok) {
+    throw new Error(`Supabase error ${resp.status}`);
+  }
+
+  const allLeads = await resp.json();
+  const leads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
+
+  const results = [];
+  const tierStats = { 1: 0, 3: 0, 7: 0, 14: 0 };
+  let sent = 0, failed = 0, skipped = 0;
+
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+
+  for (const lead of leads) {
+    if (sent >= maxPerRun) break;
+
+    const daysInactive = getDaysInactive(lead);
+    const tier = getFollowUpTier(daysInactive);
+
+    if (!tier || !allowedTiers.includes(tier)) continue;
+
+    // ── Obtener historial ──
+    let historial = [];
+    try {
+      const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+      if (histResp.ok) {
+        const histData = await histResp.json();
+        const raw = histData[0]?.historial_chat;
+        if (Array.isArray(raw)) historial = raw;
+        else if (typeof raw === 'string' && raw.trim()) {
+          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        }
+      }
+    } catch { /* continuar sin historial */ }
+
+    // ── No enviar si ya mandamos follow-up en este tier ──
+    const lastFollowUp = [...historial].reverse().find(m => m.isQuoteFollowUp);
+    if (lastFollowUp && lastFollowUp.followUpTier === tier) {
+      skipped++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: false, reason: `Ya recibio follow-up tier ${tier}` });
+      continue;
+    }
+
+    // ── Max 3 follow-ups sin respuesta ──
+    let consecutive = 0;
+    for (let i = historial.length - 1; i >= 0; i--) {
+      if (historial[i].role === 'user') break;
+      if (historial[i].isQuoteFollowUp || historial[i].isRevival || historial[i].isReengagement || historial[i].isTemplate) consecutive++;
+    }
+    if (consecutive >= 3) {
+      skipped++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: false, reason: `Max follow-ups alcanzado (${consecutive})` });
+      continue;
+    }
+
+    const msg = buildQuoteFollowUpMessage(lead, tier);
+
+    if (dryRun) {
+      sent++;
+      tierStats[tier]++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: true, dryRun: true, message: msg });
+      continue;
+    }
+
+    // ── Enviar template (ventana probablemente expirada) + guardar mensaje pendiente ──
+    const cleanNumber = lead.wa_id.replace(/\D/g, '');
+    const firstName = (lead.nombre || 'amigo').split(' ')[0];
+
+    try {
+      // Primero intentar envío directo (por si la ventana está abierta)
+      let sentDirect = false;
+      if (!isWindowExpired(historial, lead.updated_at)) {
+        const directResp = await fetch(waUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+        });
+        const directData = await directResp.json();
+        if (directData.messages) {
+          sentDirect = true;
+          historial.push({
+            role: 'assistant',
+            content: msg,
+            timestamp: new Date().toISOString(),
+            isQuoteFollowUp: true,
+            followUpTier: tier,
+            wa_message_id: directData.messages[0]?.id || null,
+            delivery_status: 'sent',
+          });
+          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
+          });
+        }
+      }
+
+      // Si no se pudo enviar directo, usar template + queue
+      if (!sentDirect) {
+        const tplBody = {
+          messaging_product: 'whatsapp',
+          to: cleanNumber,
+          type: 'template',
+          template: {
+            name: WA_TEMPLATE_NAME,
+            language: { code: WA_TEMPLATE_LANG },
+            components: [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }],
+          },
+        };
+        const tplResp = await fetch(waUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(tplBody),
+        });
+        const tplData = await tplResp.json();
+
+        if (!tplData.messages) {
+          failed++;
+          results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: false, reason: 'Template fallo: ' + (tplData.error?.message || 'unknown') });
+          continue;
+        }
+
+        historial.push({
+          role: 'assistant',
+          content: `[TEMPLATE:${WA_TEMPLATE_NAME}] Seguimiento cotización (tier ${tier}d) enviado a ${firstName}`,
+          timestamp: new Date().toISOString(),
+          isTemplate: true,
+          isQuoteFollowUp: true,
+          followUpTier: tier,
+        });
+
+        await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+          method: 'PATCH',
+          headers: supabaseHeaders(),
+          body: JSON.stringify({
+            historial_chat: JSON.stringify(historial),
+            mensaje_pendiente: JSON.stringify({ text: msg, isQuoteFollowUp: true, followUpTier: tier }),
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      }
+
+      sent++;
+      tierStats[tier]++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: true, method: sentDirect ? 'direct' : 'template+queued' });
+    } catch (e) {
+      failed++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: false, reason: e.message });
+    }
+  }
+
+  return { sent, failed, skipped, total: leads.length, tierStats, results };
+}
+
+/**
+ * POST /api/v1/whatsapp/quote-followup
+ * Ejecutar seguimiento de cotizaciones manualmente
+ * Body (opcional): { maxPerRun, dryRun, tiers }
+ */
+export const runQuoteFollowUp = asyncHandler(async (req, res) => {
+  const { maxPerRun, dryRun, tiers } = req.body || {};
+
+  console.log(`📩 Quote follow-up MANUAL iniciado por ${req.user?.name || 'admin'} — dryRun: ${!!dryRun}`);
+
+  const result = await runQuoteFollowUpCore({
+    maxPerRun: maxPerRun || 50,
+    dryRun: !!dryRun,
+    tiers: Array.isArray(tiers) ? tiers : [1, 3, 7, 14],
+  });
+
+  console.log(`📩 Quote follow-up: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} leads`);
+
+  res.json({ success: true, ...result });
+});
+
+/**
+ * GET /api/v1/whatsapp/quote-followup/status
+ */
+export const getQuoteFollowUpStatus = asyncHandler(async (req, res) => {
+  res.json({
+    active: autoQuoteFollowUp.active,
+    intervalHours: autoQuoteFollowUp.intervalHours,
+    maxPerRun: autoQuoteFollowUp.maxPerRun,
+    lastRun: autoQuoteFollowUp.lastRun,
+    lastResult: autoQuoteFollowUp.lastResult,
+  });
+});
+
+/**
+ * POST /api/v1/whatsapp/quote-followup/config
+ * Body: { active, intervalHours, maxPerRun }
+ */
+export const configQuoteFollowUp = asyncHandler(async (req, res) => {
+  const { active, intervalHours, maxPerRun } = req.body;
+
+  if (intervalHours !== undefined) autoQuoteFollowUp.intervalHours = Math.max(1, Number(intervalHours) || 12);
+  if (maxPerRun !== undefined) autoQuoteFollowUp.maxPerRun = Math.max(1, Math.min(100, Number(maxPerRun) || 40));
+
+  if (active === true) {
+    startQuoteFollowUp();
+  } else if (active === false) {
+    stopQuoteFollowUp();
+  } else if (autoQuoteFollowUp.active) {
+    startQuoteFollowUp(); // reiniciar con nuevos params
+  }
+
+  res.json({
+    success: true,
+    active: autoQuoteFollowUp.active,
+    intervalHours: autoQuoteFollowUp.intervalHours,
+    maxPerRun: autoQuoteFollowUp.maxPerRun,
+  });
+});
+
+// ── Cron job de quote follow-up ──
+async function runAutoQuoteFollowUpCycle() {
+  console.log('📩 Auto quote follow-up ejecutándose...');
+  try {
+    const result = await runQuoteFollowUpCore({
+      maxPerRun: autoQuoteFollowUp.maxPerRun,
+      dryRun: false,
+      tiers: [1, 3, 7, 14],
+    });
+
+    autoQuoteFollowUp.lastRun = new Date().toISOString();
+    autoQuoteFollowUp.lastResult = { sent: result.sent, failed: result.failed, skipped: result.skipped, total: result.total, tierStats: result.tierStats, time: new Date().toISOString() };
+    console.log(`📩 Auto quote follow-up: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total}`);
+
+    // Notificar al admin si se enviaron mensajes
+    if (result.sent > 0 && SUPER_ADMIN_ID) {
+      try {
+        const app = global.__tesipediaApp;
+        if (app) {
+          await createNotification(app, {
+            user: SUPER_ADMIN_ID,
+            type: 'whatsapp',
+            message: `📩 Seguimiento automático: ${result.sent} leads cotizados contactados`,
+            data: { tierStats: result.tierStats, sent: result.sent },
+            link: '/admin/whatsapp',
+          });
+        }
+      } catch { /* non-critical */ }
+    }
+  } catch (e) {
+    console.error('Auto quote follow-up error:', e.message);
+    autoQuoteFollowUp.lastResult = { error: e.message, time: new Date().toISOString() };
+  }
+}
+
+function startQuoteFollowUp() {
+  if (autoQuoteFollowUp._timer) clearInterval(autoQuoteFollowUp._timer);
+  autoQuoteFollowUp.active = true;
+  autoQuoteFollowUp._timer = setInterval(runAutoQuoteFollowUpCycle, autoQuoteFollowUp.intervalHours * 60 * 60 * 1000);
+  setTimeout(runAutoQuoteFollowUpCycle, 10 * 60 * 1000); // Primera ejecución a los 10 min
+  console.log(`📩 Auto quote follow-up ACTIVADO — cada ${autoQuoteFollowUp.intervalHours}h, max ${autoQuoteFollowUp.maxPerRun} leads`);
+}
+
+function stopQuoteFollowUp() {
+  if (autoQuoteFollowUp._timer) clearInterval(autoQuoteFollowUp._timer);
+  autoQuoteFollowUp._timer = null;
+  autoQuoteFollowUp.active = false;
+  console.log('📩 Auto quote follow-up DESACTIVADO');
+}
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
 
 // Auto-revival inicia también al arrancar (cada 24h por defecto)
 startAutoRevival();
+
+// Quote follow-up inicia al arrancar (cada 12h por defecto)
+startQuoteFollowUp();

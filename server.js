@@ -147,6 +147,9 @@ const io = configureSocket(server);
 // Make io accessible to routes
 app.set('io', io);
 
+// Expose app globally for cron jobs that need socket access (auto-revival, quote follow-up, etc.)
+global.__tesipediaApp = app;
+
 // Initialize socket functionality
 chatSocket(io);
 notificationSocket(io);

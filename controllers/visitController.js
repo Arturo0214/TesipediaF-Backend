@@ -115,7 +115,7 @@ export const getVisitAnalytics = asyncHandler(async (req, res) => {
   const analytics = await Visit.aggregate([
     {
       $group: {
-        _id: '$country',
+        _id: '$geoLocation.country',
         count: { $sum: 1 },
       },
     },
