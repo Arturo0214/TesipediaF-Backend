@@ -108,7 +108,7 @@ export const generateQuotePDF = async (data) => {
         
         // Fechas default
         const hoyStr = new Date().toISOString().split('T')[0];
-        const fechaEntregaStr = d.fechaEntregaRaw || (new Date(Date.now() + 21*24*60*60*1000)).toISOString().split('T')[0];
+        const fechaEntregaStr = d.fechaPagoFinal || d.fechaEntregaRaw || (new Date(Date.now() + 21*24*60*60*1000)).toISOString().split('T')[0];
         const fechaAvanceStr = (new Date(Date.now() + 14*24*60*60*1000)).toISOString().split('T')[0];
         const pago1 = d.fechaPago1 || hoyStr;
 
