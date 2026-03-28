@@ -32,6 +32,7 @@ import whatsappRoutes from './routes/whatsappRoutes.js';
 import hubspotRoutes from './routes/hubspotRoutes.js';
 import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
+import gaRoutes from './routes/gaRoutes.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -117,6 +118,7 @@ app.use('/quotes', quoteRoutes);
 app.use('/orders', orderRoutes);
 app.use('/visits', visitRoutes);
 app.use('/events', eventRoutes);
+app.use('/ga', gaRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/chat', chatRoutes);
 app.use('/notifications', notificationRoutes);

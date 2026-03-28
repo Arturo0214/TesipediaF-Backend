@@ -15,6 +15,9 @@ import {
   getAutoReminderStatus,
   configAutoReminder,
   toggleBlockLead,
+  runRevival,
+  getRevivalStatus,
+  configRevival,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -53,5 +56,10 @@ router.post('/reengagement', sendReengagement);
 // Auto-reminder de Sofia: config y status
 router.get('/auto-reminder', getAutoReminderStatus);
 router.post('/auto-reminder', configAutoReminder);
+
+// Lead Revival — Sofia revive leads fríos/descartados
+router.post('/revival', runRevival);
+router.get('/revival/status', getRevivalStatus);
+router.post('/revival/config', configRevival);
 
 export default router;

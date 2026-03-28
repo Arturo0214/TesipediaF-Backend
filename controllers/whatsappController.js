@@ -1206,5 +1206,452 @@ export const toggleBlockLead = asyncHandler(async (req, res) => {
   });
 });
 
+/* ═══════════════════════════════════════════════════════════════════
+ *  LEAD REVIVAL — Sofia revive leads fríos/descartados
+ *  Mensajes personalizados según estado_sofia + días de inactividad.
+ *  Dos modos: endpoint manual + cron job automático.
+ *  Rangos: 3d (suave), 7d (beneficio), 14d (oferta), 30d+ (último intento)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Calcula los días de inactividad de un lead
+ */
+function getDaysInactive(lead) {
+  const lastActivity = new Date(lead.updated_at || lead.created_at);
+  return Math.floor((Date.now() - lastActivity.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Clasifica un lead en su rango de revival: 3, 7, 14 o 30 días
+ * Retorna null si no cae en ningún rango activo
+ */
+function getRevivalTier(daysInactive) {
+  if (daysInactive >= 30) return 30;
+  if (daysInactive >= 14) return 14;
+  if (daysInactive >= 7) return 7;
+  if (daysInactive >= 3) return 3;
+  return null; // Menos de 3 días — no aplica revival
+}
+
+/**
+ * Genera un mensaje de revival personalizado según:
+ * - estado_sofia del lead (bienvenida, calificando, cotizando, descartado, modo_humano)
+ * - rango de días de inactividad (3, 7, 14, 30)
+ * - datos que ya tenga el lead (nombre, tipo_servicio, tema, etc.)
+ */
+function buildRevivalMessage(lead, tier) {
+  const nombre = (lead.nombre || '').split(' ')[0];
+  const saludo = nombre ? `Hola ${nombre}` : 'Hola';
+  const estado = lead.estado_sofia || 'bienvenida';
+
+  // ── Info del lead para personalizar ──
+  const tieneServicio = !!lead.tipo_servicio;
+  const tieneTema = !!lead.tema;
+  const tieneProyecto = !!lead.tipo_proyecto;
+  const servicioLabel = { servicio_1: 'redaccion completa', servicio_2: 'correccion de estilo', servicio_3: 'asesoria' }[lead.tipo_servicio] || '';
+  const proyectoLabel = (lead.tipo_proyecto || '').toLowerCase();
+
+  // ═══════════════════════════════
+  // TIER 3 DÍAS — Mensaje suave, retomar conversación
+  // ═══════════════════════════════
+  if (tier === 3) {
+    if (estado === 'bienvenida') {
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Hace unos dias nos escribiste y me encantaria poder ayudarte. Si tienes algun proyecto academico pendiente (tesis, tesina, ensayo...) estoy aqui para orientarte sin compromiso. Cuentame en que puedo ayudarte!`;
+    }
+    if (estado === 'calificando') {
+      if (tieneTema) {
+        return `${saludo}, soy Sofia de Tesipedia! Estabamos platicando sobre tu proyecto de "${lead.tema}" y nos quedamos a medias. Me encantaria retomar donde nos quedamos para darte una cotizacion. Te parece si continuamos?`;
+      }
+      if (tieneServicio) {
+        return `${saludo}, soy Sofia de Tesipedia! Nos quedamos platicando sobre tu ${servicioLabel} y me faltan unos datos para cotizarte. Quieres que retomemos? Solo me tomara un par de minutos completar tu informacion.`;
+      }
+      return `${saludo}, soy Sofia de Tesipedia! Estabamos en medio de platicar sobre tu proyecto academico. Quieres que retomemos donde nos quedamos? Estoy aqui para ayudarte.`;
+    }
+    if (estado === 'cotizando') {
+      return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} esta lista. Solo necesito que me confirmes para enviartela. Quieres que te la mande?`;
+    }
+    if (estado === 'descartado') {
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Se que paso un tiempo desde que platicamos, pero queria saber si tu proyecto academico${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue pendiente. Si necesitas ayuda, aqui estoy sin compromiso!`;
+    }
+    // modo_humano u otros estados
+    return `${saludo}, te escribe Sofia de Tesipedia! Queria dar seguimiento a nuestra platica anterior. Sigues necesitando apoyo con tu proyecto academico? Estoy aqui para ayudarte.`;
+  }
+
+  // ═══════════════════════════════
+  // TIER 7 DÍAS — Mencionar beneficio, crear urgencia suave
+  // ═══════════════════════════════
+  if (tier === 7) {
+    if (estado === 'bienvenida') {
+      return `${saludo}, soy Sofia de Tesipedia! Ha pasado una semana desde que nos contactaste. Entiendo que a veces la agenda se complica, pero tu proyecto academico es importante. Tenemos asesoria gratuita inicial para que sepas exactamente como podemos ayudarte. Te interesa?`;
+    }
+    if (estado === 'calificando') {
+      return `${saludo}, soy Sofia de Tesipedia! Ya tenemos parte de tu informacion${tieneProyecto ? ` sobre tu ${proyectoLabel}` : ''} y estamos a pocos pasos de darte una cotizacion personalizada. Esta semana tenemos buena disponibilidad para nuevos proyectos. Quieres que terminemos de cotizarte?`;
+    }
+    if (estado === 'cotizando') {
+      return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} sigue disponible y lista. Recuerda que los precios pueden variar conforme se acerquen las fechas de entrega. Quieres que te la envie ahora para que la revises?`;
+    }
+    if (estado === 'descartado') {
+      return `${saludo}, soy Sofia de Tesipedia! Queria escribirte porque muchos estudiantes regresan justo en esta epoca. Si tu ${tieneProyecto ? proyectoLabel : 'proyecto academico'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue pendiente, tenemos asesoria inicial sin costo para retomar. Puedo orientarte?`;
+    }
+    return `${saludo}, te escribe Sofia de Tesipedia! Ha pasado una semana y queria saber si puedo ayudarte con algo. Tenemos disponibilidad esta semana y asesoria sin compromiso. Me cuentas?`;
+  }
+
+  // ═══════════════════════════════
+  // TIER 14 DÍAS — Oferta especial, más directo
+  // ═══════════════════════════════
+  if (tier === 14) {
+    if (estado === 'bienvenida') {
+      return `${saludo}, soy Sofia de Tesipedia! Han pasado dos semanas y se que el semestre avanza rapido. No dejes tu proyecto academico para el final: tenemos un 10% de descuento especial para quienes retoman su cotizacion esta semana. Te interesa saber mas?`;
+    }
+    if (estado === 'calificando') {
+      return `${saludo}, soy Sofia de Tesipedia! Tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue en nuestro sistema y no quiero que pierdas la oportunidad. Esta quincena tenemos un descuento del 10% para retomar proyectos. Quieres que completemos tu cotizacion?`;
+    }
+    if (estado === 'cotizando') {
+      return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} ya tiene dos semanas esperandote. Para motivarte a decidir, tenemos un 10% de descuento si confirmas esta semana. Te la reenvio con el precio especial?`;
+    }
+    if (estado === 'descartado') {
+      return `${saludo}, soy Sofia de Tesipedia! Se que ha pasado tiempo, pero queria ofrecerte algo especial: 10% de descuento en cualquiera de nuestros servicios si retomas tu proyecto esta semana. ${tieneTema ? `Tu tema "${lead.tema}" suena muy interesante y me encantaria ayudarte.` : 'Me encantaria ayudarte con tu proyecto academico.'} Que dices?`;
+    }
+    return `${saludo}, te escribe Sofia de Tesipedia! Ya pasaron dos semanas y tenemos una promocion especial: 10% de descuento para proyectos que se retomen esta semana. Te interesa?`;
+  }
+
+  // ═══════════════════════════════
+  // TIER 30 DÍAS — Último intento, "te extrañamos"
+  // ═══════════════════════════════
+  if (tier >= 30) {
+    if (estado === 'bienvenida' || estado === 'descartado') {
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ha pasado un buen tiempo y queria escribirte por ultima vez. Si en algun momento necesitas apoyo con tu tesis o proyecto academico, aqui seguimos. Nuestro equipo tiene experiencia en mas de 500 proyectos y nos encantaria ayudarte. Solo responde este mensaje y retomamos. Exito en todo!`;
+    }
+    if (estado === 'calificando') {
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ya paso un mes y tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue registrado con nosotros. Este es mi ultimo mensaje, pero si decides retomar, solo responde y te atendemos de inmediato. Nuestro equipo ha ayudado a mas de 500 estudiantes a graduarse. Mucho exito!`;
+    }
+    if (estado === 'cotizando') {
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} vencio, pero puedo generarte una nueva al instante si la necesitas. Este es mi ultimo seguimiento: si decides avanzar con tu proyecto, solo responde y retomamos donde nos quedamos. Te deseo mucho exito!`;
+    }
+    return `${saludo}, te escribe Sofia de Tesipedia! 🎓 Ha pasado bastante tiempo. Este es mi ultimo mensaje de seguimiento, pero si algun dia necesitas apoyo academico, aqui estaremos. Solo responde y te atendemos. Mucho exito en todo!`;
+  }
+
+  // Fallback (no debería llegar aquí)
+  return `${saludo}, soy Sofia de Tesipedia! Queria saber si sigues interesado en recibir apoyo con tu proyecto academico. Estamos aqui para ayudarte!`;
+}
+
+// ── Estado en memoria del revival automático ──
+const autoRevival = {
+  active: false,
+  intervalHours: 24,       // Corre cada 24 horas
+  maxPerRun: 30,            // Max leads por ejecución
+  lastRun: null,
+  lastResult: null,
+  _timer: null,
+};
+
+/**
+ * Lógica core de revival: busca leads fríos y les envía mensaje según tier
+ * Reutilizable por endpoint manual y cron job
+ * @param {Object} options - { maxPerRun, dryRun, tiers }
+ * @returns {Object} resultados del revival
+ */
+async function runRevivalCore(options = {}) {
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const maxPerRun = options.maxPerRun || autoRevival.maxPerRun;
+  const dryRun = options.dryRun || false;
+  const allowedTiers = options.tiers || [3, 7, 14, 30];
+
+  // Buscar TODOS los leads no convertidos (excepto bloqueados)
+  // Incluimos todos los estados: bienvenida, calificando, cotizando, descartado, modo_humano
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${threeDaysAgo}&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,modo_humano&order=updated_at.asc&limit=500`;
+
+  const resp = await fetch(url, { headers: supabaseHeaders() });
+  if (!resp.ok) {
+    throw new Error(`Supabase error ${resp.status}`);
+  }
+
+  const allLeads = await resp.json();
+  // Filtrar admin IDs
+  const leads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
+
+  const results = [];
+  const tierStats = { 3: 0, 7: 0, 14: 0, 30: 0 };
+  let sent = 0, failed = 0, skipped = 0;
+
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+
+  for (const lead of leads) {
+    if (sent >= maxPerRun) break;
+
+    const daysInactive = getDaysInactive(lead);
+    const tier = getRevivalTier(daysInactive);
+
+    // No cae en ningún rango o el tier no está permitido
+    if (!tier || !allowedTiers.includes(tier)) {
+      continue;
+    }
+
+    // ── Obtener historial para verificar que no le hayamos mandado revival recientemente ──
+    let historial = [];
+    try {
+      const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+      if (histResp.ok) {
+        const histData = await histResp.json();
+        const raw = histData[0]?.historial_chat;
+        if (Array.isArray(raw)) historial = raw;
+        else if (typeof raw === 'string' && raw.trim()) {
+          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        }
+      }
+    } catch { /* continuar sin historial */ }
+
+    // ── Verificar: no enviar si ya le mandamos un revival en este mismo tier ──
+    // Buscar si el último mensaje de revival tiene el mismo tier
+    const lastRevival = [...historial].reverse().find(m => m.isRevival);
+    if (lastRevival && lastRevival.revivalTier === tier) {
+      skipped++;
+      results.push({
+        wa_id: lead.wa_id,
+        nombre: lead.nombre,
+        estado: lead.estado_sofia,
+        daysInactive,
+        tier,
+        success: false,
+        reason: `Ya recibio revival tier ${tier}`,
+      });
+      continue;
+    }
+
+    // ── Verificar: si el cliente respondió después del último revival, no saltamos ──
+    // (puede recibir el siguiente tier si aplica)
+
+    // ── Verificar: no enviar si tiene 3+ revival messages sin respuesta ──
+    let consecutiveRevivals = 0;
+    for (let i = historial.length - 1; i >= 0; i--) {
+      const m = historial[i];
+      if (m.role === 'user') break;
+      if (m.isRevival || m.isReengagement || m.isTemplate) consecutiveRevivals++;
+    }
+    if (consecutiveRevivals >= 4) {
+      skipped++;
+      results.push({
+        wa_id: lead.wa_id,
+        nombre: lead.nombre,
+        estado: lead.estado_sofia,
+        daysInactive,
+        tier,
+        success: false,
+        reason: `Maximo de revivals alcanzado (${consecutiveRevivals} sin respuesta)`,
+      });
+      continue;
+    }
+
+    const msg = buildRevivalMessage(lead, tier);
+
+    if (dryRun) {
+      sent++;
+      tierStats[tier]++;
+      results.push({
+        wa_id: lead.wa_id,
+        nombre: lead.nombre,
+        estado: lead.estado_sofia,
+        daysInactive,
+        tier,
+        success: true,
+        dryRun: true,
+        message: msg,
+      });
+      continue;
+    }
+
+    // ── SIEMPRE enviar template aprobado por Meta (ventana expirada para leads fríos) ──
+    // El mensaje personalizado de Sofia se guarda como mensaje_pendiente
+    // y se enviará cuando el lead responda a la plantilla.
+    const cleanNumber = lead.wa_id.replace(/\D/g, '');
+    const firstName = (lead.nombre || 'amigo').split(' ')[0];
+
+    try {
+      const tplBody = {
+        messaging_product: 'whatsapp',
+        to: cleanNumber,
+        type: 'template',
+        template: {
+          name: WA_TEMPLATE_NAME,
+          language: { code: WA_TEMPLATE_LANG },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }],
+        },
+      };
+      const tplResp = await fetch(waUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(tplBody),
+      });
+      const tplData = await tplResp.json();
+
+      if (!tplData.messages) {
+        failed++;
+        results.push({
+          wa_id: lead.wa_id,
+          nombre: lead.nombre,
+          estado: lead.estado_sofia,
+          daysInactive,
+          tier,
+          success: false,
+          reason: 'Template fallo: ' + (tplData.error?.message || 'unknown'),
+        });
+        continue;
+      }
+
+      // Registrar template en historial con metadata de revival
+      historial.push({
+        role: 'assistant',
+        content: `[TEMPLATE:${WA_TEMPLATE_NAME}] Seguimiento revival (tier ${tier}d) enviado a ${firstName}`,
+        timestamp: new Date().toISOString(),
+        isTemplate: true,
+        isRevival: true,
+        revivalTier: tier,
+      });
+
+      // Guardar mensaje personalizado como pendiente — Sofia lo enviará cuando el lead responda
+      await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+        method: 'PATCH',
+        headers: supabaseHeaders(),
+        body: JSON.stringify({
+          historial_chat: JSON.stringify(historial),
+          mensaje_pendiente: JSON.stringify({ text: msg, isRevival: true, revivalTier: tier }),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+
+      sent++;
+      tierStats[tier]++;
+      results.push({
+        wa_id: lead.wa_id,
+        nombre: lead.nombre,
+        estado: lead.estado_sofia,
+        daysInactive,
+        tier,
+        success: true,
+        method: 'template+queued',
+        queuedMessage: msg,
+      });
+    } catch (e) {
+      failed++;
+      results.push({
+        wa_id: lead.wa_id,
+        nombre: lead.nombre,
+        estado: lead.estado_sofia,
+        daysInactive,
+        tier,
+        success: false,
+        reason: e.message,
+      });
+    }
+  }
+
+  return { sent, failed, skipped, total: leads.length, tierStats, results };
+}
+
+/**
+ * POST /api/v1/whatsapp/revival
+ * Ejecutar revival manualmente.
+ * Body (opcional): { maxPerRun, dryRun, tiers }
+ *   - dryRun: true → solo simula, retorna mensajes sin enviar
+ *   - tiers: [3,7,14,30] → solo enviar a ciertos rangos
+ */
+export const runRevival = asyncHandler(async (req, res) => {
+  const { maxPerRun, dryRun, tiers } = req.body || {};
+
+  console.log(`🔄 Revival MANUAL iniciado por ${req.user?.nombre || 'admin'} — dryRun: ${!!dryRun}`);
+
+  const result = await runRevivalCore({
+    maxPerRun: maxPerRun || 50,
+    dryRun: !!dryRun,
+    tiers: Array.isArray(tiers) ? tiers : [3, 7, 14, 30],
+  });
+
+  console.log(`🔄 Revival: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} leads | Tiers: ${JSON.stringify(result.tierStats)}`);
+
+  res.json({ success: true, ...result });
+});
+
+/**
+ * GET /api/v1/whatsapp/revival/status
+ * Estado del auto-revival
+ */
+export const getRevivalStatus = asyncHandler(async (req, res) => {
+  res.json({
+    active: autoRevival.active,
+    intervalHours: autoRevival.intervalHours,
+    maxPerRun: autoRevival.maxPerRun,
+    lastRun: autoRevival.lastRun,
+    lastResult: autoRevival.lastResult,
+  });
+});
+
+/**
+ * POST /api/v1/whatsapp/revival/config
+ * Configurar el auto-revival
+ * Body: { active, intervalHours, maxPerRun }
+ */
+export const configRevival = asyncHandler(async (req, res) => {
+  const { active, intervalHours, maxPerRun } = req.body;
+
+  if (intervalHours !== undefined) autoRevival.intervalHours = Math.max(1, Number(intervalHours) || 24);
+  if (maxPerRun !== undefined) autoRevival.maxPerRun = Math.max(1, Math.min(100, Number(maxPerRun) || 30));
+
+  if (active === true) {
+    startAutoRevival();
+  } else if (active === false) {
+    stopAutoRevival();
+  } else if (autoRevival.active) {
+    // Si solo cambiaron params, reiniciar
+    startAutoRevival();
+  }
+
+  res.json({
+    success: true,
+    active: autoRevival.active,
+    intervalHours: autoRevival.intervalHours,
+    maxPerRun: autoRevival.maxPerRun,
+  });
+});
+
+// ── Cron job de revival ──
+async function runAutoRevivalCycle() {
+  console.log('🔄 Auto-revival ejecutándose...');
+  try {
+    const result = await runRevivalCore({
+      maxPerRun: autoRevival.maxPerRun,
+      dryRun: false,
+      tiers: [3, 7, 14, 30],
+    });
+
+    autoRevival.lastRun = new Date().toISOString();
+    autoRevival.lastResult = { ...result, results: undefined, time: new Date().toISOString() };
+    console.log(`🔄 Auto-revival: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} | Tiers: ${JSON.stringify(result.tierStats)}`);
+  } catch (e) {
+    console.error('Auto-revival error:', e.message);
+    autoRevival.lastResult = { error: e.message, time: new Date().toISOString() };
+  }
+}
+
+function startAutoRevival() {
+  if (autoRevival._timer) clearInterval(autoRevival._timer);
+  autoRevival.active = true;
+  autoRevival._timer = setInterval(runAutoRevivalCycle, autoRevival.intervalHours * 60 * 60 * 1000);
+  // Ejecutar la primera vez después de 5 minutos (para no saturar al arrancar)
+  setTimeout(runAutoRevivalCycle, 5 * 60 * 1000);
+  console.log(`🔄 Auto-revival ACTIVADO — cada ${autoRevival.intervalHours}h, max ${autoRevival.maxPerRun} leads por ciclo`);
+}
+
+function stopAutoRevival() {
+  if (autoRevival._timer) clearInterval(autoRevival._timer);
+  autoRevival._timer = null;
+  autoRevival.active = false;
+  console.log('🔄 Auto-revival DESACTIVADO');
+}
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
+
+// Auto-revival inicia también al arrancar (cada 24h por defecto)
+startAutoRevival();
