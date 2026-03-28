@@ -1570,6 +1570,10 @@ export const runRevival = asyncHandler(async (req, res) => {
     tiers: Array.isArray(tiers) ? tiers : [3, 7, 14, 30],
   });
 
+  // Actualizar estado en memoria para que /status lo refleje
+  autoRevival.lastRun = new Date().toISOString();
+  autoRevival.lastResult = { sent: result.sent, failed: result.failed, skipped: result.skipped, total: result.total, tierStats: result.tierStats, time: new Date().toISOString() };
+
   console.log(`🔄 Revival: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} leads | Tiers: ${JSON.stringify(result.tierStats)}`);
 
   res.json({ success: true, ...result });
@@ -1972,6 +1976,10 @@ export const runQuoteFollowUp = asyncHandler(async (req, res) => {
     dryRun: !!dryRun,
     tiers: Array.isArray(tiers) ? tiers : [1, 3, 7, 14],
   });
+
+  // Actualizar estado en memoria para que /status lo refleje
+  autoQuoteFollowUp.lastRun = new Date().toISOString();
+  autoQuoteFollowUp.lastResult = { sent: result.sent, failed: result.failed, skipped: result.skipped, total: result.total, tierStats: result.tierStats, time: new Date().toISOString() };
 
   console.log(`📩 Quote follow-up: ${result.sent} enviados, ${result.failed} fallidos, ${result.skipped} saltados de ${result.total} leads`);
 
