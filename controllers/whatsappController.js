@@ -1794,13 +1794,13 @@ async function runQuoteFollowUpCore(options = {}) {
   const allowedTiers = options.tiers || [1, 3, 7, 14];
 
   // Buscar leads que:
-  // 1. Tienen cotización enviada (cotizacion_enviada=true) O estado cotizando con precio
+  // 1. Tienen estado_sofia = 'cotizacion_enviada' O estado cotizando con precio
   // 2. No están bloqueados
   // 3. Se actualizaron hace más de 1 día (para dar tiempo a que respondan)
   const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
 
   // Query: leads cotizados que no han respondido en 1+ día
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&or=(cotizacion_enviada.eq.true,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&or=(estado_sofia.eq.cotizacion_enviada,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
 
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
