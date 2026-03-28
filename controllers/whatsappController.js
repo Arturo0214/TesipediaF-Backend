@@ -158,7 +158,6 @@ export const getLeads = asyncHandler(async (req, res) => {
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
-    'ultimo_mensaje_preview',
   ].join(',');
 
   // Query 1: metadata de todos los leads
