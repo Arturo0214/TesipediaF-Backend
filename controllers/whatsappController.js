@@ -147,7 +147,7 @@ const supabaseHeaders = () => ({
  */
 export const getLeads = asyncHandler(async (req, res) => {
   // ESTRATEGIA HÍBRIDA para reducir egress sin perder el preview del último mensaje:
-  // 1. Traer metadata de TODOS los leads (sin historial_chat) — ~50-100 KB
+  // 1. Traer metadata de los leads (sin historial_chat) — ~50-100 KB
   // 2. Traer historial_chat SOLO de los 40 leads más recientes — para preview
   // Resultado: ~80-90% menos egress vs traer todo, con previews funcionales.
 
@@ -159,25 +159,41 @@ export const getLeads = asyncHandler(async (req, res) => {
     'tiene_tema', 'tiene_avance', 'boton_actual', 'control_humano',
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
-    'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
+    'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
   ].join(',');
 
-  // ── Filtrar leads ManyChat que NO han interactuado ──
-  // Los contactos importados de ManyChat que aún no responden se ven SOLO en /admin/manychat.
-  // Si un lead ManyChat ya respondió (tiene estado_sofia != 'bienvenida' o historial con mensajes del user),
-  // se muestra acá como lead normal.
-  // Usamos: or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)
-  // Esto excluye leads donde origen=manychat AND estado_sofia=bienvenida (nunca interactuaron).
-  const excludeManychatInactive = '&or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)';
+  // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
+  // 'regular' (default): solo leads NO-manychat + leads manychat que YA respondieron
+  // 'manychat': solo leads con origen=manychat (todos, para ver en pestaña ManyChat)
+  // 'all': todos los leads sin filtro de origen
+  const origenParam = (req.query.origen || 'regular').toLowerCase();
+  let origenFilter = '';
+  if (origenParam === 'regular') {
+    // Excluir leads manychat que aún no interactuaron (estado_sofia = bienvenida)
+    origenFilter = '&or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)';
+  } else if (origenParam === 'manychat') {
+    // Solo leads de ManyChat
+    origenFilter = '&origen=eq.manychat';
+  }
+  // 'all' → sin filtro adicional
 
-  // Query 1: metadata de todos los leads (excluyendo ManyChat inactivos)
-  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${excludeManychatInactive}&order=updated_at.desc`;
-  // Query 2: historial solo de los 40 leads más recientes (para preview)
-  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${excludeManychatInactive}&order=updated_at.desc&limit=40`;
+  // ── Paginación (query params ?limit=100&offset=0) ──
+  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  const offset = parseInt(req.query.offset) || 0;
+  const paginationParams = `&limit=${limit}&offset=${offset}`;
 
-  const [metaResp, previewResp] = await Promise.all([
+  // Query 1: metadata de leads filtrados (paginado)
+  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${origenFilter}&order=updated_at.desc${paginationParams}`;
+  // Query 2: historial solo de los primeros 40 del lote (para preview)
+  const previewLimit = Math.min(limit, 40);
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${origenFilter}&order=updated_at.desc&limit=${previewLimit}&offset=${offset}`;
+  // Query 3: conteo total (solo header, sin datos)
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${origenFilter}`;
+
+  const [metaResp, previewResp, countResp] = await Promise.all([
     fetch(metaUrl, { headers: supabaseHeaders() }),
     fetch(previewUrl, { headers: supabaseHeaders() }),
+    fetch(countUrl, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact', 'Range': '0-0' } }),
   ]);
 
   if (!metaResp.ok) {
@@ -218,7 +234,17 @@ export const getLeads = asyncHandler(async (req, res) => {
     return lead;
   });
 
-  res.json(enriched);
+  // Extraer total del count response
+  let total = enriched.length + offset; // fallback
+  if (countResp.ok) {
+    const range = countResp.headers.get('content-range');
+    if (range) {
+      const m = range.match(/\/(\d+)/);
+      if (m) total = parseInt(m[1]);
+    }
+  }
+
+  res.json({ leads: enriched, total, limit, offset, hasMore: offset + enriched.length < total });
 });
 
 /**
