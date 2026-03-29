@@ -26,6 +26,7 @@ import {
   sendManyChatReactivation,
   getManyChatStatus,
   previewManyChatMessages,
+  getManyChatLeadsView,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -83,5 +84,6 @@ router.post('/manychat/import', importManyChatLeads);
 router.post('/manychat/send', sendManyChatReactivation);
 router.get('/manychat/status', getManyChatStatus);
 router.get('/manychat/preview', previewManyChatMessages);
+router.get('/manychat/leads', getManyChatLeadsView);
 
 export default router;

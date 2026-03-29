@@ -162,10 +162,18 @@ export const getLeads = asyncHandler(async (req, res) => {
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado',
   ].join(',');
 
-  // Query 1: metadata de todos los leads
-  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}&order=updated_at.desc`;
+  // ── Filtrar leads ManyChat que NO han interactuado ──
+  // Los contactos importados de ManyChat que aún no responden se ven SOLO en /admin/manychat.
+  // Si un lead ManyChat ya respondió (tiene estado_sofia != 'bienvenida' o historial con mensajes del user),
+  // se muestra acá como lead normal.
+  // Usamos: or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)
+  // Esto excluye leads donde origen=manychat AND estado_sofia=bienvenida (nunca interactuaron).
+  const excludeManychatInactive = '&or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)';
+
+  // Query 1: metadata de todos los leads (excluyendo ManyChat inactivos)
+  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${excludeManychatInactive}&order=updated_at.desc`;
   // Query 2: historial solo de los 40 leads más recientes (para preview)
-  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat&order=updated_at.desc&limit=40`;
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${excludeManychatInactive}&order=updated_at.desc&limit=40`;
 
   const [metaResp, previewResp] = await Promise.all([
     fetch(metaUrl, { headers: supabaseHeaders() }),
@@ -2626,6 +2634,109 @@ export const previewManyChatMessages = asyncHandler(async (req, res) => {
   }
 
   res.json({ segment, count: previews.length, previews });
+});
+
+/**
+ * GET /api/v1/whatsapp/manychat/leads
+ * Devuelve leads ManyChat de forma inteligente:
+ *   - respondieron: leads que ya contestaron (PRIORIDAD — necesitan atención)
+ *   - enviados: leads a los que se les mandó reactivación pero no han respondido
+ *   - pendientes: leads importados pero sin reactivación enviada
+ *
+ * Query: ?page=1&limit=20&filter=respondieron|enviados|pendientes|todos
+ */
+export const getManyChatLeadsView = asyncHandler(async (req, res) => {
+  const filter = req.query.filter || 'respondieron';
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+  const offset = (page - 1) * limit;
+
+  // Columnas relevantes para la vista ManyChat
+  const cols = 'wa_id,nombre,estado_sofia,origen,manychat_segment,modo_humano,atendido_por,bloqueado,mensaje_pendiente,updated_at,created_at,tema,tipo_servicio,cotizacion_enviada,historial_chat';
+
+  let queryFilter = '&origen=eq.manychat';
+
+  if (filter === 'respondieron') {
+    // Leads ManyChat que ya avanzaron de 'bienvenida' (interactuaron con Sofia)
+    queryFilter += '&estado_sofia=neq.bienvenida';
+  } else if (filter === 'enviados') {
+    // Leads ManyChat en 'bienvenida' que ya tienen reactivación enviada (mensaje_pendiente no es null)
+    queryFilter += '&estado_sofia=eq.bienvenida&mensaje_pendiente=not.is.null';
+  } else if (filter === 'pendientes') {
+    // Leads ManyChat en 'bienvenida' sin reactivación enviada aún
+    queryFilter += '&estado_sofia=eq.bienvenida&mensaje_pendiente=is.null';
+  }
+  // filter === 'todos' → solo queryFilter base (origen=manychat)
+
+  const dataUrl = `${SUPABASE_URL}/rest/v1/leads?select=${cols}${queryFilter}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${queryFilter}`;
+
+  const [dataResp, countResp] = await Promise.all([
+    fetch(dataUrl, { headers: supabaseHeaders() }),
+    fetch(countUrl, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' } }),
+  ]);
+
+  if (!dataResp.ok) {
+    const err = await dataResp.text();
+    res.status(dataResp.status);
+    throw new Error(`Supabase error: ${err}`);
+  }
+
+  const leads = await dataResp.json();
+
+  // Parse historial para extraer último mensaje y si el usuario respondió
+  const enriched = leads.map(lead => {
+    let hist = lead.historial_chat;
+    if (typeof hist === 'string') {
+      try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
+    }
+    if (!Array.isArray(hist)) hist = [];
+
+    const lastUserMsg = [...hist].reverse().find(m => m.role === 'user');
+    const lastBotMsg = [...hist].reverse().find(m => m.role === 'assistant');
+    const totalMsgs = hist.length;
+    const userMsgs = hist.filter(m => m.role === 'user').length;
+
+    // No enviar historial completo al frontend (demasiado pesado)
+    delete lead.historial_chat;
+
+    return {
+      ...lead,
+      totalMsgs,
+      userMsgs,
+      lastUserMsg: lastUserMsg ? { content: (lastUserMsg.content || '').substring(0, 120), timestamp: lastUserMsg.timestamp } : null,
+      lastBotMsg: lastBotMsg ? { content: (lastBotMsg.content || '').substring(0, 120), timestamp: lastBotMsg.timestamp } : null,
+    };
+  });
+
+  // Extraer count total del header
+  let total = leads.length;
+  if (countResp.ok) {
+    const range = countResp.headers.get('content-range');
+    if (range) {
+      const match = range.match(/\/(\d+)/);
+      if (match) total = parseInt(match[1]);
+    }
+  }
+
+  // Stats rápidas (solo contar, no traer datos)
+  let stats = {};
+  try {
+    const [respCnt, envCnt, pendCnt] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/leads?select=wa_id&origen=eq.manychat&estado_sofia=neq.bienvenida`, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' } }),
+      fetch(`${SUPABASE_URL}/rest/v1/leads?select=wa_id&origen=eq.manychat&estado_sofia=eq.bienvenida&mensaje_pendiente=not.is.null`, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' } }),
+      fetch(`${SUPABASE_URL}/rest/v1/leads?select=wa_id&origen=eq.manychat&estado_sofia=eq.bienvenida&mensaje_pendiente=is.null`, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' } }),
+    ]);
+    const extract = (r) => { const h = r.headers.get('content-range'); return h ? parseInt(h.match(/\/(\d+)/)?.[1] || '0') : 0; };
+    stats = {
+      respondieron: extract(respCnt),
+      enviados: extract(envCnt),
+      pendientes: extract(pendCnt),
+    };
+    stats.total = stats.respondieron + stats.enviados + stats.pendientes;
+  } catch { /* non-critical */ }
+
+  res.json({ filter, page, limit, total, stats, leads: enriched });
 });
 
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
