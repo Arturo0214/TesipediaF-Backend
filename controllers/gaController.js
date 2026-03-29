@@ -8,6 +8,7 @@ import {
   getUserTimeline,
   getDeviceBreakdown,
   getTrafficSources,
+  getGoogleTraffic,
 } from '../services/googleAnalyticsService.js';
 import { getSearchConsoleData } from '../services/googleSearchConsoleService.js';
 
@@ -111,7 +112,7 @@ export const gaDashboard = async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
 
-    const [overview, realtime, pages, events, channels, countries, devices, sources, timeline, searchConsole] = await Promise.allSettled([
+    const [overview, realtime, pages, events, channels, countries, devices, sources, timeline, searchConsole, googleTraffic] = await Promise.allSettled([
       getOverview(days),
       getRealtime(),
       getTopPages(days),
@@ -122,6 +123,7 @@ export const gaDashboard = async (req, res) => {
       getTrafficSources(days),
       getUserTimeline(days),
       getSearchConsoleData(days),
+      getGoogleTraffic(days),
     ]);
 
     res.json({
@@ -135,6 +137,7 @@ export const gaDashboard = async (req, res) => {
       sources: sources.status === 'fulfilled' ? sources.value : null,
       timeline: timeline.status === 'fulfilled' ? timeline.value : null,
       searchConsole: searchConsole.status === 'fulfilled' ? searchConsole.value : null,
+      googleTraffic: googleTraffic.status === 'fulfilled' ? googleTraffic.value : null,
     });
   } catch (err) {
     console.error('GA Dashboard error:', err.message);

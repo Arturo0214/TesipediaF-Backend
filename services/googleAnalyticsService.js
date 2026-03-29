@@ -320,3 +320,125 @@ export const getDeviceBreakdown = async (days = 7) => {
   });
   return parseRows(response, ['device'], ['users', 'sessions']);
 };
+
+/**
+ * Tráfico de Google: todo el tráfico que viene de Google (orgánico + pagado + otros)
+ * Devuelve totales, desglose por medio, y comparación con periodo anterior
+ */
+export const getGoogleTraffic = async (days = 7) => {
+  // 1. Get Google traffic broken down by medium (organic, cpc, referral, etc.)
+  const byMediumResponse = await runReport({
+    dateRanges: [
+      { startDate: `${days}daysAgo`, endDate: 'today' },
+      { startDate: `${days * 2}daysAgo`, endDate: `${days + 1}daysAgo` },
+    ],
+    dimensions: [{ name: 'sessionMedium' }],
+    metrics: [
+      { name: 'sessions' },
+      { name: 'activeUsers' },
+      { name: 'newUsers' },
+      { name: 'screenPageViews' },
+      { name: 'bounceRate' },
+      { name: 'averageSessionDuration' },
+    ],
+    dimensionFilter: {
+      filter: {
+        fieldName: 'sessionSource',
+        stringFilter: { value: 'google', matchType: 'EXACT' },
+      },
+    },
+    orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+  });
+
+  // Parse current period rows
+  const byMedium = [];
+  let totalCurrent = { sessions: 0, users: 0, newUsers: 0, pageViews: 0, bounceRate: 0, avgDuration: 0 };
+  let totalPrevious = { sessions: 0, users: 0 };
+  let mediumCount = 0;
+
+  if (byMediumResponse.rows) {
+    byMediumResponse.rows.forEach(row => {
+      const medium = row.dimensionValues[0].value;
+      const currentMetrics = row.metricValues.slice(0, 6);
+      const sessions = Number(currentMetrics[0].value);
+      const users = Number(currentMetrics[1].value);
+      const newUsers = Number(currentMetrics[2].value);
+      const pageViews = Number(currentMetrics[3].value);
+      const bounceRate = Number(currentMetrics[4].value);
+      const avgDuration = Number(currentMetrics[5].value);
+
+      // Previous period metrics (offset by 6)
+      const prevSessions = row.metricValues.length > 6 ? Number(row.metricValues[6].value) : 0;
+      const prevUsers = row.metricValues.length > 7 ? Number(row.metricValues[7].value) : 0;
+
+      byMedium.push({
+        medium,
+        label: medium === 'organic' ? 'Búsqueda Orgánica' :
+               medium === 'cpc' ? 'Google Ads (Pagado)' :
+               medium === 'referral' ? 'Referencia' :
+               medium === '(none)' ? 'Directo' : medium,
+        sessions,
+        users,
+        newUsers,
+        pageViews,
+        bounceRate: Math.round(bounceRate * 100) / 100,
+        avgDuration: Math.round(avgDuration),
+        prevSessions,
+        prevUsers,
+        growth: prevSessions > 0 ? Math.round(((sessions - prevSessions) / prevSessions) * 100) : (sessions > 0 ? 100 : 0),
+      });
+
+      totalCurrent.sessions += sessions;
+      totalCurrent.users += users;
+      totalCurrent.newUsers += newUsers;
+      totalCurrent.pageViews += pageViews;
+      totalCurrent.bounceRate += bounceRate;
+      totalCurrent.avgDuration += avgDuration;
+      totalPrevious.sessions += prevSessions;
+      totalPrevious.users += prevUsers;
+      mediumCount++;
+    });
+  }
+
+  if (mediumCount > 0) {
+    totalCurrent.bounceRate = Math.round((totalCurrent.bounceRate / mediumCount) * 100) / 100;
+    totalCurrent.avgDuration = Math.round(totalCurrent.avgDuration / mediumCount);
+  }
+
+  // 2. Get Google traffic timeline (daily or hourly)
+  const timelineDim = days <= 1 ? 'dateHour' : 'date';
+  const timelineResponse = await runReport({
+    dateRanges: [{ startDate: days <= 1 ? 'today' : `${days}daysAgo`, endDate: 'today' }],
+    dimensions: [{ name: timelineDim }],
+    metrics: [
+      { name: 'sessions' },
+      { name: 'activeUsers' },
+    ],
+    dimensionFilter: {
+      filter: {
+        fieldName: 'sessionSource',
+        stringFilter: { value: 'google', matchType: 'EXACT' },
+      },
+    },
+    orderBys: [{ dimension: { dimensionName: timelineDim } }],
+  });
+
+  const timeline = parseRows(
+    timelineResponse,
+    [timelineDim],
+    ['sessions', 'users']
+  );
+
+  return {
+    total: totalCurrent,
+    previous: totalPrevious,
+    growth: totalPrevious.sessions > 0
+      ? Math.round(((totalCurrent.sessions - totalPrevious.sessions) / totalPrevious.sessions) * 100)
+      : (totalCurrent.sessions > 0 ? 100 : 0),
+    byMedium,
+    timeline: {
+      type: days <= 1 ? 'hourly' : 'daily',
+      rows: timeline,
+    },
+  };
+};
