@@ -34,6 +34,8 @@ import googleCalendarRoutes from './routes/googleCalendarRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import gaRoutes from './routes/gaRoutes.js';
 import cotizarLeadRoutes from './routes/cotizarLeadRoutes.js';
+import revenueRoutes from './routes/revenueRoutes.js';
+import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -132,6 +134,7 @@ app.use('/api/v1/whatsapp', whatsappRoutes);
 app.use('/api/v1/hubspot', hubspotRoutes);
 app.use('/google', googleCalendarRoutes);
 app.use('/cotizar-leads', cotizarLeadRoutes);
+app.use('/revenue', revenueRoutes);
 
 // Middlewares de error
 app.use(notFound);
@@ -155,6 +158,9 @@ global.__tesipediaApp = app;
 // Initialize socket functionality
 chatSocket(io);
 notificationSocket(io);
+
+// Start cron jobs
+startRevenueSyncCron();
 
 // Start server
 server.listen(PORT, () => {
