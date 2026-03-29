@@ -22,6 +22,10 @@ import {
   runQuoteFollowUp,
   getQuoteFollowUpStatus,
   configQuoteFollowUp,
+  importManyChatLeads,
+  sendManyChatReactivation,
+  getManyChatStatus,
+  previewManyChatMessages,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -73,5 +77,11 @@ router.post('/revival/config', configRevival);
 router.post('/quote-followup', runQuoteFollowUp);
 router.get('/quote-followup/status', getQuoteFollowUpStatus);
 router.post('/quote-followup/config', configQuoteFollowUp);
+
+// ManyChat Reactivation — Importar y reactivar leads de ManyChat
+router.post('/manychat/import', importManyChatLeads);
+router.post('/manychat/send', sendManyChatReactivation);
+router.get('/manychat/status', getManyChatStatus);
+router.get('/manychat/preview', previewManyChatMessages);
 
 export default router;

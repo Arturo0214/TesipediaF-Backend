@@ -2075,6 +2075,559 @@ function stopQuoteFollowUp() {
   console.log('📩 Auto quote follow-up DESACTIVADO');
 }
 
+// ═══════════════════════════════════════════════════════════
+// ═══  MANYCHAT REACTIVATION — Importar y reactivar leads ═══
+// ═══════════════════════════════════════════════════════════
+
+import {
+  getAllContacts as getManyChatContacts,
+  getContactsBySegment as getManyChatBySegment,
+  SEGMENT_PRIORITY,
+  EXCLUDE_PHONES as MC_EXCLUDE,
+  ADMIN_PHONES as MC_ADMIN,
+} from '../data/manychatContacts.js';
+
+// ── Estado en memoria de la reactivación ManyChat ──
+const manychatReactivation = {
+  importResult: null,     // Resultado del último import
+  sendResult: null,       // Resultado del último envío
+  lastImport: null,
+  lastSend: null,
+};
+
+/**
+ * Genera un mensaje personalizado para leads de ManyChat según su segmento
+ * y datos existentes en Supabase (si los tiene).
+ * Distinto al revival: estos son mensajes más directos ya que el lead viene de ManyChat.
+ */
+function buildManyChatMessage(contact, existingLead) {
+  const nombre = (existingLead?.nombre || contact.nombre || '').split(' ')[0];
+  const saludo = nombre ? `Hola ${nombre}` : 'Hola';
+  const segment = contact.segment;
+
+  // Si el lead ya existe en Supabase y tiene datos, usar mensaje contextual
+  if (existingLead && existingLead.estado_sofia) {
+    const estado = existingLead.estado_sofia;
+
+    // Lead que ya tiene cotización enviada → mensaje directo de seguimiento
+    if (estado === 'cotizacion_enviada' || existingLead.cotizacion_enviada) {
+      const tema = existingLead.tema ? ` sobre "${existingLead.tema}"` : '';
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Te habíamos enviado una cotización${tema} y quería saber si la pudiste revisar. ¿Tienes alguna duda o quieres que la actualicemos? Estoy aquí para ayudarte!`;
+    }
+
+    // Lead cotizando → empujarlo a cerrar
+    if (estado === 'cotizando') {
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Tu cotización${existingLead.tema ? ` para "${existingLead.tema}"` : ''} está casi lista. ¿Quieres que te la envíe? Solo confirma y te la mando en un momento.`;
+    }
+
+    // Lead calificando → retomar donde se quedó
+    if (estado === 'calificando') {
+      if (existingLead.tema) {
+        return `${saludo}, soy Sofia de Tesipedia! 😊 Estábamos platicando sobre tu proyecto de "${existingLead.tema}" y nos quedamos a medias. Me encantaría retomar para darte tu cotización. ¿Continuamos?`;
+      }
+      if (existingLead.tipo_servicio) {
+        const servicioLabel = { servicio_1: 'redacción completa', servicio_2: 'corrección de estilo', servicio_3: 'asesoría' }[existingLead.tipo_servicio] || existingLead.tipo_servicio;
+        return `${saludo}, soy Sofia de Tesipedia! 😊 Estábamos hablando sobre tu ${servicioLabel} y me faltan unos datos para cotizarte. ¿Retomamos? Solo serán un par de minutos.`;
+      }
+      return `${saludo}, soy Sofia de Tesipedia! 😊 Estábamos en medio de una plática sobre tu proyecto académico. ¿Quieres que retomemos donde nos quedamos?`;
+    }
+
+    // Lead descartado → re-interesar
+    if (estado === 'descartado') {
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Sé que hace tiempo platicamos y no se concretó, pero quería saber si tu proyecto académico${existingLead.tema ? ` sobre "${existingLead.tema}"` : ''} sigue pendiente. Tenemos nuevas opciones y precios accesibles. ¿Te interesa saber más?`;
+    }
+
+    // Lead cerrado → no molestar (esto no debería llegar aquí, pero por si acaso)
+    if (estado === 'cerrado') {
+      return null; // No enviar
+    }
+  }
+
+  // ── Lead nuevo o en bienvenida: mensaje basado en segmento ManyChat ──
+  if (segment === 'SUPER_HOT') {
+    return `${saludo}, soy Sofia de Tesipedia! 🎓 Vi que habías solicitado información sobre nuestros servicios de tesis. ¿Pudiste avanzar con tu proyecto o aún necesitas apoyo? Tenemos opciones muy accesibles y podemos empezar cuando quieras. ¡Cuéntame!`;
+  }
+  if (segment === 'HOT') {
+    return `${saludo}, soy Sofia de Tesipedia! 😊 Quería darte seguimiento porque vi que te interesaste en nuestros servicios. ¿Sigues necesitando apoyo con tu tesis o proyecto académico? Estoy aquí para orientarte sin compromiso.`;
+  }
+  if (segment === 'WARM') {
+    return `${saludo}, soy Sofia de Tesipedia! 📚 Hace poco nos contactaste y quería saber cómo vas con tu proyecto académico. Si aún lo tienes pendiente, podemos ayudarte con asesoría profesional a precios muy accesibles. ¿Te interesa?`;
+  }
+  if (segment === 'TIBIO_1' || segment === 'TIBIO_2') {
+    return `${saludo}, soy Sofia de Tesipedia! 🎓 Hace unas semanas nos contactaste sobre tu proyecto académico. ¿Sigues necesitando apoyo? Tenemos opciones flexibles y este mes hay promociones especiales. ¡Escríbeme y platicamos!`;
+  }
+  if (segment === 'FRIO') {
+    return `${saludo}, soy Sofia de Tesipedia! 🎓 Hace tiempo mostraste interés en nuestros servicios de tesis. ¿Ya terminaste tu proyecto o aún lo tienes pendiente? Este mes tenemos promociones especiales para retomar. ¡Aquí estamos para ayudarte!`;
+  }
+  // NEVER o sin segmento
+  return `${saludo}, soy Sofia de Tesipedia! 🎓 ¿Necesitas apoyo con tu tesis o proyecto de titulación? Ofrecemos redacción, corrección de estilo y asesoría a precios accesibles. ¡Escríbeme y te oriento sin compromiso!`;
+}
+
+/**
+ * POST /api/v1/whatsapp/manychat/import
+ * Importa contactos de ManyChat a Supabase.
+ * - Crea leads nuevos con origen='manychat'
+ * - Para existentes: actualiza origen y manychat_segment sin sobreescribir datos
+ * Body (opcional): { segments, dryRun }
+ */
+export const importManyChatLeads = asyncHandler(async (req, res) => {
+  const { segments, dryRun } = req.body || {};
+
+  console.log(`📱 ManyChat IMPORT iniciado — dryRun: ${!!dryRun}`);
+
+  // Determinar qué segmentos importar
+  let contacts;
+  if (Array.isArray(segments) && segments.length > 0) {
+    contacts = [];
+    for (const seg of segments) {
+      contacts.push(...getManyChatBySegment(seg));
+    }
+  } else {
+    contacts = getManyChatContacts();
+  }
+
+  console.log(`📱 Contactos a importar: ${contacts.length}`);
+
+  const results = { created: 0, updated: 0, skipped: 0, failed: 0, details: [] };
+
+  for (const contact of contacts) {
+    const wa_id = contact.wa_id.replace(/\D/g, '');
+
+    try {
+      // 1. Verificar si ya existe en Supabase
+      const checkResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=wa_id,nombre,estado_sofia,origen,manychat_segment&limit=1`,
+        { headers: supabaseHeaders() }
+      );
+
+      if (!checkResp.ok) {
+        results.failed++;
+        results.details.push({ wa_id, action: 'error', reason: `Supabase GET error ${checkResp.status}` });
+        continue;
+      }
+
+      const existing = await checkResp.json();
+
+      if (dryRun) {
+        const action = existing.length > 0 ? 'update' : 'create';
+        results[action === 'update' ? 'updated' : 'created']++;
+        results.details.push({ wa_id, nombre: contact.nombre, segment: contact.segment, action, dryRun: true });
+        continue;
+      }
+
+      if (existing.length > 0) {
+        // Lead ya existe → actualizar origen y segmento sin sobreescribir otros datos
+        const lead = existing[0];
+
+        // Solo actualizar si no tiene origen o es diferente
+        const patchBody = {};
+        if (!lead.origen) patchBody.origen = 'manychat';
+        if (!lead.manychat_segment) patchBody.manychat_segment = contact.segment;
+
+        // Si el nombre de ManyChat es mejor que el que tiene (y no tiene nombre)
+        if (contact.nombre && (!lead.nombre || lead.nombre.trim() === '')) {
+          patchBody.nombre = contact.nombre;
+        }
+
+        if (Object.keys(patchBody).length > 0) {
+          patchBody.updated_at = new Date().toISOString();
+          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify(patchBody),
+          });
+          results.updated++;
+          results.details.push({ wa_id, nombre: lead.nombre || contact.nombre, segment: contact.segment, action: 'updated', fields: Object.keys(patchBody) });
+        } else {
+          results.skipped++;
+          results.details.push({ wa_id, nombre: lead.nombre, segment: contact.segment, action: 'skipped', reason: 'Ya tiene origen y segmento' });
+        }
+      } else {
+        // Lead no existe → crear nuevo
+        const newLead = {
+          wa_id,
+          nombre: contact.nombre || '',
+          estado_sofia: 'bienvenida',
+          origen: 'manychat',
+          manychat_segment: contact.segment,
+          historial_chat: JSON.stringify([]),
+          modo_humano: false,
+          bloqueado: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const createResp = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+          method: 'POST',
+          headers: { ...supabaseHeaders(), 'Prefer': 'return=minimal' },
+          body: JSON.stringify(newLead),
+        });
+
+        if (createResp.ok || createResp.status === 201) {
+          results.created++;
+          results.details.push({ wa_id, nombre: contact.nombre, segment: contact.segment, action: 'created' });
+        } else {
+          const errText = await createResp.text();
+          results.failed++;
+          results.details.push({ wa_id, nombre: contact.nombre, segment: contact.segment, action: 'error', reason: errText.substring(0, 200) });
+        }
+      }
+    } catch (e) {
+      results.failed++;
+      results.details.push({ wa_id, nombre: contact.nombre, segment: contact.segment, action: 'error', reason: e.message });
+    }
+  }
+
+  manychatReactivation.importResult = { ...results, details: results.details.length };
+  manychatReactivation.lastImport = new Date().toISOString();
+
+  console.log(`📱 ManyChat import: ${results.created} creados, ${results.updated} actualizados, ${results.skipped} sin cambios, ${results.failed} fallidos`);
+
+  res.json({ success: true, ...results });
+});
+
+/**
+ * POST /api/v1/whatsapp/manychat/send
+ * Envía la plantilla seguimiento_tesipedia + mensaje personalizado a contactos ManyChat.
+ *
+ * Flujo por contacto:
+ *   1. Busca el lead en Supabase (si existe, usa sus datos para personalizar)
+ *   2. Envía el template aprobado para abrir la ventana de 24h
+ *   3. Guarda mensaje personalizado como mensaje_pendiente
+ *   4. Cuando el lead responda, Sofia enviará el mensaje pendiente
+ *
+ * Body (opcional):
+ *   - segments: ['SUPER_HOT','HOT'] → solo ciertos segmentos
+ *   - maxPerRun: 50 → límite de envíos
+ *   - dryRun: true → simular sin enviar
+ *   - startIndex: 0 → para continuar donde se quedó
+ */
+export const sendManyChatReactivation = asyncHandler(async (req, res) => {
+  const { segments, maxPerRun = 50, dryRun = false, startIndex = 0 } = req.body || {};
+
+  console.log(`📱 ManyChat REACTIVATION iniciado — dryRun: ${!!dryRun}, max: ${maxPerRun}, startIndex: ${startIndex}`);
+
+  // Obtener contactos
+  let contacts;
+  if (Array.isArray(segments) && segments.length > 0) {
+    contacts = [];
+    for (const seg of segments) {
+      contacts.push(...getManyChatBySegment(seg));
+    }
+  } else {
+    contacts = getManyChatContacts();
+  }
+
+  // Aplicar startIndex
+  if (startIndex > 0) {
+    contacts = contacts.slice(startIndex);
+  }
+
+  console.log(`📱 Contactos elegibles: ${contacts.length} (desde índice ${startIndex})`);
+
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  const results = [];
+  const segmentStats = {};
+  let sent = 0, failed = 0, skipped = 0;
+
+  for (const contact of contacts) {
+    if (sent >= maxPerRun) break;
+
+    const wa_id = contact.wa_id.replace(/\D/g, '');
+
+    // Inicializar stats del segmento
+    if (!segmentStats[contact.segment]) segmentStats[contact.segment] = 0;
+
+    try {
+      // 1. Buscar lead en Supabase
+      let existingLead = null;
+      let historial = [];
+      const leadResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=*&limit=1`,
+        { headers: supabaseHeaders() }
+      );
+
+      if (leadResp.ok) {
+        const leadData = await leadResp.json();
+        if (leadData.length > 0) {
+          existingLead = leadData[0];
+          // Parse historial
+          const raw = existingLead.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
+        }
+      }
+
+      // 2. Verificar: no enviar si ya le mandamos reactivación ManyChat
+      const lastMcReact = [...historial].reverse().find(m => m.isManyChatReactivation);
+      if (lastMcReact) {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead?.nombre || contact.nombre, segment: contact.segment, success: false, reason: 'Ya recibió reactivación ManyChat' });
+        continue;
+      }
+
+      // 3. Verificar: no enviar a leads cerrados/pagados
+      if (existingLead?.estado_sofia === 'cerrado') {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead.nombre, segment: contact.segment, success: false, reason: 'Lead cerrado (ya pagó)' });
+        continue;
+      }
+
+      // 4. Verificar: no enviar si bloqueado
+      if (existingLead?.bloqueado) {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead.nombre, segment: contact.segment, success: false, reason: 'Lead bloqueado' });
+        continue;
+      }
+
+      // 5. Verificar: no enviar si tiene 4+ mensajes sin respuesta
+      let consecutiveBot = 0;
+      for (let i = historial.length - 1; i >= 0; i--) {
+        if (historial[i].role === 'user') break;
+        if (historial[i].role === 'assistant') consecutiveBot++;
+      }
+      if (consecutiveBot >= 4) {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead?.nombre || contact.nombre, segment: contact.segment, success: false, reason: `${consecutiveBot} mensajes sin respuesta` });
+        continue;
+      }
+
+      // 6. Generar mensaje personalizado
+      const personalizedMsg = buildManyChatMessage(contact, existingLead);
+      if (!personalizedMsg) {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead?.nombre || contact.nombre, segment: contact.segment, success: false, reason: 'Mensaje null (lead cerrado)' });
+        continue;
+      }
+
+      if (dryRun) {
+        sent++;
+        segmentStats[contact.segment]++;
+        results.push({ wa_id, nombre: existingLead?.nombre || contact.nombre, segment: contact.segment, success: true, dryRun: true, message: personalizedMsg });
+        continue;
+      }
+
+      // 7. Enviar template aprobado
+      const firstName = ((existingLead?.nombre || contact.nombre || '').split(' ')[0]) || 'amigo';
+      const tplBody = {
+        messaging_product: 'whatsapp',
+        to: wa_id,
+        type: 'template',
+        template: {
+          name: WA_TEMPLATE_NAME,
+          language: { code: WA_TEMPLATE_LANG },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }],
+        },
+      };
+
+      const tplResp = await fetch(waUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(tplBody),
+      });
+      const tplData = await tplResp.json();
+
+      if (!tplData.messages) {
+        failed++;
+        results.push({
+          wa_id,
+          nombre: existingLead?.nombre || contact.nombre,
+          segment: contact.segment,
+          success: false,
+          reason: 'Template falló: ' + (tplData.error?.message || JSON.stringify(tplData.error || 'unknown')),
+        });
+        continue;
+      }
+
+      // 8. Registrar en historial
+      historial.push({
+        role: 'assistant',
+        content: `[TEMPLATE:${WA_TEMPLATE_NAME}] Reactivación ManyChat (${contact.segment}) enviada a ${firstName}`,
+        timestamp: new Date().toISOString(),
+        isTemplate: true,
+        isManyChatReactivation: true,
+        manychatSegment: contact.segment,
+      });
+
+      // 9. Guardar/actualizar lead en Supabase
+      const patchBody = {
+        historial_chat: JSON.stringify(historial),
+        mensaje_pendiente: JSON.stringify({
+          text: personalizedMsg,
+          isManyChatReactivation: true,
+          manychatSegment: contact.segment,
+        }),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Si el lead no existía, crearlo
+      if (!existingLead) {
+        const createBody = {
+          wa_id,
+          nombre: contact.nombre || '',
+          estado_sofia: 'bienvenida',
+          origen: 'manychat',
+          manychat_segment: contact.segment,
+          modo_humano: false,
+          bloqueado: false,
+          created_at: new Date().toISOString(),
+          ...patchBody,
+        };
+
+        await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+          method: 'POST',
+          headers: { ...supabaseHeaders(), 'Prefer': 'return=minimal' },
+          body: JSON.stringify(createBody),
+        });
+      } else {
+        // Actualizar lead existente
+        if (!existingLead.origen) patchBody.origen = 'manychat';
+        if (!existingLead.manychat_segment) patchBody.manychat_segment = contact.segment;
+
+        await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`, {
+          method: 'PATCH',
+          headers: supabaseHeaders(),
+          body: JSON.stringify(patchBody),
+        });
+      }
+
+      sent++;
+      segmentStats[contact.segment]++;
+      results.push({
+        wa_id,
+        nombre: existingLead?.nombre || contact.nombre,
+        segment: contact.segment,
+        success: true,
+        method: 'template+queued',
+        isNew: !existingLead,
+        queuedMessage: personalizedMsg.substring(0, 80) + '...',
+      });
+
+      // Rate limiting: esperar 1.5s entre envíos para respetar límites de Meta
+      if (!dryRun) {
+        await new Promise(r => setTimeout(r, 1500));
+      }
+
+    } catch (e) {
+      failed++;
+      results.push({
+        wa_id,
+        nombre: contact.nombre,
+        segment: contact.segment,
+        success: false,
+        reason: e.message,
+      });
+    }
+  }
+
+  const summary = { sent, failed, skipped, total: contacts.length, segmentStats, nextIndex: startIndex + sent + failed + skipped };
+  manychatReactivation.sendResult = { ...summary, time: new Date().toISOString() };
+  manychatReactivation.lastSend = new Date().toISOString();
+
+  console.log(`📱 ManyChat reactivation: ${sent} enviados, ${failed} fallidos, ${skipped} saltados | Segments: ${JSON.stringify(segmentStats)}`);
+
+  // Notificar al admin
+  if (sent > 0 && SUPER_ADMIN_ID) {
+    try {
+      const app = global.__tesipediaApp;
+      if (app) {
+        await createNotification(app, {
+          user: SUPER_ADMIN_ID,
+          type: 'whatsapp',
+          message: `📱 Reactivación ManyChat: ${sent} leads contactados (${Object.entries(segmentStats).map(([k,v]) => `${k}:${v}`).join(', ')})`,
+          data: { segmentStats, sent },
+          link: '/admin/whatsapp',
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  res.json({ success: true, ...summary, results });
+});
+
+/**
+ * GET /api/v1/whatsapp/manychat/status
+ * Estado de la importación y reactivación ManyChat
+ */
+export const getManyChatStatus = asyncHandler(async (req, res) => {
+  // Contar leads con origen manychat en Supabase
+  let manychatLeadsCount = 0;
+  try {
+    const countResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/leads?origen=eq.manychat&select=wa_id`,
+      { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' } }
+    );
+    if (countResp.ok) {
+      const countHeader = countResp.headers.get('content-range');
+      if (countHeader) {
+        const match = countHeader.match(/\/(\d+)/);
+        if (match) manychatLeadsCount = parseInt(match[1]);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Obtener stats por segmento
+  const totalContacts = getManyChatContacts().length;
+  const segmentCounts = {};
+  for (const seg of SEGMENT_PRIORITY) {
+    segmentCounts[seg] = getManyChatBySegment(seg).length;
+  }
+
+  res.json({
+    totalContacts,
+    segmentCounts,
+    importedToSupabase: manychatLeadsCount,
+    lastImport: manychatReactivation.lastImport,
+    importResult: manychatReactivation.importResult,
+    lastSend: manychatReactivation.lastSend,
+    sendResult: manychatReactivation.sendResult,
+  });
+});
+
+/**
+ * GET /api/v1/whatsapp/manychat/preview
+ * Preview de mensajes que se enviarían sin enviar nada.
+ * Query: ?segment=SUPER_HOT&limit=5
+ */
+export const previewManyChatMessages = asyncHandler(async (req, res) => {
+  const segment = req.query.segment || 'SUPER_HOT';
+  const limit = Math.min(parseInt(req.query.limit) || 5, 20);
+
+  const contacts = getManyChatBySegment(segment).slice(0, limit);
+  const previews = [];
+
+  for (const contact of contacts) {
+    const wa_id = contact.wa_id.replace(/\D/g, '');
+    let existingLead = null;
+
+    try {
+      const resp = await fetch(
+        `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=nombre,estado_sofia,tipo_servicio,tipo_proyecto,tema,cotizacion_enviada&limit=1`,
+        { headers: supabaseHeaders() }
+      );
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.length > 0) existingLead = data[0];
+      }
+    } catch { /* ignore */ }
+
+    const msg = buildManyChatMessage(contact, existingLead);
+
+    previews.push({
+      wa_id,
+      nombre: existingLead?.nombre || contact.nombre,
+      segment: contact.segment,
+      existsInSupabase: !!existingLead,
+      estadoSofia: existingLead?.estado_sofia || null,
+      message: msg,
+    });
+  }
+
+  res.json({ segment, count: previews.length, previews });
+});
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
 
