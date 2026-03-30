@@ -473,6 +473,164 @@ export const anthropicSubscriptionProvider = {
 };
 
 // ═══════════════════════════════════════════════════
+// CAMPAIGN-LEVEL FETCHING — Para ver campañas individuales en tiempo real
+// ═══════════════════════════════════════════════════
+
+export async function fetchMetaCampaigns(year, month) {
+  const accessToken = process.env.META_ACCESS_TOKEN;
+  const adAccountId = process.env.META_AD_ACCOUNT_ID;
+  if (!accessToken || !adAccountId) return { error: 'META_ACCESS_TOKEN o META_AD_ACCOUNT_ID no configuradas', campaigns: [] };
+
+  try {
+    const startDate = new Date(year, month, 1);
+    const endDate = new Date(year, month + 1, 0);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    // Fetch campaign-level insights
+    const response = await axios.get(
+      `https://graph.facebook.com/v21.0/act_${adAccountId}/insights`,
+      {
+        params: {
+          access_token: accessToken,
+          time_range: JSON.stringify({ since: startStr, until: endStr }),
+          fields: 'campaign_name,campaign_id,spend,impressions,clicks,actions,reach,cpc,cpm,ctr,objective',
+          level: 'campaign',
+          limit: 100,
+          sort: ['spend_descending'],
+        },
+      }
+    );
+
+    const campaigns = (response.data?.data || []).map(row => {
+      const conversions = (row.actions || []).find(a => a.action_type === 'offsite_conversion.fb_pixel_lead' || a.action_type === 'lead');
+      return {
+        id: row.campaign_id,
+        name: row.campaign_name || 'Sin nombre',
+        platform: 'meta',
+        spend: parseFloat(row.spend) || 0,
+        impressions: parseInt(row.impressions) || 0,
+        clicks: parseInt(row.clicks) || 0,
+        reach: parseInt(row.reach) || 0,
+        cpc: parseFloat(row.cpc) || 0,
+        cpm: parseFloat(row.cpm) || 0,
+        ctr: parseFloat(row.ctr) || 0,
+        objective: row.objective || '',
+        conversions: conversions ? parseInt(conversions.value) : 0,
+        currency: 'MXN',
+        period: `${startStr} - ${endStr}`,
+      };
+    });
+
+    return { campaigns };
+  } catch (error) {
+    console.error('[Campaigns:Meta] Error:', error.response?.data || error.message);
+    return { error: error.response?.data?.error?.message || error.message, campaigns: [] };
+  }
+}
+
+export async function fetchGoogleAdsCampaigns(year, month) {
+  const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+  const clientId = process.env.GOOGLE_ADS_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_ADS_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_ADS_REFRESH_TOKEN;
+  const customerId = process.env.GOOGLE_ADS_CUSTOMER_ID;
+
+  if (!developerToken || !customerId) {
+    return { error: 'Google Ads credentials no configuradas', campaigns: [] };
+  }
+
+  try {
+    // 1. Get access token
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    });
+    const accessToken = tokenRes.data.access_token;
+
+    // 2. Query campaign-level data
+    const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const query = `
+      SELECT campaign.id, campaign.name, campaign.status,
+             metrics.cost_micros, metrics.impressions, metrics.clicks,
+             metrics.conversions, metrics.average_cpc, metrics.ctr
+      FROM campaign
+      WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
+        AND metrics.cost_micros > 0
+      ORDER BY metrics.cost_micros DESC
+    `;
+
+    const customIdClean = customerId.replace(/-/g, '');
+    const response = await axios.post(
+      `https://googleads.googleapis.com/v18/customers/${customIdClean}/googleAds:searchStream`,
+      { query },
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'developer-token': developerToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const campaigns = [];
+    (response.data || []).forEach(batch => {
+      (batch.results || []).forEach(row => {
+        const costMicros = parseInt(row.metrics?.costMicros || 0);
+        campaigns.push({
+          id: row.campaign?.id || '',
+          name: row.campaign?.name || 'Sin nombre',
+          platform: 'google',
+          status: row.campaign?.status || '',
+          spend: costMicros / 1_000_000,
+          impressions: parseInt(row.metrics?.impressions || 0),
+          clicks: parseInt(row.metrics?.clicks || 0),
+          conversions: parseFloat(row.metrics?.conversions || 0),
+          cpc: parseInt(row.metrics?.averageCpc || 0) / 1_000_000,
+          ctr: parseFloat(row.metrics?.ctr || 0) * 100,
+          currency: 'MXN',
+          period: `${startDate} - ${endDate}`,
+        });
+      });
+    });
+
+    return { campaigns };
+  } catch (error) {
+    console.error('[Campaigns:Google] Error:', error.response?.data || error.message);
+    return { error: error.message, campaigns: [] };
+  }
+}
+
+export async function fetchAllCampaigns(year, month) {
+  const [meta, google] = await Promise.all([
+    fetchMetaCampaigns(year, month),
+    fetchGoogleAdsCampaigns(year, month),
+  ]);
+
+  const campaigns = [...(meta.campaigns || []), ...(google.campaigns || [])];
+  const errors = [];
+  if (meta.error) errors.push({ provider: 'Meta Ads', error: meta.error });
+  if (google.error) errors.push({ provider: 'Google Ads', error: google.error });
+
+  const totalSpend = campaigns.reduce((sum, c) => sum + c.spend, 0);
+
+  return {
+    campaigns: campaigns.sort((a, b) => b.spend - a.spend),
+    totalSpend: Math.round(totalSpend * 100) / 100,
+    errors,
+    summary: {
+      meta: { count: (meta.campaigns || []).length, spend: (meta.campaigns || []).reduce((s, c) => s + c.spend, 0) },
+      google: { count: (google.campaigns || []).length, spend: (google.campaigns || []).reduce((s, c) => s + c.spend, 0) },
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════
 // ALL PROVIDERS — fetch all at once
 // ═══════════════════════════════════════════════════
 export const allProviders = [

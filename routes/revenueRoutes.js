@@ -3,7 +3,8 @@ import asyncHandler from 'express-async-handler';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import Expense from '../models/Expense.js';
 import Payment from '../models/Payment.js';
-import { fetchAllProviderCosts, allProviders } from '../services/costProviders.js';
+import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
+import axios from 'axios';
 
 const router = express.Router();
 
@@ -539,6 +540,172 @@ router.get('/sync-status', protect, adminOnly, asyncHandler(async (req, res) => 
   const exchangeRate = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
 
   res.json({ providers, exchangeRate });
+}));
+
+// ═══════════════════════════════════════════════════
+// GET /revenue/campaigns — Campañas de Meta Ads y Google Ads en tiempo real
+// ═══════════════════════════════════════════════════
+router.get('/campaigns', protect, adminOnly, asyncHandler(async (req, res) => {
+  const { year, month } = req.query;
+  const now = new Date();
+  const targetYear = parseInt(year) || now.getFullYear();
+  const targetMonth = month !== undefined ? parseInt(month) : now.getMonth();
+
+  console.log(`[Revenue Campaigns] Fetching campaigns for ${targetYear}-${targetMonth + 1}...`);
+
+  const result = await fetchAllCampaigns(targetYear, targetMonth);
+
+  res.json({
+    period: { year: targetYear, month: targetMonth },
+    ...result,
+  });
+}));
+
+// ═══════════════════════════════════════════════════
+// GET /revenue/usage — Uso en tiempo real de Anthropic, Railway, Netlify
+// ═══════════════════════════════════════════════════
+router.get('/usage', protect, adminOnly, asyncHandler(async (req, res) => {
+  const results = {};
+  const usdToMxn = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
+
+  // ── Anthropic: credit balance ──
+  const anthropicAdminKey = process.env.ANTHROPIC_ADMIN_API_KEY;
+  if (anthropicAdminKey) {
+    try {
+      // Try the admin API for organization billing
+      const billingRes = await axios.get('https://api.anthropic.com/v1/organizations/billing', {
+        headers: { 'x-api-key': anthropicAdminKey, 'anthropic-version': '2023-06-01' },
+      });
+      results.anthropic = {
+        status: 'ok',
+        data: billingRes.data,
+      };
+    } catch (err) {
+      // Fallback: use the env variable as estimate
+      const monthlyCost = parseFloat(process.env.ANTHROPIC_MONTHLY_COST) || 50;
+      results.anthropic = {
+        status: 'estimated',
+        data: {
+          estimatedMonthlyCostUSD: monthlyCost,
+          estimatedMonthlyCostMXN: Math.round(monthlyCost * usdToMxn * 100) / 100,
+          note: 'API billing endpoint unavailable, using ANTHROPIC_MONTHLY_COST estimate',
+          error: err.message,
+        },
+      };
+    }
+  } else {
+    results.anthropic = { status: 'not_configured', data: null };
+  }
+
+  // ── Railway: usage via GraphQL ──
+  const railwayToken = process.env.RAILWAY_API_TOKEN;
+  if (railwayToken) {
+    try {
+      const query = `
+        query {
+          me {
+            workspaces {
+              edges {
+                node {
+                  id
+                  name
+                  usage {
+                    currentUsage
+                    estimatedUsage
+                    planLimitUsage
+                    planUsageLimit
+                    currentBillEstimate
+                    billingCycleStart
+                    billingCycleEnd
+                  }
+                  plan {
+                    name
+                    pricePerMonth
+                    includedUsage
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      const railRes = await axios.post('https://backboard.railway.com/graphql/v2', { query }, {
+        headers: { Authorization: `Bearer ${railwayToken}`, 'Content-Type': 'application/json' },
+      });
+
+      const workspaces = railRes.data?.data?.me?.workspaces?.edges || [];
+      const ws = workspaces[0]?.node;
+      results.railway = {
+        status: 'ok',
+        data: {
+          workspaceName: ws?.name,
+          currentUsageUSD: ws?.usage?.currentUsage || 0,
+          estimatedUsageUSD: ws?.usage?.estimatedUsage || 0,
+          billEstimateUSD: ws?.usage?.currentBillEstimate || 0,
+          planName: ws?.plan?.name || 'Pro',
+          planPriceUSD: ws?.plan?.pricePerMonth || 20,
+          includedUsageUSD: ws?.plan?.includedUsage || 20,
+          billingCycleStart: ws?.usage?.billingCycleStart,
+          billingCycleEnd: ws?.usage?.billingCycleEnd,
+          currentUsageMXN: Math.round((ws?.usage?.currentUsage || 0) * usdToMxn * 100) / 100,
+        },
+      };
+    } catch (err) {
+      const planCost = parseFloat(process.env.RAILWAY_MONTHLY_COST) || 20;
+      results.railway = {
+        status: 'estimated',
+        data: {
+          estimatedMonthlyCostUSD: planCost,
+          estimatedMonthlyCostMXN: Math.round(planCost * usdToMxn * 100) / 100,
+          error: err.message,
+        },
+      };
+    }
+  } else {
+    const planCost = parseFloat(process.env.RAILWAY_MONTHLY_COST) || 20;
+    results.railway = {
+      status: 'estimated',
+      data: { estimatedMonthlyCostUSD: planCost, estimatedMonthlyCostMXN: Math.round(planCost * usdToMxn * 100) / 100 },
+    };
+  }
+
+  // ── Netlify: plan info ──
+  const netlifyToken = process.env.NETLIFY_ACCESS_TOKEN;
+  if (netlifyToken) {
+    try {
+      const [accountsRes, bandwidthRes] = await Promise.all([
+        axios.get('https://api.netlify.com/api/v1/accounts', {
+          headers: { Authorization: `Bearer ${netlifyToken}` },
+        }),
+        axios.get('https://api.netlify.com/api/v1/bandwidth', {
+          headers: { Authorization: `Bearer ${netlifyToken}` },
+        }).catch(() => ({ data: null })),
+      ]);
+
+      const account = accountsRes.data?.[0];
+      const planCost = parseFloat(process.env.NETLIFY_MONTHLY_COST) || 9;
+      results.netlify = {
+        status: 'ok',
+        data: {
+          planType: account?.type_name || 'Personal',
+          planSlug: account?.type_slug,
+          planCostUSD: planCost,
+          planCostMXN: Math.round(planCost * usdToMxn * 100) / 100,
+          bandwidth: bandwidthRes.data,
+        },
+      };
+    } catch (err) {
+      results.netlify = { status: 'error', data: { error: err.message } };
+    }
+  } else {
+    const planCost = parseFloat(process.env.NETLIFY_MONTHLY_COST) || 9;
+    results.netlify = {
+      status: 'estimated',
+      data: { planCostUSD: planCost, planCostMXN: Math.round(planCost * usdToMxn * 100) / 100 },
+    };
+  }
+
+  res.json({ usage: results, exchangeRate: usdToMxn });
 }));
 
 export default router;
