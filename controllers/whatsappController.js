@@ -392,6 +392,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   let mimetype = null;
   let filename = null;
   let convertedOggBuffer = null; // Buffer OGG/Opus para subir a WhatsApp Media API
+  let waAudioMediaId = null; // ID de WhatsApp Media API (audio subido directamente)
 
   if (file) {
     const isDoc = !!file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
@@ -462,6 +463,43 @@ export const sendMessage = asyncHandler(async (req, res) => {
     mimetype = isAudio ? 'audio/ogg' : file.mimetype;
     filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.ogg') : file.originalname;
     mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
+
+    // Subir audio a WhatsApp Media API AHORA (antes del check de ventana)
+    // para tener el media_id disponible tanto para envío directo como pendiente
+    if (isAudio && convertedOggBuffer) {
+      try {
+        const boundary = `----WaBoundary${Date.now()}`;
+        const parts = [];
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\naudio/ogg\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: audio/ogg; codecs=opus\r\n\r\n`));
+        parts.push(convertedOggBuffer);
+        parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+        const mediaUploadRes = await fetch(
+          `https://graph.facebook.com/v21.0/${WA_PHONE_ID}/media`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${WA_TOKEN}`,
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            },
+            body: Buffer.concat(parts),
+          }
+        );
+        const mediaData = await mediaUploadRes.json();
+        console.log('📤 WhatsApp Media API upload:', JSON.stringify(mediaData));
+
+        if (mediaData.id) {
+          waAudioMediaId = mediaData.id;
+          console.log(`✅ Audio subido a WA Media API: id=${waAudioMediaId}`);
+        } else {
+          console.warn('⚠️ WA Media API falló:', JSON.stringify(mediaData));
+        }
+      } catch (mediaErr) {
+        console.error('❌ WA Media API upload error:', mediaErr.message);
+      }
+    }
   }
 
   // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
@@ -581,13 +619,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
     }
     historial.push(pendingMsg);
 
-    // Guardar historial + mensaje pendiente en campo separado para que n8n lo detecte
+    // Guardar historial + mensaje pendiente en campo separado
     const mensajePendiente = {
       mensaje: mensaje || '',
       mediaUrl: mediaUrl || null,
       mediaType: mediaType || null,
       mimetype: mimetype || null,
       filename: filename || null,
+      waAudioMediaId: waAudioMediaId || null,
       adminName: adminName,
       timestamp: new Date().toISOString(),
     };
@@ -636,45 +675,15 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (mediaUrl) {
     payload.type = mediaType;
 
-    // Audio: subir OGG/Opus directo a WhatsApp Media API (evita problemas de Content-Type con Cloudinary)
-    if (mediaType === 'audio' && convertedOggBuffer) {
-      try {
-        const boundary = `----WaBoundary${Date.now()}`;
-        const parts = [];
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`));
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\naudio/ogg\r\n`));
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: audio/ogg; codecs=opus\r\n\r\n`));
-        parts.push(convertedOggBuffer);
-        parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-
-        const mediaUploadRes = await fetch(
-          `https://graph.facebook.com/v21.0/${WA_PHONE_ID}/media`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${WA_TOKEN}`,
-              'Content-Type': `multipart/form-data; boundary=${boundary}`,
-            },
-            body: Buffer.concat(parts),
-          }
-        );
-        const mediaData = await mediaUploadRes.json();
-        console.log('📤 WhatsApp Media API upload:', JSON.stringify(mediaData));
-
-        if (mediaData.id) {
-          payload.audio = { id: mediaData.id };
-          console.log(`✅ Audio subido a WA Media API: id=${mediaData.id}`);
-        } else {
-          console.warn('⚠️ WA Media API falló, fallback a link:', JSON.stringify(mediaData));
-          payload.audio = { link: mediaUrl };
-        }
-      } catch (mediaErr) {
-        console.error('❌ WA Media API error, fallback a link:', mediaErr.message);
+    // Audio: usar media_id de WA Media API (subido arriba), fallback a link
+    if (mediaType === 'audio') {
+      if (waAudioMediaId) {
+        payload.audio = { id: waAudioMediaId };
+        console.log(`🔊 Enviando audio con WA media_id: ${waAudioMediaId}`);
+      } else {
         payload.audio = { link: mediaUrl };
+        console.log(`🔊 Enviando audio con Cloudinary link (fallback): ${mediaUrl}`);
       }
-    } else if (mediaType === 'audio') {
-      // ffmpeg falló, no hay convertedOggBuffer — usar link de Cloudinary como fallback
-      payload.audio = { link: mediaUrl };
     } else {
       payload[mediaType] = { link: mediaUrl };
       if (mensaje) payload[mediaType].caption = mensaje;
@@ -1792,7 +1801,6 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
   const preview = mensaje ? (mensaje.length > 80 ? mensaje.substring(0, 80) + '...' : mensaje) : '(mensaje)';
 
   if (SUPER_ADMIN_ID) {
-    // Notificación de mensaje nuevo de WhatsApp
     await createNotification(req.app, {
       user: SUPER_ADMIN_ID,
       type: 'whatsapp',
@@ -1802,7 +1810,6 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
       priority: 'medium',
     });
 
-    // Si es un lead completamente nuevo, notificar aparte
     if (is_new_lead) {
       await createNotification(req.app, {
         user: SUPER_ADMIN_ID,
@@ -1813,6 +1820,100 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
         priority: 'high',
       });
     }
+  }
+
+  // ── ENVIAR MENSAJES PENDIENTES ──
+  // Cuando el usuario responde, se reabre la ventana de 24h.
+  // Verificar si hay un mensaje_pendiente y enviarlo ahora.
+  try {
+    const leadUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=mensaje_pendiente,historial_chat&limit=1`;
+    const leadResp = await fetch(leadUrl, { headers: supabaseHeaders() });
+    if (leadResp.ok) {
+      const leadData = await leadResp.json();
+      if (leadData.length > 0 && leadData[0].mensaje_pendiente) {
+        let pending;
+        try { pending = JSON.parse(leadData[0].mensaje_pendiente); } catch (_) { pending = null; }
+
+        if (pending) {
+          console.log(`📨 Enviando mensaje pendiente para ${wa_id}:`, JSON.stringify(pending));
+          const cleanNumber = wa_id.replace(/\D/g, '');
+          const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+          const payload = { messaging_product: 'whatsapp', to: cleanNumber };
+          let sent = false;
+
+          if (pending.mediaType === 'audio') {
+            payload.type = 'audio';
+            if (pending.waAudioMediaId) {
+              // Usar el media_id de WA Media API (subido cuando se creó el pendiente)
+              payload.audio = { id: pending.waAudioMediaId };
+            } else if (pending.mediaUrl) {
+              payload.audio = { link: pending.mediaUrl };
+            }
+          } else if (pending.mediaType && pending.mediaUrl) {
+            payload.type = pending.mediaType;
+            payload[pending.mediaType] = { link: pending.mediaUrl };
+            if (pending.mensaje) payload[pending.mediaType].caption = pending.mensaje;
+            if (pending.mediaType === 'document' && pending.filename) {
+              payload.document.filename = pending.filename;
+            }
+          } else if (pending.mensaje || pending.text) {
+            payload.type = 'text';
+            payload.text = { body: pending.mensaje || pending.text };
+          }
+
+          if (payload.type) {
+            const waResp = await fetch(waUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${WA_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            });
+            const waResult = await waResp.json();
+            console.log(`📨 Mensaje pendiente enviado para ${wa_id}:`, JSON.stringify(waResult));
+            sent = waResp.ok;
+
+            // Si es audio y el media_id falló, intentar enviar el texto por separado
+            if (!sent && pending.mensaje && pending.mediaType === 'audio') {
+              const textPayload = {
+                messaging_product: 'whatsapp', to: cleanNumber,
+                type: 'text', text: { body: pending.mensaje },
+              };
+              await fetch(waUrl, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(textPayload),
+              });
+            }
+          }
+
+          // Actualizar historial: marcar pendiente como enviado y limpiar mensaje_pendiente
+          let historial = [];
+          try { historial = JSON.parse(leadData[0].historial_chat || '[]'); } catch (_) { historial = []; }
+          historial = historial.map(msg => {
+            if (msg.delivery_status === 'pending') {
+              return { ...msg, delivery_status: sent ? 'sent' : 'failed' };
+            }
+            return msg;
+          });
+
+          const clearUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+          await fetch(clearUrl, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({
+              mensaje_pendiente: null,
+              historial_chat: JSON.stringify(historial),
+              updated_at: new Date().toISOString(),
+            }),
+          });
+          console.log(`✅ mensaje_pendiente limpiado para ${wa_id}`);
+        }
+      }
+    }
+  } catch (pendingErr) {
+    console.error('❌ Error enviando mensaje pendiente:', pendingErr.message);
   }
 
   res.json({ ok: true });
