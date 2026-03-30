@@ -391,6 +391,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   let mediaType = null;
   let mimetype = null;
   let filename = null;
+  let convertedOggBuffer = null; // Buffer OGG/Opus para subir a WhatsApp Media API
 
   if (file) {
     const isDoc = !!file.mimetype.match(/pdf|msword|officedocument|csv|text/i);
@@ -428,7 +429,10 @@ export const sendMessage = asyncHandler(async (req, res) => {
         try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch (_) {}
         console.log(`✅ Audio convertido: ${inExt}(${file.buffer.length}b) → ogg/opus(${oggBuffer.length}b)`);
 
-        // Subir OGG/Opus como raw a Cloudinary (sin re-encoding)
+        // Guardar buffer para subir a WhatsApp Media API después
+        convertedOggBuffer = oggBuffer;
+
+        // Subir OGG/Opus como raw a Cloudinary (solo para historial/preview)
         const oggBase64 = `data:audio/ogg;base64,${oggBuffer.toString('base64')}`;
         uploadOptions.resource_type = 'raw';
         uploadOptions.public_id = `audio_${ts}_${Math.floor(Math.random() * 1000)}.ogg`;
@@ -632,8 +636,44 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (mediaUrl) {
     payload.type = mediaType;
 
-    // Audio: Cloudinary raw URL ya tiene OGG/Opus correcto (convertido por ffmpeg arriba)
-    if (mediaType === 'audio') {
+    // Audio: subir OGG/Opus directo a WhatsApp Media API (evita problemas de Content-Type con Cloudinary)
+    if (mediaType === 'audio' && convertedOggBuffer) {
+      try {
+        const boundary = `----WaBoundary${Date.now()}`;
+        const parts = [];
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\naudio/ogg\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: audio/ogg; codecs=opus\r\n\r\n`));
+        parts.push(convertedOggBuffer);
+        parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+        const mediaUploadRes = await fetch(
+          `https://graph.facebook.com/v21.0/${WA_PHONE_ID}/media`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${WA_TOKEN}`,
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            },
+            body: Buffer.concat(parts),
+          }
+        );
+        const mediaData = await mediaUploadRes.json();
+        console.log('📤 WhatsApp Media API upload:', JSON.stringify(mediaData));
+
+        if (mediaData.id) {
+          payload.audio = { id: mediaData.id };
+          console.log(`✅ Audio subido a WA Media API: id=${mediaData.id}`);
+        } else {
+          console.warn('⚠️ WA Media API falló, fallback a link:', JSON.stringify(mediaData));
+          payload.audio = { link: mediaUrl };
+        }
+      } catch (mediaErr) {
+        console.error('❌ WA Media API error, fallback a link:', mediaErr.message);
+        payload.audio = { link: mediaUrl };
+      }
+    } else if (mediaType === 'audio') {
+      // ffmpeg falló, no hay convertedOggBuffer — usar link de Cloudinary como fallback
       payload.audio = { link: mediaUrl };
     } else {
       payload[mediaType] = { link: mediaUrl };
