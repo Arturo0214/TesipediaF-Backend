@@ -423,10 +423,10 @@ export const sendMessage = asyncHandler(async (req, res) => {
         writeFileSync(tmpIn, file.buffer);
 
         // Paso 1: Normalizar a WAV limpio (strip metadata, solo audio, mono 48kHz)
-        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpIn}" -vn -sn -dn -map 0:a:0 -map_metadata -1 -ac 1 -ar 48000 -c:a pcm_s16le "${tmpWav}"`, { timeout: 15000 });
+        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpIn}" -vn -map_metadata -1 -ac 1 -ar 48000 -c:a pcm_s16le "${tmpWav}"`, { timeout: 15000 });
 
         // Paso 2: WAV limpio → OGG/Opus con params compatibles con WhatsApp móvil
-        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpWav}" -c:a libopus -b:a 32k -ac 1 -ar 48000 -application voip -avoid_negative_ts make_zero "${tmpOut}"`, { timeout: 15000 });
+        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpWav}" -c:a libopus -b:a 32k -ac 1 -ar 48000 -avoid_negative_ts make_zero "${tmpOut}"`, { timeout: 15000 });
 
         const oggBuffer = readFileSync(tmpOut);
         try { unlinkSync(tmpIn); unlinkSync(tmpWav); unlinkSync(tmpOut); } catch (_) {}
