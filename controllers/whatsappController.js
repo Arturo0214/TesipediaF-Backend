@@ -406,9 +406,10 @@ export const sendMessage = asyncHandler(async (req, res) => {
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     } else if (isAudio) {
       // Audio se sube como 'video' (Cloudinary trata audio como subconjunto de video)
-      // Esto permite transformaciones de formato y sirve content-type correcto
       uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      uploadOptions.format = 'ogg'; // Convertir a OGG (formato soportado por WhatsApp API)
+      // Usar MP4 en lugar de OGG — WhatsApp requiere codec Opus para OGG,
+      // pero Cloudinary convierte con Vorbis. MP4/AAC funciona sin problemas.
+      uploadOptions.format = 'mp4';
     }
 
     console.log(`📤 Subiendo archivo a Cloudinary: type=${cleanMimetype}, size=${file.buffer.length}, resource_type=${uploadOptions.resource_type}, isAudio=${isAudio}`);
@@ -421,16 +422,19 @@ export const sendMessage = asyncHandler(async (req, res) => {
       throw new Error(`Error al subir archivo a Cloudinary: ${uploadErr.message}`);
     }
 
-    // Para audio: asegurar que la URL use extensión .ogg para WhatsApp
+    // Para audio: asegurar que la URL sirva formato MP4 para WhatsApp
     let finalUrl = result.secure_url;
-    if (isAudio && finalUrl && !finalUrl.endsWith('.ogg')) {
-      // Reemplazar la extensión del archivo en la URL de Cloudinary
-      finalUrl = finalUrl.replace(/\.[^.]+$/, '.ogg');
+    if (isAudio && finalUrl) {
+      const urlObj = new URL(finalUrl);
+      if (!urlObj.pathname.endsWith('.mp4')) {
+        urlObj.pathname = urlObj.pathname.replace(/\.[^.]+$/, '.mp4');
+      }
+      finalUrl = urlObj.toString();
     }
 
     mediaUrl = finalUrl;
-    mimetype = isAudio ? 'audio/ogg' : file.mimetype;
-    filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.ogg') : file.originalname;
+    mimetype = isAudio ? 'audio/mp4' : file.mimetype;
+    filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.mp4') : file.originalname;
     mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
   }
 
@@ -606,12 +610,16 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (mediaUrl) {
     payload.type = mediaType;
     payload[mediaType] = { link: mediaUrl };
-    if (mensaje) payload[mediaType].caption = mensaje;
+    // WhatsApp API: audio NO soporta caption, solo image y document
+    if (mensaje && mediaType !== 'audio') payload[mediaType].caption = mensaje;
     if (mediaType === 'document' && filename) payload.document.filename = filename;
+    // Si es audio con texto, enviar el texto como mensaje separado después
   } else {
     payload.type = 'text';
     payload.text = { body: mensaje };
   }
+
+  console.log('📤 WhatsApp payload:', JSON.stringify(payload, null, 2));
 
   const waResponse = await fetch(waUrl, {
     method: 'POST',
@@ -625,7 +633,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   let waResult;
   if (!waResponse.ok) {
     const errorData = await waResponse.text();
-    console.error('WhatsApp API error:', errorData);
+    console.error('❌ WhatsApp API error:', errorData);
     res.status(waResponse.status);
     throw new Error(`Error al enviar WhatsApp: ${errorData}`);
   } else {

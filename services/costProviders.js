@@ -180,8 +180,13 @@ export const metaAdsProvider = {
         }],
       };
     } catch (error) {
-      console.error('[CostProvider:MetaAds] Error:', error.response?.data || error.message);
-      return { error: error.response?.data?.error?.message || error.message, expenses: [] };
+      const rawMsg = error.response?.data?.error?.message || error.message;
+      const isExpired = rawMsg.toLowerCase().includes('session has expired') || rawMsg.toLowerCase().includes('access token');
+      const friendlyMsg = isExpired
+        ? 'Token de Meta expirado. Genera uno nuevo en Meta Business → Usuarios del sistema → Generar token.'
+        : rawMsg;
+      console.error('[CostProvider:MetaAds] Error:', friendlyMsg);
+      return { error: friendlyMsg, expenses: [] };
     }
   },
 };
@@ -524,8 +529,13 @@ export async function fetchMetaCampaigns(year, month) {
 
     return { campaigns };
   } catch (error) {
-    console.error('[Campaigns:Meta] Error:', error.response?.data || error.message);
-    return { error: error.response?.data?.error?.message || error.message, campaigns: [] };
+    const rawMsg = error.response?.data?.error?.message || error.message;
+    const isExpired = rawMsg.toLowerCase().includes('session has expired') || rawMsg.toLowerCase().includes('access token');
+    const friendlyMsg = isExpired
+      ? 'Token de Meta expirado. Genera uno nuevo en Meta Business → Usuarios del sistema → Generar token.'
+      : rawMsg;
+    console.error('[Campaigns:Meta] Error:', friendlyMsg);
+    return { error: friendlyMsg, campaigns: [] };
   }
 }
 
