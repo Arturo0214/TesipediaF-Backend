@@ -397,7 +397,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
     const uploadOptions = {
       folder: 'whatsapp_admin_media',
-      resource_type: isDoc ? 'raw' : isAudio ? 'raw' : 'auto',
+      resource_type: isDoc ? 'raw' : isAudio ? 'video' : 'auto',
     };
 
     // Si es un documento, subimos como 'raw' con extensión
@@ -405,11 +405,9 @@ export const sendMessage = asyncHandler(async (req, res) => {
       const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     } else if (isAudio) {
-      // Subir como 'raw' para preservar el formato original (webm+opus)
-      // WhatsApp Cloud API soporta audio/ogg con opus nativamente
-      // Cloudinary con resource_type:'video' convierte y sirve como video/mp4 lo cual WhatsApp rechaza
-      const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'ogg';
-      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+      // Subir como 'video' (Cloudinary trata audio como subconjunto de video)
+      // NO forzar conversión de formato — dejar que Cloudinary preserve el original
+      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     }
 
     console.log(`📤 Subiendo archivo a Cloudinary: type=${cleanMimetype}, size=${file.buffer.length}, resource_type=${uploadOptions.resource_type}, isAudio=${isAudio}`);
@@ -425,8 +423,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
     let finalUrl = result.secure_url;
 
     mediaUrl = finalUrl;
-    mimetype = isAudio ? (cleanMimetype || 'audio/ogg') : file.mimetype;
-    filename = file.originalname;
+    mimetype = isAudio ? 'audio/ogg' : file.mimetype;
+    filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.ogg') : file.originalname;
     mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
   }
 
