@@ -421,10 +421,10 @@ export const sendMessage = asyncHandler(async (req, res) => {
         const tmpOut = join(tmpdir(), `wa_audio_out_${ts}.ogg`);
         writeFileSync(tmpIn, file.buffer);
 
-        // -c:a copy si ya es opus (webm/ogg), re-encode si es otro formato (mp4/aac)
-        const isAlreadyOpus = cleanMimetype.includes('webm') || cleanMimetype.includes('ogg') || file.mimetype.includes('opus');
-        const codecFlag = isAlreadyOpus ? '-c:a copy' : '-c:a libopus -b:a 48k';
-        execSync(`${ffmpegPath} -loglevel error -i "${tmpIn}" ${codecFlag} "${tmpOut}" -y`, { timeout: 15000 });
+        // SIEMPRE re-encodear a Opus con parámetros compatibles con WhatsApp móvil
+        // -c:a copy no sirve: Chrome genera Opus con parámetros que WA Web acepta pero WA móvil no
+        // Mono, 48kHz, bitrate bajo, modo voz = máxima compatibilidad
+        execSync(`${ffmpegPath} -loglevel error -i "${tmpIn}" -c:a libopus -b:a 24k -ac 1 -ar 48000 -application voip "${tmpOut}" -y`, { timeout: 15000 });
 
         const oggBuffer = readFileSync(tmpOut);
         try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch (_) {}
