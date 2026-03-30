@@ -41,17 +41,26 @@ const formatPhone = (phone) => {
  * @returns {object} { user, isNew, password, loginIdentifier }
  */
 export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhone, projectTitle, manualPassword }) => {
-  const phoneFormatted = formatPhone(clientPhone);
+  // Detectar si clientEmail es realmente un teléfono (solo dígitos, sin @)
+  let actualEmail = clientEmail;
+  let actualPhone = clientPhone;
+  if (clientEmail && /^\d+$/.test(clientEmail.trim())) {
+    console.log(`[AutoClient] clientEmail "${clientEmail}" parece ser un teléfono, reasignando`);
+    actualPhone = actualPhone || clientEmail;
+    actualEmail = '';
+  }
 
-  if (!clientEmail && !phoneFormatted) {
+  const phoneFormatted = formatPhone(actualPhone);
+
+  if (!actualEmail && !phoneFormatted) {
     console.log('[AutoClient] No se proporcionó email ni teléfono, omitiendo creación de usuario');
     return { user: null, isNew: false, password: null, loginIdentifier: null };
   }
 
   // Determinar el email a usar
   // Si no hay email pero sí teléfono, generar email basado en teléfono
-  const effectiveEmail = clientEmail
-    ? clientEmail.toLowerCase()
+  const effectiveEmail = actualEmail
+    ? actualEmail.toLowerCase()
     : `${phoneFormatted}@tesipedia.mx`;
 
   // Verificar si el usuario ya existe por email
@@ -69,7 +78,7 @@ export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhon
       existingUser.phone = phoneFormatted;
       await existingUser.save();
     }
-    const loginId = clientEmail ? existingUser.email : (existingUser.phone || existingUser.email);
+    const loginId = actualEmail ? existingUser.email : (existingUser.phone || existingUser.email);
     return { user: existingUser, isNew: false, password: null, loginIdentifier: loginId };
   }
 
@@ -86,16 +95,16 @@ export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhon
   });
 
   // El identificador de login: si tiene email real usa email, si no usa teléfono
-  const loginIdentifier = clientEmail ? effectiveEmail : phoneFormatted;
+  const loginIdentifier = actualEmail ? effectiveEmail : phoneFormatted;
 
   console.log(`[AutoClient] Usuario creado: ${newUser.email} / phone: ${newUser.phone} (ID: ${newUser._id})`);
 
   // Enviar credenciales por WhatsApp si hay teléfono
   if (phoneFormatted) {
     // Construir mensaje con el identificador de login correcto
-    const loginLine = clientEmail
+    const loginLine = actualEmail
       ? `*Email:* ${effectiveEmail}`
-      : `*Tu número de teléfono:* ${clientPhone}`;
+      : `*Tu número de teléfono:* ${actualPhone}`;
 
     const message = [
       `Hola ${clientName || 'Cliente'} *Bienvenido a Tesipedia*`,
