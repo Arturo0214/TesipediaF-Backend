@@ -2515,7 +2515,7 @@ export const importManyChatLeads = asyncHandler(async (req, res) => {
  *   - startIndex: 0 → para continuar donde se quedó
  */
 export const sendManyChatReactivation = asyncHandler(async (req, res) => {
-  const { segments, maxPerRun = 50, dryRun = false, startIndex = 0 } = req.body || {};
+  const { segments, maxPerRun = 50, dryRun = false, startIndex = 0, excludeDuplicates = false } = req.body || {};
 
   console.log(`📱 ManyChat REACTIVATION iniciado — dryRun: ${!!dryRun}, max: ${maxPerRun}, startIndex: ${startIndex}`);
 
@@ -2570,6 +2570,13 @@ export const sendManyChatReactivation = asyncHandler(async (req, res) => {
             try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
           }
         }
+      }
+
+      // 1b. Verificar: excluir duplicados con Tesipedia (leads que ya existen con origen diferente a manychat)
+      if (excludeDuplicates && existingLead && existingLead.origen && existingLead.origen !== 'manychat') {
+        skipped++;
+        results.push({ wa_id, nombre: existingLead.nombre, segment: contact.segment, success: false, reason: `Duplicado Tesipedia (origen: ${existingLead.origen})` });
+        continue;
       }
 
       // 2. Verificar: no enviar si ya le mandamos reactivación ManyChat

@@ -4,6 +4,7 @@ import Payment from '../models/Payment.js';
 import asyncHandler from 'express-async-handler';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 import createNotification from '../utils/createNotification.js';
+import cloudinary from '../config/cloudinary.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -644,4 +645,142 @@ export const updateProject = asyncHandler(async (req, res) => {
 
     await project.save();
     res.json(project);
-}); 
+});
+
+/* ══════════════════════════════════════════════
+   Revision / Version endpoints
+   ══════════════════════════════════════════════ */
+
+/**
+ * POST /projects/:id/revisions
+ * Upload a new revision (file + metadata).
+ * Body (multipart): file (optional), label, type, notes
+ */
+export const addRevision = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    const { label, type, notes } = req.body;
+    const revType = type || (project.revisions.length === 0 ? 'preliminary' : 'revision');
+
+    // Determine version number
+    const nextVersion = (project.revisions.length > 0
+        ? Math.max(...project.revisions.map(r => r.version)) + 1
+        : 1);
+
+    let fileData = null;
+    if (req.file) {
+        // Upload to Cloudinary
+        const result = await new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+                {
+                    folder: `tesipedia/projects/${project._id}/revisions`,
+                    resource_type: 'auto',
+                    public_id: `v${nextVersion}_${Date.now()}`,
+                },
+                (error, result) => {
+                    if (error) reject(error);
+                    else resolve(result);
+                }
+            );
+            stream.end(req.file.buffer);
+        });
+
+        fileData = {
+            filename: result.public_id,
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            path: result.secure_url,
+            size: req.file.size,
+        };
+    }
+
+    const revision = {
+        version: nextVersion,
+        label: label || (revType === 'preliminary' ? 'Versión preliminar' : `Revisión ${nextVersion}`),
+        type: revType,
+        file: fileData,
+        notes: notes || '',
+        uploadedBy: req.user._id,
+        status: 'delivered',
+    };
+
+    project.revisions.push(revision);
+    await project.save();
+
+    // Populate for response
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('payment');
+
+    res.status(201).json(populated);
+});
+
+/**
+ * PUT /projects/:id/revisions/:version/status
+ * Update revision status (corrections_requested, approved, pending_review)
+ * Body: { status, correctionNotes }
+ */
+export const updateRevisionStatus = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    const version = parseInt(req.params.version, 10);
+    const revision = project.revisions.find(r => r.version === version);
+    if (!revision) {
+        res.status(404);
+        throw new Error(`Revisión v${version} no encontrada`);
+    }
+
+    const { status, correctionNotes } = req.body;
+    const validStatuses = ['delivered', 'pending_review', 'corrections_requested', 'approved'];
+    if (status && !validStatuses.includes(status)) {
+        res.status(400);
+        throw new Error(`Estado inválido. Válidos: ${validStatuses.join(', ')}`);
+    }
+
+    if (status) revision.status = status;
+    if (correctionNotes !== undefined) {
+        revision.correctionNotes = correctionNotes;
+        revision.correctionDate = new Date();
+    }
+
+    // If approved, optionally mark project as completed
+    if (status === 'approved') {
+        project.status = 'completed';
+        project.progress = 100;
+    }
+
+    await project.save();
+
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('payment');
+
+    res.json(populated);
+});
+
+/**
+ * GET /projects/:id/revisions
+ * Get all revisions for a project
+ */
+export const getRevisions = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id)
+        .select('revisions taskTitle')
+        .populate('revisions.uploadedBy', 'name');
+
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    res.json(project.revisions.sort((a, b) => a.version - b.version));
+});

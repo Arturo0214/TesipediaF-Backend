@@ -136,6 +136,7 @@ const login = asyncHandler(async (req, res) => {
     _id: user._id,
     name: user.name,
     email: user.email,
+    phone: user.phone,
     role: user.role,
     token
   });
@@ -156,6 +157,7 @@ const getProfile = asyncHandler(async (req, res) => {
       _id: user._id,
       name: user.name,
       email: user.email,
+      phone: user.phone,
       role: user.role,
     });
   } else {

@@ -96,6 +96,33 @@ const projectSchema = new mongoose.Schema(
                 default: Date.now
             }
         }],
+        /* ── Version / revision tracking ── */
+        revisions: [{
+            version: { type: Number, required: true },          // 1, 2, 3…
+            label: { type: String, default: '' },               // e.g. "Versión preliminar", "Corrección 1"
+            type: {
+                type: String,
+                enum: ['preliminary', 'correction', 'revision', 'final'],
+                default: 'revision'
+            },
+            file: {
+                filename: String,
+                originalname: String,
+                mimetype: String,
+                path: String,
+                size: Number,
+            },
+            notes: { type: String, default: '' },               // description / advisor notes
+            uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            createdAt: { type: Date, default: Date.now },
+            status: {
+                type: String,
+                enum: ['delivered', 'pending_review', 'corrections_requested', 'approved'],
+                default: 'delivered'
+            },
+            correctionNotes: { type: String, default: '' },     // advisor correction feedback
+            correctionDate: { type: Date, default: null },
+        }],
         progress: {
             type: Number,
             default: 0,

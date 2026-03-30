@@ -12,9 +12,13 @@ import {
     addComment,
     updateProject,
     createClientFromProject,
-    migrateFixQuoteIndex
+    migrateFixQuoteIndex,
+    addRevision,
+    updateRevisionStatus,
+    getRevisions
 } from '../controllers/projectController.js';
 import { protect, admin, writer } from '../middleware/authMiddleware.js';
+import upload from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
 
@@ -51,4 +55,12 @@ router.route('/:id/progress')
 router.route('/:id/comments')
     .post(protect, addComment);
 
-export default router; 
+// Revision / version routes
+router.route('/:id/revisions')
+    .get(protect, getRevisions)
+    .post(protect, upload.single('file'), addRevision);
+
+router.route('/:id/revisions/:version/status')
+    .put(protect, admin, updateRevisionStatus);
+
+export default router;
