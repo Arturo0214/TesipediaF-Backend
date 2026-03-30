@@ -89,6 +89,16 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
     { $sort: { total: -1 } }
   ]);
 
+  // ── Pagos individuales del mes (para contraste ingreso vs gasto) ──
+  const recentPayments = await Payment.find({
+    status: 'completed',
+    createdAt: { $gte: startOfMonth, $lte: endOfMonth },
+  })
+    .select('clientName title amount method vendedor createdAt currency status')
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean();
+
   const monthlyIncomeTotal = monthlyIncome[0]?.total || 0;
   const yearlyIncomeTotal = yearlyIncome[0]?.total || 0;
 
@@ -117,6 +127,7 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
     },
     costPerThesis: Math.round(costPerThesis * 100) / 100,
     salesCount: completedPaymentsThisMonth,
+    recentPayments,
   });
 }));
 
@@ -489,8 +500,8 @@ router.get('/sync-status', protect, adminOnly, asyncHandler(async (req, res) => 
     {
       name: 'Anthropic API',
       category: 'claude_api',
-      configured: !!process.env.ANTHROPIC_ADMIN_API_KEY,
-      envVars: ['ANTHROPIC_ADMIN_API_KEY'],
+      configured: !!(process.env.ANTHROPIC_ADMIN_API_KEY || process.env.ANTHROPIC_MONTHLY_COST),
+      envVars: ['ANTHROPIC_ADMIN_API_KEY', 'ANTHROPIC_MONTHLY_COST'],
     },
     {
       name: 'Suscripción Anthropic ($200 USD)',
