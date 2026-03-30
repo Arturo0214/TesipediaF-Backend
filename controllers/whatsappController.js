@@ -625,16 +625,16 @@ export const sendMessage = asyncHandler(async (req, res) => {
     // Para audio: convertir webm→ogg (preservando opus) y subir a WhatsApp Media API
     if (mediaType === 'audio' && file) {
       try {
-        // 1. Convertir webm/opus → ogg/opus con ffmpeg
-        const tmpIn = join(tmpdir(), `wa_audio_in_${Date.now()}.webm`);
-        const tmpOut = join(tmpdir(), `wa_audio_out_${Date.now()}.ogg`);
+        // 1. Convertir webm/opus → ogg/opus con ffmpeg (solo cambiar contenedor, sin re-encodear)
+        const ts = Date.now();
+        const tmpIn = join(tmpdir(), `wa_audio_in_${ts}.webm`);
+        const tmpOut = join(tmpdir(), `wa_audio_out_${ts}.ogg`);
         writeFileSync(tmpIn, file.buffer);
-        execSync(`${ffmpegPath} -i "${tmpIn}" -c:a libopus -b:a 48k "${tmpOut}" -y`, { timeout: 15000 });
+        execSync(`${ffmpegPath} -loglevel error -i "${tmpIn}" -c:a copy "${tmpOut}" -y`, { timeout: 15000 });
         const oggBuffer = readFileSync(tmpOut);
-        // Limpiar archivos temporales
         try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch (_) {}
 
-        console.log(`📤 Audio convertido: webm(${file.buffer.length}b) → ogg/opus(${oggBuffer.length}b)`);
+        console.log(`✅ Audio convertido: webm(${file.buffer.length}b) → ogg/opus(${oggBuffer.length}b)`);
 
         // 2. Subir OGG/Opus a WhatsApp Media API
         const boundary = `----WaBoundary${Date.now()}`;
