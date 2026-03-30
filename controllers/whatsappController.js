@@ -397,7 +397,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
     const uploadOptions = {
       folder: 'whatsapp_admin_media',
-      resource_type: isDoc ? 'raw' : isAudio ? 'video' : 'auto',
+      resource_type: isDoc ? 'raw' : isAudio ? 'raw' : 'auto',
     };
 
     // Si es un documento, subimos como 'raw' con extensión
@@ -405,11 +405,11 @@ export const sendMessage = asyncHandler(async (req, res) => {
       const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     } else if (isAudio) {
-      // Audio se sube como 'video' (Cloudinary trata audio como subconjunto de video)
-      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      // Usar MP4 en lugar de OGG — WhatsApp requiere codec Opus para OGG,
-      // pero Cloudinary convierte con Vorbis. MP4/AAC funciona sin problemas.
-      uploadOptions.format = 'mp4';
+      // Subir como 'raw' para preservar el formato original (webm+opus)
+      // WhatsApp Cloud API soporta audio/ogg con opus nativamente
+      // Cloudinary con resource_type:'video' convierte y sirve como video/mp4 lo cual WhatsApp rechaza
+      const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'ogg';
+      uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     }
 
     console.log(`📤 Subiendo archivo a Cloudinary: type=${cleanMimetype}, size=${file.buffer.length}, resource_type=${uploadOptions.resource_type}, isAudio=${isAudio}`);
@@ -422,19 +422,11 @@ export const sendMessage = asyncHandler(async (req, res) => {
       throw new Error(`Error al subir archivo a Cloudinary: ${uploadErr.message}`);
     }
 
-    // Para audio: asegurar que la URL sirva formato MP4 para WhatsApp
     let finalUrl = result.secure_url;
-    if (isAudio && finalUrl) {
-      const urlObj = new URL(finalUrl);
-      if (!urlObj.pathname.endsWith('.mp4')) {
-        urlObj.pathname = urlObj.pathname.replace(/\.[^.]+$/, '.mp4');
-      }
-      finalUrl = urlObj.toString();
-    }
 
     mediaUrl = finalUrl;
-    mimetype = isAudio ? 'audio/mp4' : file.mimetype;
-    filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.mp4') : file.originalname;
+    mimetype = isAudio ? (cleanMimetype || 'audio/ogg') : file.mimetype;
+    filename = file.originalname;
     mediaType = isAudio ? 'audio' : (isDoc ? 'document' : 'image');
   }
 
