@@ -721,6 +721,85 @@ export const addRevision = asyncHandler(async (req, res) => {
 });
 
 /**
+ * POST /projects/:id/deliverables
+ * Upload a deliverable file to a project (admin only)
+ */
+export const addDeliverable = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    if (!req.file) {
+        res.status(400);
+        throw new Error('No se envió ningún archivo');
+    }
+
+    const result = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            {
+                folder: `tesipedia/projects/${project._id}/deliverables`,
+                resource_type: 'auto',
+                public_id: `del_${Date.now()}`,
+            },
+            (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+            }
+        );
+        stream.end(req.file.buffer);
+    });
+
+    const deliverable = {
+        filename: result.public_id,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        path: result.secure_url,
+        size: req.file.size,
+        uploadedAt: new Date(),
+    };
+
+    project.deliverables.push(deliverable);
+    await project.save();
+
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('payment');
+
+    res.status(201).json(populated);
+});
+
+/**
+ * DELETE /projects/:id/deliverables/:deliverableId
+ * Remove a deliverable from a project (admin only)
+ */
+export const removeDeliverable = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+
+    const idx = project.deliverables.findIndex(d => d._id.toString() === req.params.deliverableId);
+    if (idx === -1) {
+        res.status(404);
+        throw new Error('Archivo no encontrado');
+    }
+
+    project.deliverables.splice(idx, 1);
+    await project.save();
+
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('payment');
+
+    res.json(populated);
+});
+
+/**
  * PUT /projects/:id/revisions/:version/status
  * Update revision status (corrections_requested, approved, pending_review)
  * Body: { status, correctionNotes }

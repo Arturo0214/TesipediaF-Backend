@@ -15,7 +15,9 @@ import {
     migrateFixQuoteIndex,
     addRevision,
     updateRevisionStatus,
-    getRevisions
+    getRevisions,
+    addDeliverable,
+    removeDeliverable
 } from '../controllers/projectController.js';
 import { protect, admin, writer } from '../middleware/authMiddleware.js';
 import upload from '../middleware/uploadMiddleware.js';
@@ -62,5 +64,12 @@ router.route('/:id/revisions')
 
 router.route('/:id/revisions/:version/status')
     .put(protect, admin, updateRevisionStatus);
+
+// Deliverables (file uploads for project deliveries)
+router.route('/:id/deliverables')
+    .post(protect, admin, upload.single('file'), addDeliverable);
+
+router.route('/:id/deliverables/:deliverableId')
+    .delete(protect, admin, removeDeliverable);
 
 export default router;
