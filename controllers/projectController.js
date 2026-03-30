@@ -419,9 +419,24 @@ export const createClientFromProject = asyncHandler(async (req, res) => {
         });
     }
 
+    // Permitir que el admin envíe email/phone/password en el body
+    const { email, phone, password: manualPassword, name: manualName } = req.body || {};
+
+    // Actualizar datos del proyecto si se proporcionan
+    if (email && !project.clientEmail) {
+        project.clientEmail = email;
+    }
+    if (phone && !project.clientPhone) {
+        project.clientPhone = phone;
+    }
+    if (manualName && !project.clientName) {
+        project.clientName = manualName;
+    }
+    await project.save();
+
     if (!project.clientEmail && !project.clientPhone) {
         res.status(400);
-        throw new Error('El proyecto no tiene email ni teléfono de cliente para crear la cuenta');
+        throw new Error('Se requiere al menos un email o teléfono para crear la cuenta');
     }
 
     const { user, isNew, password, loginIdentifier } = await autoCreateClientUser({
@@ -429,6 +444,7 @@ export const createClientFromProject = asyncHandler(async (req, res) => {
         clientEmail: project.clientEmail || '',
         clientPhone: project.clientPhone || '',
         projectTitle: project.taskTitle,
+        manualPassword: manualPassword || null,
     });
 
     if (!user) {

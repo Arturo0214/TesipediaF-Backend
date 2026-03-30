@@ -40,7 +40,7 @@ const formatPhone = (phone) => {
  * @param {string} [params.projectTitle] - Título del proyecto (para el mensaje WA)
  * @returns {object} { user, isNew, password, loginIdentifier }
  */
-export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhone, projectTitle }) => {
+export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhone, projectTitle, manualPassword }) => {
   const phoneFormatted = formatPhone(clientPhone);
 
   if (!clientEmail && !phoneFormatted) {
@@ -74,7 +74,7 @@ export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhon
   }
 
   // Crear nuevo usuario
-  const password = generateGenericPassword(clientName);
+  const password = manualPassword || generateGenericPassword(clientName);
 
   const newUser = await User.create({
     name: clientName || 'Cliente',
