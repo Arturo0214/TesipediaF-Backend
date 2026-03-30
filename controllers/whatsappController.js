@@ -616,9 +616,53 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
   if (mediaUrl) {
     payload.type = mediaType;
-    payload[mediaType] = { link: mediaUrl };
-    if (mensaje) payload[mediaType].caption = mensaje;
-    if (mediaType === 'document' && filename) payload.document.filename = filename;
+
+    // Para audio: subir buffer original a WhatsApp Media API directamente
+    // Evita que Cloudinary convierta el codec (webm/opus → ogg/vorbis)
+    // WhatsApp soporta el audio/webm;codecs=opus nativo del navegador
+    if (mediaType === 'audio' && file) {
+      try {
+        const boundary = `----WaBoundary${Date.now()}`;
+        const cleanMime = file.mimetype.split(';')[0].trim();
+
+        // Construir multipart/form-data manualmente
+        const parts = [];
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\n${cleanMime}\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: ${cleanMime}\r\n\r\n`));
+        parts.push(file.buffer);
+        parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+        const multipartBody = Buffer.concat(parts);
+
+        const mediaUploadRes = await fetch(
+          `https://graph.facebook.com/v21.0/${WA_PHONE_ID}/media`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${WA_TOKEN}`,
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            },
+            body: multipartBody,
+          }
+        );
+        const mediaData = await mediaUploadRes.json();
+        console.log('📤 WhatsApp media upload:', JSON.stringify(mediaData));
+
+        if (mediaData.id) {
+          payload.audio = { id: mediaData.id };
+        } else {
+          console.warn('⚠️ Media upload failed, fallback to link:', JSON.stringify(mediaData));
+          payload.audio = { link: mediaUrl };
+        }
+      } catch (mediaErr) {
+        console.error('❌ Media upload error, fallback to link:', mediaErr.message);
+        payload.audio = { link: mediaUrl };
+      }
+    } else {
+      payload[mediaType] = { link: mediaUrl };
+      if (mensaje) payload[mediaType].caption = mensaje;
+      if (mediaType === 'document' && filename) payload.document.filename = filename;
+    }
   } else {
     payload.type = 'text';
     payload.text = { body: mensaje };
