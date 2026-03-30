@@ -441,7 +441,10 @@ export const sendMessage = asyncHandler(async (req, res) => {
         uploadOptions.public_id = `audio_${ts}_${Math.floor(Math.random() * 1000)}.ogg`;
         fileBuffer = oggBase64;
       } catch (convErr) {
-        console.error('❌ ffmpeg conversion failed, uploading original:', convErr.message);
+        console.error('❌ ffmpeg conversion failed:', convErr.message);
+        console.error('❌ ffmpeg stderr:', convErr.stderr?.toString?.() || 'no stderr');
+        console.error('❌ ffmpeg status:', convErr.status, 'signal:', convErr.signal);
+        console.error('❌ Input: mimetype=', cleanMimetype, 'size=', file.buffer.length, 'originalname=', file.originalname);
         // Fallback: subir original como video (comportamiento anterior)
         uploadOptions.resource_type = 'video';
         uploadOptions.public_id = `audio_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
