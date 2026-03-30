@@ -6,6 +6,11 @@
 import asyncHandler from 'express-async-handler';
 import cloudinary from '../config/cloudinary.js';
 import createNotification from '../utils/createNotification.js';
+import { execSync } from 'child_process';
+import { writeFileSync, readFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import ffmpegPath from 'ffmpeg-static';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -617,22 +622,28 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (mediaUrl) {
     payload.type = mediaType;
 
-    // Para audio: subir buffer original a WhatsApp Media API directamente
-    // Evita que Cloudinary convierta el codec (webm/opus → ogg/vorbis)
-    // WhatsApp soporta el audio/webm;codecs=opus nativo del navegador
+    // Para audio: convertir webm→ogg (preservando opus) y subir a WhatsApp Media API
     if (mediaType === 'audio' && file) {
       try {
-        const boundary = `----WaBoundary${Date.now()}`;
-        const cleanMime = file.mimetype.split(';')[0].trim();
+        // 1. Convertir webm/opus → ogg/opus con ffmpeg
+        const tmpIn = join(tmpdir(), `wa_audio_in_${Date.now()}.webm`);
+        const tmpOut = join(tmpdir(), `wa_audio_out_${Date.now()}.ogg`);
+        writeFileSync(tmpIn, file.buffer);
+        execSync(`${ffmpegPath} -i "${tmpIn}" -c:a libopus -b:a 48k "${tmpOut}" -y`, { timeout: 15000 });
+        const oggBuffer = readFileSync(tmpOut);
+        // Limpiar archivos temporales
+        try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch (_) {}
 
-        // Construir multipart/form-data manualmente
+        console.log(`📤 Audio convertido: webm(${file.buffer.length}b) → ogg/opus(${oggBuffer.length}b)`);
+
+        // 2. Subir OGG/Opus a WhatsApp Media API
+        const boundary = `----WaBoundary${Date.now()}`;
         const parts = [];
         parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`));
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\n${cleanMime}\r\n`));
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: ${cleanMime}\r\n\r\n`));
-        parts.push(file.buffer);
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\naudio/ogg\r\n`));
+        parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: audio/ogg\r\n\r\n`));
+        parts.push(oggBuffer);
         parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-        const multipartBody = Buffer.concat(parts);
 
         const mediaUploadRes = await fetch(
           `https://graph.facebook.com/v21.0/${WA_PHONE_ID}/media`,
@@ -642,7 +653,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
               'Authorization': `Bearer ${WA_TOKEN}`,
               'Content-Type': `multipart/form-data; boundary=${boundary}`,
             },
-            body: multipartBody,
+            body: Buffer.concat(parts),
           }
         );
         const mediaData = await mediaUploadRes.json();
@@ -655,7 +666,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
           payload.audio = { link: mediaUrl };
         }
       } catch (mediaErr) {
-        console.error('❌ Media upload error, fallback to link:', mediaErr.message);
+        console.error('❌ Audio conversion/upload error, fallback to link:', mediaErr.message);
         payload.audio = { link: mediaUrl };
       }
     } else {
