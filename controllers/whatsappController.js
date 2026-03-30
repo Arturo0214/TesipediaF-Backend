@@ -412,23 +412,25 @@ export const sendMessage = asyncHandler(async (req, res) => {
       const ext = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'pdf';
       uploadOptions.public_id = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     } else if (isAudio) {
-      // Convertir cualquier audio a OGG/Opus con ffmpeg, luego subir como raw
-      // Esto evita que Cloudinary re-encode el audio (lo que rompe el codec Opus)
+      // Conversión en 2 pasos: source → WAV limpio → OGG/Opus
+      // Paso por WAV elimina metadata corrupta (causa #1 de "funciona en WA Web pero no en WA móvil")
       try {
         const ts = Date.now();
         const inExt = cleanMimetype.includes('mp4') ? 'mp4' : cleanMimetype.includes('ogg') ? 'ogg' : 'webm';
         const tmpIn = join(tmpdir(), `wa_audio_in_${ts}.${inExt}`);
+        const tmpWav = join(tmpdir(), `wa_audio_clean_${ts}.wav`);
         const tmpOut = join(tmpdir(), `wa_audio_out_${ts}.ogg`);
         writeFileSync(tmpIn, file.buffer);
 
-        // SIEMPRE re-encodear a Opus con parámetros compatibles con WhatsApp móvil
-        // -c:a copy no sirve: Chrome genera Opus con parámetros que WA Web acepta pero WA móvil no
-        // Mono, 48kHz, bitrate bajo, modo voz = máxima compatibilidad
-        execSync(`${ffmpegPath} -loglevel error -i "${tmpIn}" -c:a libopus -b:a 24k -ac 1 -ar 48000 -application voip "${tmpOut}" -y`, { timeout: 15000 });
+        // Paso 1: Normalizar a WAV limpio (strip metadata, solo audio, mono 48kHz)
+        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpIn}" -vn -sn -dn -map 0:a:0 -map_metadata -1 -ac 1 -ar 48000 -c:a pcm_s16le "${tmpWav}"`, { timeout: 15000 });
+
+        // Paso 2: WAV limpio → OGG/Opus con params compatibles con WhatsApp móvil
+        execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpWav}" -c:a libopus -b:a 32k -ac 1 -ar 48000 -application voip -avoid_negative_ts make_zero "${tmpOut}"`, { timeout: 15000 });
 
         const oggBuffer = readFileSync(tmpOut);
-        try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch (_) {}
-        console.log(`✅ Audio convertido: ${inExt}(${file.buffer.length}b) → ogg/opus(${oggBuffer.length}b)`);
+        try { unlinkSync(tmpIn); unlinkSync(tmpWav); unlinkSync(tmpOut); } catch (_) {}
+        console.log(`✅ Audio convertido (2-step): ${inExt}(${file.buffer.length}b) → wav → ogg/opus(${oggBuffer.length}b)`);
 
         // Guardar buffer para subir a WhatsApp Media API después
         convertedOggBuffer = oggBuffer;
