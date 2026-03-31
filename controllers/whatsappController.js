@@ -235,8 +235,19 @@ export const getLeads = asyncHandler(async (req, res) => {
       lead.ultimo_mensaje_preview = info.preview;
       // Enviar solo el último mensaje como historial recortado (para unread detection)
       lead.historial_chat = JSON.stringify([info.lastMsg]);
+      // Marcar si el último mensaje es del usuario (necesita atención)
+      lead._lastMsgIsUser = info.lastMsg?.role === 'user';
     }
     return lead;
+  });
+
+  // Ordenar: leads con último mensaje del usuario primero (necesitan respuesta),
+  // luego el resto, ambos grupos ordenados por updated_at desc
+  enriched.sort((a, b) => {
+    const aUser = a._lastMsgIsUser ? 1 : 0;
+    const bUser = b._lastMsgIsUser ? 1 : 0;
+    if (aUser !== bUser) return bUser - aUser; // user-responded first
+    return new Date(b.updated_at) - new Date(a.updated_at);
   });
 
   // Extraer total del count response
@@ -2918,6 +2929,15 @@ export const getManyChatLeadsView = asyncHandler(async (req, res) => {
       lastUserMsg: lastUserMsg ? { content: (lastUserMsg.content || '').substring(0, 120), timestamp: lastUserMsg.timestamp } : null,
       lastBotMsg: lastBotMsg ? { content: (lastBotMsg.content || '').substring(0, 120), timestamp: lastBotMsg.timestamp } : null,
     };
+  });
+
+  // Ordenar: leads con mensajes del usuario (que respondieron) primero,
+  // luego los demás, ambos grupos por updated_at desc
+  enriched.sort((a, b) => {
+    const aHasUser = a.userMsgs > 0 ? 1 : 0;
+    const bHasUser = b.userMsgs > 0 ? 1 : 0;
+    if (aHasUser !== bHasUser) return bHasUser - aHasUser;
+    return new Date(b.updated_at) - new Date(a.updated_at);
   });
 
   // Extraer count total del header
