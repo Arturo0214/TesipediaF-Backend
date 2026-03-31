@@ -18,29 +18,9 @@ export const anthropicProvider = {
     const monthlyCostFallback = parseFloat(process.env.ANTHROPIC_MONTHLY_COST);
     const usdToMxn = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
 
-    // Si no hay admin key, usar costo fijo mensual como fallback
+    // Sin admin key → no se puede obtener uso real. El costo fijo mensual lo maneja anthropicSubscriptionProvider.
     if (!apiKey) {
-      if (monthlyCostFallback && monthlyCostFallback > 0) {
-        const monthLabel = new Date(year, month).toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-        return {
-          expenses: [{
-            category: 'claude_api',
-            description: `Claude API usage (estimado) — ${monthLabel}`,
-            amount: Math.round(monthlyCostFallback * usdToMxn * 100) / 100,
-            currency: 'MXN',
-            date: new Date(year, month + 1, 0),
-            source: 'calculated',
-            isAutomatic: true,
-            metadata: {
-              originalCurrency: 'USD',
-              originalAmount: monthlyCostFallback,
-              exchangeRate: usdToMxn,
-              type: 'estimated_monthly',
-            },
-          }],
-        };
-      }
-      return { error: 'ANTHROPIC_ADMIN_API_KEY ni ANTHROPIC_MONTHLY_COST configuradas', expenses: [] };
+      return { error: 'ANTHROPIC_ADMIN_API_KEY no configurada (el costo fijo se maneja por suscripción)', expenses: [] };
     }
 
     try {
@@ -95,30 +75,8 @@ export const anthropicProvider = {
       };
     } catch (error) {
       console.error('[CostProvider:Anthropic] Error:', error.response?.data || error.message);
-      // Fallback a costo fijo si la API falla
-      if (monthlyCostFallback && monthlyCostFallback > 0) {
-        const monthLabel = new Date(year, month).toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-        return {
-          error: `API falló (${error.message}), usando fallback`,
-          expenses: [{
-            category: 'claude_api',
-            description: `Claude API usage (estimado, API error) — ${monthLabel}`,
-            amount: Math.round(monthlyCostFallback * usdToMxn * 100) / 100,
-            currency: 'MXN',
-            date: new Date(year, month + 1, 0),
-            source: 'calculated',
-            isAutomatic: true,
-            metadata: {
-              originalCurrency: 'USD',
-              originalAmount: monthlyCostFallback,
-              exchangeRate: usdToMxn,
-              type: 'estimated_monthly_fallback',
-              apiError: error.message,
-            },
-          }],
-        };
-      }
-      return { error: error.message, expenses: [] };
+      // No fallback aquí — el costo fijo lo maneja anthropicSubscriptionProvider
+      return { error: `API falló: ${error.message}`, expenses: [] };
     }
   },
 };

@@ -568,33 +568,41 @@ router.get('/usage', protect, adminOnly, asyncHandler(async (req, res) => {
   const results = {};
   const usdToMxn = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
 
-  // ── Anthropic: credit balance ──
+  // ── Anthropic: subscription + API usage ──
   const anthropicAdminKey = process.env.ANTHROPIC_ADMIN_API_KEY;
+  const subscriptionCost = parseFloat(process.env.ANTHROPIC_SUBSCRIPTION_COST) || 200;
   if (anthropicAdminKey) {
     try {
-      // Try the admin API for organization billing
       const billingRes = await axios.get('https://api.anthropic.com/v1/organizations/billing', {
         headers: { 'x-api-key': anthropicAdminKey, 'anthropic-version': '2023-06-01' },
       });
       results.anthropic = {
         status: 'ok',
-        data: billingRes.data,
+        data: {
+          ...billingRes.data,
+          subscriptionCostUSD: subscriptionCost,
+          subscriptionCostMXN: Math.round(subscriptionCost * usdToMxn * 100) / 100,
+        },
       };
     } catch (err) {
-      // Fallback: use the env variable as estimate
-      const monthlyCost = parseFloat(process.env.ANTHROPIC_MONTHLY_COST) || 50;
       results.anthropic = {
-        status: 'estimated',
+        status: 'subscription_only',
         data: {
-          estimatedMonthlyCostUSD: monthlyCost,
-          estimatedMonthlyCostMXN: Math.round(monthlyCost * usdToMxn * 100) / 100,
-          note: 'API billing endpoint unavailable, using ANTHROPIC_MONTHLY_COST estimate',
-          error: err.message,
+          subscriptionCostUSD: subscriptionCost,
+          subscriptionCostMXN: Math.round(subscriptionCost * usdToMxn * 100) / 100,
+          note: 'Suscripción fija mensual (API billing no disponible)',
         },
       };
     }
   } else {
-    results.anthropic = { status: 'not_configured', data: null };
+    results.anthropic = {
+      status: 'subscription_only',
+      data: {
+        subscriptionCostUSD: subscriptionCost,
+        subscriptionCostMXN: Math.round(subscriptionCost * usdToMxn * 100) / 100,
+        note: 'Suscripción fija mensual',
+      },
+    };
   }
 
   // ── Railway: usage via GraphQL ──
