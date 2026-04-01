@@ -26,23 +26,33 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   const endOfYear = new Date(targetYear, 11, 31, 23, 59, 59);
 
   // ── INGRESOS: pagos completados ──
+  // Usar paymentDate (cuando existe) en vez de createdAt para que pagos
+  // manuales o marcados como pagados aparezcan en el mes correcto.
+  const dateField = { $ifNull: ['$paymentDate', '$createdAt'] };
+
   const [monthlyIncome, yearlyIncome] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed', createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $match: { status: 'completed' } },
+      { $addFields: { _effectiveDate: dateField } },
+      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
     Payment.aggregate([
-      { $match: { status: 'completed', createdAt: { $gte: startOfYear, $lte: endOfYear } } },
+      { $match: { status: 'completed' } },
+      { $addFields: { _effectiveDate: dateField } },
+      { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
   ]);
 
   // Ingresos por mes (para gráfica anual)
   const incomeByMonth = await Payment.aggregate([
-    { $match: { status: 'completed', createdAt: { $gte: startOfYear, $lte: endOfYear } } },
+    { $match: { status: 'completed' } },
+    { $addFields: { _effectiveDate: dateField } },
+    { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
     {
       $group: {
-        _id: { $month: '$createdAt' },
+        _id: { $month: '$_effectiveDate' },
         total: { $sum: '$amount' },
         count: { $sum: 1 },
       }
@@ -85,20 +95,22 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
 
   // ── Ingresos por vendedor este mes ──
   const incomeByVendedor = await Payment.aggregate([
-    { $match: { status: 'completed', createdAt: { $gte: startOfMonth, $lte: endOfMonth }, vendedor: { $ne: '' } } },
+    { $match: { status: 'completed', vendedor: { $ne: '' } } },
+    { $addFields: { _effectiveDate: dateField } },
+    { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
     { $group: { _id: '$vendedor', total: { $sum: '$amount' }, count: { $sum: 1 } } },
     { $sort: { total: -1 } }
   ]);
 
   // ── Pagos individuales del mes (para contraste ingreso vs gasto) ──
-  const recentPayments = await Payment.find({
-    status: 'completed',
-    createdAt: { $gte: startOfMonth, $lte: endOfMonth },
-  })
-    .select('clientName title amount method vendedor createdAt currency status')
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .lean();
+  const recentPayments = await Payment.aggregate([
+    { $match: { status: 'completed' } },
+    { $addFields: { _effectiveDate: dateField } },
+    { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+    { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, currency: 1, status: 1 } },
+    { $sort: { _effectiveDate: -1 } },
+    { $limit: 50 }
+  ]);
 
   const monthlyIncomeTotal = monthlyIncome[0]?.total || 0;
   const yearlyIncomeTotal = yearlyIncome[0]?.total || 0;
