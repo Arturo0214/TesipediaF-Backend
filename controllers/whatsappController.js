@@ -446,10 +446,13 @@ export const sendMessage = asyncHandler(async (req, res) => {
         // Guardar buffer para subir a WhatsApp Media API después
         convertedOggBuffer = oggBuffer;
 
-        // Subir OGG/Opus como raw a Cloudinary (solo para historial/preview)
+        // Subir OGG/Opus como 'video' a Cloudinary (para historial/preview en admin)
+        // IMPORTANTE: resource_type debe ser 'video' (no 'raw') para que Cloudinary
+        // sirva el archivo con Content-Type: audio/ogg y el <audio> del navegador lo reproduzca.
         const oggBase64 = `data:audio/ogg;base64,${oggBuffer.toString('base64')}`;
-        uploadOptions.resource_type = 'raw';
-        uploadOptions.public_id = `audio_${ts}_${Math.floor(Math.random() * 1000)}.ogg`;
+        uploadOptions.resource_type = 'video';
+        uploadOptions.public_id = `audio_${ts}_${Math.floor(Math.random() * 1000)}`;
+        uploadOptions.format = 'ogg';
         fileBuffer = oggBase64;
       } catch (convErr) {
         console.error('❌ ffmpeg conversion failed:', convErr.message);
