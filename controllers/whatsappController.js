@@ -2973,6 +2973,317 @@ export const getManyChatLeadsView = asyncHandler(async (req, res) => {
   res.json({ filter, page, limit, total, stats, leads: enriched });
 });
 
+// ═══════════════════════════════════════════════════════
+// LEADS STATS — Dashboard de análisis
+// ═══════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/whatsapp/leads-stats
+ * Devuelve métricas completas para el panel de informes:
+ *  - conteos por estado, por admin, por origen
+ *  - embudo de conversión
+ *  - leads recientes (24h / 7d / 30d)
+ *  - detección de problemas (leads estancados, sin atender, etc.)
+ *  - precio promedio
+ */
+export const getLeadsStats = asyncHandler(async (req, res) => {
+  const base = `${SUPABASE_URL}/rest/v1/leads`;
+  const cntHdr = { ...supabaseHeaders(), 'Prefer': 'count=exact' };
+
+  // Helper: cuenta leads usando filtro PostgREST
+  const cnt = async (qs) => {
+    try {
+      const r = await fetch(`${base}?select=wa_id${qs}`, { headers: cntHdr });
+      const h = r.headers.get('content-range');
+      return h ? parseInt(h.match(/\/(\d+)/)?.[1] || '0') : 0;
+    } catch { return 0; }
+  };
+
+  const now = new Date();
+  const h24  = new Date(now - 24  * 60 * 60 * 1000).toISOString();
+  const h48  = new Date(now - 48  * 60 * 60 * 1000).toISOString();
+  const h72  = new Date(now - 72  * 60 * 60 * 1000).toISOString();
+  const d7   = new Date(now - 7   * 24 * 60 * 60 * 1000).toISOString();
+  const d30  = new Date(now - 30  * 24 * 60 * 60 * 1000).toISOString();
+
+  const [
+    total,
+    sBienvenida, sCalificando, sCotizando, sCotizacionEnviada, sDescartado, sModoHumano, sCotizacionLista,
+    bloqueados, sinAtender, conPrecio,
+    regular, manychat,
+    nuevos24h, nuevos7d, nuevos30d,
+    admArturo, admSandy, admHugo,
+    calificandoStale48h, cotizandoStale24h,
+    sinAtender48h, sinAtender72h,
+    cotizEnviadaSinCerrar,
+  ] = await Promise.all([
+    cnt(''),
+    cnt('&estado_sofia=eq.bienvenida'),
+    cnt('&estado_sofia=eq.calificando'),
+    cnt('&estado_sofia=eq.cotizando'),
+    cnt('&estado_sofia=eq.cotizacion_enviada'),
+    cnt('&estado_sofia=eq.descartado'),
+    cnt('&modo_humano=eq.true&estado_sofia=neq.descartado'),
+    cnt('&estado_sofia=eq.cotizacion_lista'),
+    cnt('&bloqueado=eq.true'),
+    cnt('&atendido_por=is.null&estado_sofia=neq.descartado&bloqueado=neq.true'),
+    cnt('&precio=gt.0'),
+    cnt('&origen=eq.regular'),
+    cnt('&origen=eq.manychat'),
+    cnt(`&created_at=gte.${h24}`),
+    cnt(`&created_at=gte.${d7}`),
+    cnt(`&created_at=gte.${d30}`),
+    cnt('&atendido_por=ilike.*arturo*'),
+    cnt('&atendido_por=ilike.*sandy*'),
+    cnt('&atendido_por=ilike.*hugo*'),
+    // Problemas: leads estancados
+    cnt(`&estado_sofia=eq.calificando&updated_at=lt.${h48}&modo_humano=eq.false&bloqueado=neq.true`),
+    cnt(`&estado_sofia=eq.cotizando&updated_at=lt.${h24}&modo_humano=eq.false&bloqueado=neq.true`),
+    cnt(`&atendido_por=is.null&created_at=lt.${h48}&estado_sofia=neq.descartado&bloqueado=neq.true`),
+    cnt(`&atendido_por=is.null&created_at=lt.${h72}&estado_sofia=neq.descartado&bloqueado=neq.true`),
+    cnt('&estado_sofia=eq.cotizacion_enviada&precio=gt.0'),
+  ]);
+
+  // Precio promedio (sólo leads con precio)
+  let precioPromedio = 0;
+  let precioMin = 0;
+  let precioMax = 0;
+  try {
+    const r = await fetch(`${base}?select=precio&precio=gt.0&limit=500`, { headers: supabaseHeaders() });
+    if (r.ok) {
+      const rows = await r.json();
+      if (rows.length > 0) {
+        const precios = rows.map(p => p.precio || 0).filter(p => p > 0);
+        precioPromedio = Math.round(precios.reduce((s, p) => s + p, 0) / precios.length);
+        precioMin = Math.min(...precios);
+        precioMax = Math.max(...precios);
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Tasa de conversión: leads que llegaron a cotizacion_enviada / total activos
+  const totalActivos = total - sDescartado - bloqueados;
+  const tasaConversion = totalActivos > 0 ? Math.round((sCotizacionEnviada / totalActivos) * 100) : 0;
+  const tasaCalificacion = totalActivos > 0 ? Math.round(((sCalificando + sCotizando + sCotizacionEnviada) / totalActivos) * 100) : 0;
+
+  // Lista de problemas detectados (severidad: alta/media/baja)
+  const problemas = [];
+  if (sinAtender72h > 0)
+    problemas.push({ id: 'sin_atender_72h', severidad: 'alta', titulo: 'Leads sin atender >72h', descripcion: `${sinAtender72h} lead${sinAtender72h > 1 ? 's' : ''} llevan más de 3 días sin que ningún admin los atienda.`, count: sinAtender72h });
+  if (sinAtender48h > sinAtender72h)
+    problemas.push({ id: 'sin_atender_48h', severidad: 'media', titulo: 'Leads sin atender >48h', descripcion: `${sinAtender48h - sinAtender72h} lead${(sinAtender48h - sinAtender72h) > 1 ? 's' : ''} sin atender entre 48h y 72h.`, count: sinAtender48h - sinAtender72h });
+  if (calificandoStale48h > 0)
+    problemas.push({ id: 'calificando_estancado', severidad: 'media', titulo: 'Leads estancados en calificación', descripcion: `${calificandoStale48h} lead${calificandoStale48h > 1 ? 's' : ''} llevan más de 48h en etapa "calificando" sin avanzar.`, count: calificandoStale48h });
+  if (cotizandoStale24h > 0)
+    problemas.push({ id: 'cotizando_estancado', severidad: 'alta', titulo: 'Leads estancados en cotización', descripcion: `${cotizandoStale24h} lead${cotizandoStale24h > 1 ? 's' : ''} llevan más de 24h esperando cotización sin respuesta.`, count: cotizandoStale24h });
+  if (sCotizacionLista > 0)
+    problemas.push({ id: 'cotizacion_sin_enviar', severidad: 'alta', titulo: 'Cotizaciones listas sin enviar', descripcion: `${sCotizacionLista} cotización${sCotizacionLista > 1 ? 'es están' : ' está'} lista${sCotizacionLista > 1 ? 's' : ''} pero no se ha${sCotizacionLista > 1 ? 'n' : ''} enviado al cliente.`, count: sCotizacionLista });
+  if (sinAtender > 5)
+    problemas.push({ id: 'alto_sin_atender', severidad: 'media', titulo: 'Alto volumen sin atender', descripcion: `${sinAtender} leads activos aún no tienen un admin asignado.`, count: sinAtender });
+
+  res.json({
+    general: { total, bloqueados, sinAtender, conPrecio, precioPromedio, precioMin, precioMax, regular, manychat, tasaConversion, tasaCalificacion },
+    porEstado: { bienvenida: sBienvenida, calificando: sCalificando, cotizando: sCotizando, cotizacion_enviada: sCotizacionEnviada, cotizacion_lista: sCotizacionLista, descartado: sDescartado, modo_humano: sModoHumano },
+    porAdmin: { arturo: admArturo, sandy: admSandy, hugo: admHugo, sinAtender },
+    recientes: { h24: nuevos24h, d7: nuevos7d, d30: nuevos30d },
+    problemas: { calificandoStale48h, cotizandoStale24h, sinAtender48h, sinAtender72h, cotizEnviadaSinCerrar },
+    alertas: problemas,
+    embudo: [
+      { etapa: 'Nuevos', value: sBienvenida, color: '#6b7280' },
+      { etapa: 'Calificando', value: sCalificando, color: '#f59e0b' },
+      { etapa: 'Cotizando', value: sCotizando, color: '#3b82f6' },
+      { etapa: 'Cotización enviada', value: sCotizacionEnviada, color: '#10b981' },
+    ],
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// CALIFICACIÓN FOLLOW-UP — Seguimiento a leads en calificando/cotizando
+// ═══════════════════════════════════════════════════════
+
+// Construye mensaje personalizado según el estado y los campos faltantes
+function buildCalificacionFollowUpMessage(lead) {
+  const nombre = (lead.nombre || '').split(' ')[0];
+  const sal = nombre ? `Hola ${nombre}` : 'Hola';
+
+  if (lead.estado_sofia === 'calificando') {
+    if (!lead.tipo_servicio)
+      return `${sal} 👋 Soy Sofía de Tesipedia. ¿En qué te puedo ayudar hoy? Cuéntame sobre tu proyecto académico.`;
+    if (!lead.nivel)
+      return `${sal}, ¿me puedes decir qué nivel académico tiene tu trabajo? (licenciatura, maestría, doctorado…)`;
+    if (!lead.carrera)
+      return `${sal}, ¿cuál es tu carrera o área de estudio?`;
+    if (!lead.tema)
+      return `${sal}, ¿ya tienes definido el tema de tu proyecto? Si no, podemos ayudarte a elegirlo 😊`;
+    if (!lead.paginas)
+      return `${sal}, ¿aproximadamente cuántas páginas necesitas? Con eso te puedo dar un precio exacto.`;
+    if (!lead.fecha_entrega)
+      return `${sal}, ¿para cuándo necesitas tener listo tu proyecto? Así te digo si tenemos disponibilidad.`;
+    return `${sal}, ya casi tenemos toda la información para tu cotización. ¿Hay algo más que quieras agregar o alguna duda?`;
+  }
+
+  if (lead.estado_sofia === 'cotizando') {
+    const serv = lead.tipo_servicio === 'servicio_2' ? 'correcciones' : lead.tipo_servicio === 'servicio_3' ? 'asesoría' : 'redacción completa';
+    const proy = lead.tipo_proyecto === 'proyecto_1' ? 'tesis' : lead.tipo_proyecto === 'proyecto_2' ? 'tesina' : 'proyecto';
+    const temaStr = lead.tema ? ` sobre "${lead.tema}"` : '';
+    return `${sal} 📋 Estoy preparando tu cotización para la ${serv} de tu ${proy}${temaStr}. ¿Tienes alguna pregunta o quieres ajustar algo antes de que te la envíe?`;
+  }
+
+  return `${sal}, ¿cómo va tu proyecto académico? Estoy aquí para ayudarte 😊`;
+}
+
+const calificacionFollowUp = {
+  active: false,
+  intervalMinutes: 480,   // cada 8 horas
+  staleMinutes: 120,      // leads sin actividad por más de 2 horas
+  maxPerRun: 30,
+  lastRun: null,
+  lastResult: null,
+  _timer: null,
+};
+
+async function runCalificacionFollowUp() {
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const since = new Date(Date.now() - calificacionFollowUp.staleMinutes * 60 * 1000).toISOString();
+
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${calificacionFollowUp.maxPerRun}`;
+    const resp = await fetch(url, { headers: supabaseHeaders() });
+    if (!resp.ok) {
+      calificacionFollowUp.lastResult = { error: 'Supabase error ' + resp.status, time: new Date().toISOString() };
+      return;
+    }
+    const allLeads = await resp.json();
+    const leads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
+
+    if (leads.length === 0) {
+      calificacionFollowUp.lastRun = new Date().toISOString();
+      calificacionFollowUp.lastResult = { sent: 0, failed: 0, total: 0, skipped: 0, time: new Date().toISOString() };
+      return;
+    }
+
+    const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+    let sent = 0, failed = 0, skipped = 0;
+
+    for (const lead of leads) {
+      // Verificar historial: no enviar si ya hay 2+ follow-ups sin respuesta
+      let historial = [];
+      try {
+        const histResp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}&select=historial_chat&limit=1`, { headers: supabaseHeaders() });
+        if (histResp.ok) {
+          const histData = await histResp.json();
+          const raw = histData[0]?.historial_chat;
+          if (Array.isArray(raw)) historial = raw;
+          else if (typeof raw === 'string' && raw.trim()) {
+            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          }
+        }
+      } catch { /* continuar sin historial */ }
+
+      let consecutiveFollowUps = 0;
+      for (let i = historial.length - 1; i >= 0; i--) {
+        const m = historial[i];
+        if (m.role === 'user') break;
+        if (m.isCalificacionFollowUp || m.isReengagement) consecutiveFollowUps++;
+      }
+
+      if (consecutiveFollowUps >= 2) {
+        skipped++;
+        continue;
+      }
+
+      const msg = buildCalificacionFollowUpMessage(lead);
+      const cleanNumber = lead.wa_id.replace(/\D/g, '');
+
+      try {
+        const waResp = await fetch(waUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+        });
+        const waData = await waResp.json();
+
+        if (waData.messages) {
+          sent++;
+          historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isCalificacionFollowUp: true });
+          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
+          });
+        } else {
+          failed++;
+        }
+      } catch { failed++; }
+    }
+
+    calificacionFollowUp.lastRun = new Date().toISOString();
+    calificacionFollowUp.lastResult = { sent, failed, skipped, total: leads.length, time: new Date().toISOString() };
+    console.log(`📋 Calificación Follow-Up: ${sent} enviados, ${failed} fallidos, ${skipped} omitidos de ${leads.length}`);
+  } catch (e) {
+    console.error('Calificación Follow-Up error:', e.message);
+    calificacionFollowUp.lastResult = { error: e.message, time: new Date().toISOString() };
+  }
+}
+
+function startCalificacionFollowUp() {
+  if (calificacionFollowUp._timer) clearInterval(calificacionFollowUp._timer);
+  calificacionFollowUp.active = true;
+  calificacionFollowUp._timer = setInterval(runCalificacionFollowUp, calificacionFollowUp.intervalMinutes * 60 * 1000);
+  console.log(`📋 Calificación Follow-Up ACTIVADO — cada ${calificacionFollowUp.intervalMinutes} min`);
+}
+
+function stopCalificacionFollowUp() {
+  if (calificacionFollowUp._timer) clearInterval(calificacionFollowUp._timer);
+  calificacionFollowUp._timer = null;
+  calificacionFollowUp.active = false;
+  console.log('📋 Calificación Follow-Up DESACTIVADO');
+}
+
+export const getCalificacionFollowUpStatus = asyncHandler(async (req, res) => {
+  res.json({
+    active: calificacionFollowUp.active,
+    intervalMinutes: calificacionFollowUp.intervalMinutes,
+    staleMinutes: calificacionFollowUp.staleMinutes,
+    maxPerRun: calificacionFollowUp.maxPerRun,
+    lastRun: calificacionFollowUp.lastRun,
+    lastResult: calificacionFollowUp.lastResult,
+  });
+});
+
+export const configCalificacionFollowUp = asyncHandler(async (req, res) => {
+  const { active, intervalMinutes, staleMinutes, maxPerRun } = req.body;
+  if (intervalMinutes !== undefined) calificacionFollowUp.intervalMinutes = Math.max(30, Number(intervalMinutes) || 480);
+  if (staleMinutes !== undefined) calificacionFollowUp.staleMinutes = Math.max(30, Number(staleMinutes) || 120);
+  if (maxPerRun !== undefined) calificacionFollowUp.maxPerRun = Math.max(1, Math.min(100, Number(maxPerRun) || 30));
+
+  if (active === true) startCalificacionFollowUp();
+  else if (active === false) stopCalificacionFollowUp();
+  else if (calificacionFollowUp.active) startCalificacionFollowUp();
+
+  res.json({
+    active: calificacionFollowUp.active,
+    intervalMinutes: calificacionFollowUp.intervalMinutes,
+    staleMinutes: calificacionFollowUp.staleMinutes,
+    maxPerRun: calificacionFollowUp.maxPerRun,
+  });
+});
+
+export const runCalificacionFollowUpManual = asyncHandler(async (req, res) => {
+  const { dryRun, maxPerRun: mr } = req.body || {};
+  if (mr) calificacionFollowUp.maxPerRun = Math.max(1, Math.min(100, Number(mr) || 30));
+  console.log(`📋 Calificación Follow-Up MANUAL por ${req.user?.nombre || 'admin'} — dryRun: ${!!dryRun}`);
+  if (dryRun) {
+    const since = new Date(Date.now() - calificacionFollowUp.staleMinutes * 60 * 1000).toISOString();
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at&order=updated_at.asc&limit=${calificacionFollowUp.maxPerRun}`;
+    const resp = await fetch(url, { headers: supabaseHeaders() });
+    const leads = resp.ok ? await resp.json() : [];
+    return res.json({ dryRun: true, would_send: leads.length, leads: leads.map(l => ({ wa_id: l.wa_id, nombre: l.nombre, estado: l.estado_sofia, updated_at: l.updated_at })) });
+  }
+  await runCalificacionFollowUp();
+  res.json({ success: true, result: calificacionFollowUp.lastResult });
+});
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
 

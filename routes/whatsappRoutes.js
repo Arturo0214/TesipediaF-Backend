@@ -5,6 +5,7 @@ import {
   getLeads,
   getLeadByWaId,
   getLeadsStatus,
+  getLeadsStats,
   getWindowStatus,
   toggleModoHumano,
   updateLeadEstado,
@@ -27,6 +28,9 @@ import {
   getManyChatStatus,
   previewManyChatMessages,
   getManyChatLeadsView,
+  getCalificacionFollowUpStatus,
+  configCalificacionFollowUp,
+  runCalificacionFollowUpManual,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -85,5 +89,13 @@ router.post('/manychat/send', sendManyChatReactivation);
 router.get('/manychat/status', getManyChatStatus);
 router.get('/manychat/preview', previewManyChatMessages);
 router.get('/manychat/leads', getManyChatLeadsView);
+
+// Leads Stats — métricas completas para panel de informes
+router.get('/leads-stats', getLeadsStats);
+
+// Calificación Follow-Up — seguimiento a leads en calificando/cotizando
+router.get('/calificacion-followup/status', getCalificacionFollowUpStatus);
+router.post('/calificacion-followup/config', configCalificacionFollowUp);
+router.post('/calificacion-followup', runCalificacionFollowUpManual);
 
 export default router;
