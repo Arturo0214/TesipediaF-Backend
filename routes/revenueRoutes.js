@@ -1199,4 +1199,198 @@ Por favor responde en JSON con esta estructura EXACTA:
   }
 }));
 
+// ═══════════════════════════════════════════════════
+// GET /revenue/campaigns/meta/pixel
+// Verifica estado del pixel de Facebook: si existe, si está disparando,
+// últimos eventos, y opcionalmente checa si la landing page tiene el pixel
+// ═══════════════════════════════════════════════════
+router.get('/campaigns/meta/pixel', protect, adminOnly, asyncHandler(async (req, res) => {
+  const accessToken = process.env.META_ACCESS_TOKEN;
+  const adAccountId = process.env.META_AD_ACCOUNT_ID;
+
+  if (!accessToken || !adAccountId) {
+    return res.status(400).json({ error: 'META_ACCESS_TOKEN o META_AD_ACCOUNT_ID no configurados' });
+  }
+
+  try {
+    // 1. Get all pixels for the ad account
+    const pixelsRes = await axios.get(
+      `https://graph.facebook.com/v21.0/act_${adAccountId}/adspixels`,
+      {
+        params: {
+          access_token: accessToken,
+          fields: 'id,name,last_fired_time,is_unavailable,creation_time,owner_business',
+        },
+      }
+    );
+
+    const pixels = pixelsRes.data?.data || [];
+
+    if (pixels.length === 0) {
+      return res.json({
+        status: 'no_pixel',
+        message: 'No se encontró ningún pixel de Facebook en esta cuenta de anuncios.',
+        pixels: [],
+        recommendations: [
+          'Crear un pixel de Facebook en el Business Manager',
+          'Instalar el pixel en tu landing page (tesipedia.com)',
+          'Configurar eventos de conversión (Lead, Contact, etc.)',
+        ],
+      });
+    }
+
+    // 2. For each pixel, get recent stats
+    const pixelDetails = await Promise.all(
+      pixels.map(async (pixel) => {
+        let stats = null;
+        let recentEvents = [];
+
+        try {
+          // Get pixel stats (last 7 days)
+          const statsRes = await axios.get(
+            `https://graph.facebook.com/v21.0/${pixel.id}/stats`,
+            {
+              params: {
+                access_token: accessToken,
+                start_time: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                end_time: new Date().toISOString().split('T')[0],
+                aggregation: 'event',
+              },
+            }
+          );
+          stats = statsRes.data?.data || [];
+        } catch (e) {
+          // Stats endpoint might not be available for all pixels
+          console.log(`[Pixel] Could not fetch stats for pixel ${pixel.id}:`, e.response?.data?.error?.message || e.message);
+        }
+
+        // Check if pixel has fired recently
+        const lastFired = pixel.last_fired_time;
+        const lastFiredDate = lastFired ? new Date(lastFired) : null;
+        const hoursSinceLastFire = lastFiredDate ? (Date.now() - lastFiredDate.getTime()) / (1000 * 60 * 60) : null;
+
+        let health = 'unknown';
+        if (pixel.is_unavailable) {
+          health = 'inactive';
+        } else if (hoursSinceLastFire !== null && hoursSinceLastFire < 24) {
+          health = 'healthy';
+        } else if (hoursSinceLastFire !== null && hoursSinceLastFire < 72) {
+          health = 'warning';
+        } else if (hoursSinceLastFire !== null) {
+          health = 'critical';
+        } else {
+          health = 'no_data';
+        }
+
+        return {
+          id: pixel.id,
+          name: pixel.name,
+          createdAt: pixel.creation_time,
+          lastFired: lastFired,
+          hoursSinceLastFire: hoursSinceLastFire ? Math.round(hoursSinceLastFire) : null,
+          isUnavailable: pixel.is_unavailable || false,
+          health,
+          eventStats: stats,
+        };
+      })
+    );
+
+    // 3. Generate recommendations based on pixel health
+    const recommendations = [];
+    const primaryPixel = pixelDetails[0];
+
+    if (primaryPixel.health === 'inactive' || primaryPixel.health === 'no_data') {
+      recommendations.push({
+        priority: 'alta',
+        action: 'El pixel no está disparando. Verificar que el código del pixel esté instalado en la landing page.',
+        detail: 'Ir a Meta Events Manager → Diagnostics para ver errores específicos.',
+      });
+      recommendations.push({
+        priority: 'alta',
+        action: 'Verificar que el dominio de la landing page esté verificado en Meta Business.',
+        detail: 'Business Settings → Brand Safety → Domains.',
+      });
+    } else if (primaryPixel.health === 'critical') {
+      recommendations.push({
+        priority: 'alta',
+        action: `El pixel no ha disparado en ${primaryPixel.hoursSinceLastFire} horas. Posible problema técnico.`,
+        detail: 'Verificar que la landing page esté activa y que el código del pixel no haya sido eliminado.',
+      });
+    } else if (primaryPixel.health === 'warning') {
+      recommendations.push({
+        priority: 'media',
+        action: `El pixel disparó hace ${primaryPixel.hoursSinceLastFire} horas. Monitorear.`,
+        detail: 'Si las campañas están activas, el pixel debería disparar con más frecuencia.',
+      });
+    }
+
+    // Check for conversion events
+    if (primaryPixel.eventStats && primaryPixel.eventStats.length > 0) {
+      const hasLeadEvent = primaryPixel.eventStats.some(s => s.data?.some(d => d.event === 'Lead' || d.event === 'CompleteRegistration' || d.event === 'Contact'));
+      if (!hasLeadEvent) {
+        recommendations.push({
+          priority: 'alta',
+          action: 'No se detectan eventos de conversión (Lead/Contact). Configurar eventos en la landing page.',
+          detail: 'Sin eventos de conversión, Meta no puede optimizar las campañas para leads. Agregar evento Lead en el formulario de contacto.',
+        });
+      }
+    }
+
+    // Check if landing page has pixel (optional — try to fetch)
+    let landingPageCheck = null;
+    const landingUrl = req.query.landingUrl || 'https://tesipedia.com';
+    try {
+      const pageRes = await axios.get(landingUrl, { timeout: 8000, maxRedirects: 3 });
+      const html = pageRes.data;
+      const hasPixelScript = html.includes('fbq(') || html.includes('facebook.com/tr');
+      const hasPixelId = primaryPixel.id ? html.includes(primaryPixel.id) : false;
+
+      landingPageCheck = {
+        url: landingUrl,
+        reachable: true,
+        hasPixelScript,
+        hasCorrectPixelId: hasPixelId,
+      };
+
+      if (!hasPixelScript) {
+        recommendations.push({
+          priority: 'alta',
+          action: `No se encontró el código del pixel de Facebook en ${landingUrl}`,
+          detail: 'Instalar el snippet del pixel en el <head> de la landing page.',
+        });
+      } else if (!hasPixelId) {
+        recommendations.push({
+          priority: 'alta',
+          action: `Se encontró un pixel de Facebook en la landing page, pero NO coincide con el pixel ${primaryPixel.id} de esta cuenta.`,
+          detail: 'Verificar que el ID del pixel en el código HTML sea el correcto.',
+        });
+      }
+    } catch (e) {
+      landingPageCheck = {
+        url: landingUrl,
+        reachable: false,
+        error: e.message,
+      };
+      recommendations.push({
+        priority: 'media',
+        action: `No se pudo verificar la landing page: ${landingUrl}`,
+        detail: e.message,
+      });
+    }
+
+    res.json({
+      status: 'ok',
+      pixels: pixelDetails,
+      landingPageCheck,
+      recommendations,
+      eventsManagerUrl: `https://business.facebook.com/events_manager2/list/pixel/${primaryPixel.id}/overview`,
+    });
+  } catch (error) {
+    const errData = error.response?.data?.error;
+    const msg = errData?.message || error.message;
+    console.error('[PixelHealth] Error:', msg);
+    res.status(500).json({ error: msg });
+  }
+}));
+
 export default router;
