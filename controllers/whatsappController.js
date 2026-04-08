@@ -152,9 +152,9 @@ const supabaseHeaders = () => ({
  */
 export const getLeads = asyncHandler(async (req, res) => {
   // ESTRATEGIA HÍBRIDA para reducir egress sin perder el preview del último mensaje:
-  // 1. Traer metadata de los leads (sin historial_chat) — ~50-100 KB
-  // 2. Traer historial_chat SOLO de los 40 leads más recientes — para preview
-  // Resultado: ~80-90% menos egress vs traer todo, con previews funcionales.
+  // 1. Traer metadata de los leads (sin historial_chat)
+  // 2. Traer historial_chat de TODOS los leads del lote — para preview + _lastMsgIsUser
+  // Nota: se necesita historial de todos para que el frontend pueda ordenar correctamente
 
   const metaColumns = [
     'wa_id', 'nombre', 'etapa', 'precio', 'datos_cotizacion',
@@ -165,6 +165,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
+    'ultimo_mensaje_preview',
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
@@ -189,9 +190,8 @@ export const getLeads = asyncHandler(async (req, res) => {
 
   // Query 1: metadata de leads filtrados (paginado)
   const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${origenFilter}&order=updated_at.desc${paginationParams}`;
-  // Query 2: historial solo de los primeros 40 del lote (para preview)
-  const previewLimit = Math.min(limit, 40);
-  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${origenFilter}&order=updated_at.desc&limit=${previewLimit}&offset=${offset}`;
+  // Query 2: historial de TODOS los leads del lote (para preview + _lastMsgIsUser correcto)
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${origenFilter}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
   // Query 3: conteo total (solo header, sin datos)
   const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${origenFilter}`;
 
