@@ -23,16 +23,29 @@ export function startRevenueSyncCron() {
       let updated = 0;
       let skipped = 0;
 
-      for (const expense of providerExpenses) {
-        const startOfMonth = new Date(year, month, 1);
-        const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
+      const startOfMonth = new Date(year, month, 1);
+      const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
 
-        const existing = await Expense.findOne({
+      for (const expense of providerExpenses) {
+        // ── Dedup mejorado: buscar por descripción prefix, luego por categoría ──
+        const descPrefix = expense.description.split('—')[0].trim();
+
+        let existing = await Expense.findOne({
           category: expense.category,
           source: { $in: ['api', 'calculated'] },
           date: { $gte: startOfMonth, $lte: endOfMonth },
-          description: { $regex: expense.description.split('—')[0].trim(), $options: 'i' },
+          description: { $regex: descPrefix, $options: 'i' },
         });
+
+        // Fallback: cualquier gasto automático de esa categoría en el mes
+        if (!existing) {
+          existing = await Expense.findOne({
+            category: expense.category,
+            source: { $in: ['api', 'calculated'] },
+            isAutomatic: true,
+            date: { $gte: startOfMonth, $lte: endOfMonth },
+          });
+        }
 
         if (existing) {
           if (Math.abs(existing.amount - expense.amount) > 0.01) {

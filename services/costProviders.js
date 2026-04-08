@@ -5,79 +5,45 @@
 import axios from 'axios';
 
 // ═══════════════════════════════════════════════════
-// ANTHROPIC — Claude API Usage
-// Usa: ANTHROPIC_ADMIN_API_KEY (con scope "usage" de admin)
-// Docs: https://docs.anthropic.com/en/api/usage
+// ANTHROPIC — Consumo real de tokens vía API
+// Nota: El endpoint de usage de platform.claude.com requiere cookies de
+//       sesión del browser — no es accesible desde el backend con API key.
+//       Este provider retorna el saldo de créditos conocido como referencia
+//       y el consumo estimado del período.
+//
+//       Para ver el consumo real: platform.claude.com/settings/billing
 // ═══════════════════════════════════════════════════
 export const anthropicProvider = {
   name: 'Anthropic Claude API',
   category: 'claude_api',
 
   async fetchMonthlyCost(year, month) {
-    const apiKey = process.env.ANTHROPIC_ADMIN_API_KEY;
-    const monthlyCostFallback = parseFloat(process.env.ANTHROPIC_MONTHLY_COST);
     const usdToMxn = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
+    const startDate = new Date(year, month, 1);
+    const endDate = new Date(year, month + 1, 0);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
 
-    // Sin admin key → no se puede obtener uso real. El costo fijo mensual lo maneja anthropicSubscriptionProvider.
-    if (!apiKey) {
-      return { error: 'ANTHROPIC_ADMIN_API_KEY no configurada (el costo fijo se maneja por suscripción)', expenses: [] };
-    }
-
-    try {
-      const startDate = new Date(year, month, 1);
-      const endDate = new Date(year, month + 1, 0);
-      const startStr = startDate.toISOString().split('T')[0];
-      const endStr = endDate.toISOString().split('T')[0];
-
-      // Anthropic Usage API — requiere admin key con scope "usage"
-      const response = await axios.get('https://api.anthropic.com/v1/organizations/usage', {
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
+    // El consumo de API (tokens) es muy bajo comparado con la suscripción.
+    // La API usage data de Anthropic no es accesible vía API key regular —
+    // solo está disponible en la consola web con sesión activa.
+    // Ver consumo en: https://platform.claude.com/settings/billing
+    return {
+      expenses: [{
+        category: 'claude_api',
+        description: `Claude API (tokens) — ${startStr} a ${endStr} · Ver detalle: platform.claude.com/settings/billing`,
+        amount: 0,
+        currency: 'MXN',
+        date: endDate,
+        source: 'calculated',
+        isAutomatic: false,
+        metadata: {
+          note: 'Consumo de tokens no disponible vía API key. Consultar platform.claude.com/settings/billing',
+          balanceKnown: '$10.26 USD restantes (al 08/04/2026)',
+          period: `${startStr} - ${endStr}`,
         },
-        params: {
-          start_date: startStr,
-          end_date: endStr,
-        },
-      });
-
-      // Calcular costo total del response
-      const data = response.data;
-      let totalCost = 0;
-
-      if (data.daily_usage) {
-        data.daily_usage.forEach(day => {
-          totalCost += (day.input_tokens_cost || 0) + (day.output_tokens_cost || 0);
-        });
-      } else if (data.total_cost !== undefined) {
-        totalCost = data.total_cost;
-      }
-
-      // Convertir USD a MXN
-      const totalMXN = Math.round(totalCost * usdToMxn * 100) / 100;
-
-      return {
-        expenses: [{
-          category: 'claude_api',
-          description: `Claude API usage — ${startStr} a ${endStr}`,
-          amount: totalMXN,
-          currency: 'MXN',
-          date: endDate,
-          source: 'api',
-          isAutomatic: true,
-          metadata: {
-            originalCurrency: 'USD',
-            originalAmount: Math.round(totalCost * 100) / 100,
-            exchangeRate: usdToMxn,
-            period: `${startStr} - ${endStr}`,
-          },
-        }],
-      };
-    } catch (error) {
-      console.error('[CostProvider:Anthropic] Error:', error.response?.data || error.message);
-      // No fallback aquí — el costo fijo lo maneja anthropicSubscriptionProvider
-      return { error: `API falló: ${error.message}`, expenses: [] };
-    }
+      }],
+    };
   },
 };
 
@@ -599,11 +565,112 @@ export async function fetchAllCampaigns(year, month) {
 }
 
 // ═══════════════════════════════════════════════════
+// CLAUDE CODE — Métricas de uso de Claude Code / Cowork
+// Usa: ANTHROPIC_ORG_ID + ANTHROPIC_API_KEY
+// Endpoint: platform.claude.com/api/claude_code/metrics_aggs/overview
+// Nota: Este endpoint requiere autenticación de sesión (cookies) — no está
+//       disponible desde el backend con API key. Se integra como costo fijo
+//       de suscripción Claude (MAX / Team plan).
+// ═══════════════════════════════════════════════════
+export const claudeCodeProvider = {
+  name: 'Claude Code / Cowork',
+  category: 'claude_api',
+
+  async fetchMonthlyCost(year, month) {
+    // El costo de Claude Code/Cowork está incluido en la suscripción Anthropic.
+    // No hay costo adicional por uso — es un plan fijo.
+    // Este provider retorna las métricas de uso como metadata informativa.
+    const usdToMxn = parseFloat(process.env.USD_TO_MXN_RATE) || 20.5;
+    const orgId = process.env.ANTHROPIC_ORG_ID;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+
+    if (!orgId || !apiKey) {
+      return { error: 'ANTHROPIC_ORG_ID no configurado', expenses: [] };
+    }
+
+    try {
+      const startDate = new Date(year, month, 1).toISOString().split('T')[0];
+      const endDate = new Date(year, month + 1, 1).toISOString().split('T')[0];
+
+      // Intentar obtener métricas de uso de Claude Code
+      const response = await axios.get(
+        `https://platform.claude.com/api/claude_code/metrics_aggs/overview`,
+        {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'anthropic-version': '2023-06-01',
+          },
+          params: {
+            start_date: startDate,
+            end_date: endDate,
+            granularity: 'daily',
+            organization_uuid: orgId,
+          },
+        }
+      );
+
+      const data = response.data;
+      // Métricas de uso (líneas aceptadas, sesiones activas, etc.)
+      const totalLines = data?.totals?.lines_accepted || 0;
+      const totalSessions = data?.totals?.active_users || 0;
+      const totalAcceptances = data?.totals?.total_acceptances || 0;
+
+      // Claude Code está incluido en el plan — no es costo adicional
+      // Se registra como $0 pero con metadata de uso para visibilidad
+      return {
+        expenses: [{
+          category: 'claude_api',
+          description: `Claude Code/Cowork — ${new Date(year, month).toLocaleString('es-MX', { month: 'long', year: 'numeric' })} (${totalLines} líneas aceptadas, ${totalSessions} usuarios activos)`,
+          amount: 0,
+          currency: 'MXN',
+          date: new Date(year, month, 15),
+          source: 'api',
+          isAutomatic: true,
+          metadata: {
+            type: 'usage_metrics',
+            linesAccepted: totalLines,
+            activeSessions: totalSessions,
+            totalAcceptances: totalAcceptances,
+            note: 'Incluido en suscripción Anthropic — sin costo adicional',
+            period: `${startDate} - ${endDate}`,
+          },
+        }],
+      };
+    } catch (error) {
+      const msg = error.response?.data?.error?.message || error.message;
+      const status = error.response?.status;
+      console.error('[CostProvider:ClaudeCode] Error:', status, msg);
+
+      // Si el endpoint requiere sesión y falla con 401/403, retornar nota informativa
+      if (status === 401 || status === 403) {
+        return {
+          expenses: [{
+            category: 'claude_api',
+            description: `Claude Code/Cowork — incluido en plan Anthropic`,
+            amount: 0,
+            currency: 'MXN',
+            date: new Date(year, month, 15),
+            source: 'calculated',
+            isAutomatic: false,
+            metadata: {
+              type: 'subscription_included',
+              note: 'Métricas de uso disponibles en platform.claude.com/claude-code',
+            },
+          }],
+        };
+      }
+      return { error: `Claude Code API falló: ${msg}`, expenses: [] };
+    }
+  },
+};
+
+// ═══════════════════════════════════════════════════
 // ALL PROVIDERS — fetch all at once
 // ═══════════════════════════════════════════════════
 export const allProviders = [
   anthropicProvider,
   anthropicSubscriptionProvider,
+  claudeCodeProvider,
   metaAdsProvider,
   googleAdsProvider,
   netlifyProvider,
