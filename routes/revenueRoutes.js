@@ -110,17 +110,25 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
     { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
     { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, currency: 1, status: 1 } },
     { $sort: { _effectiveDate: -1 } },
-    { $limit: 50 }
   ]);
 
   const monthlyIncomeTotal = monthlyIncome[0]?.total || 0;
   const yearlyIncomeTotal = yearlyIncome[0]?.total || 0;
+
+  // Total histórico (all-time)
+  const [allTimeIncome] = await Promise.all([
+    Payment.aggregate([
+      { $match: { status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]),
+  ]);
 
   res.json({
     period: { year: targetYear, month: targetMonth },
     income: {
       monthly: { total: monthlyIncomeTotal, count: monthlyIncome[0]?.count || 0 },
       yearly: { total: yearlyIncomeTotal, count: yearlyIncome[0]?.count || 0 },
+      allTime: { total: allTimeIncome[0]?.total || 0, count: allTimeIncome[0]?.count || 0 },
       byMonth: incomeByMonth,
       byVendedor: incomeByVendedor,
     },

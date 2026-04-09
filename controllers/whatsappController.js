@@ -169,31 +169,54 @@ export const getLeads = asyncHandler(async (req, res) => {
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
-  // 'regular' (default): solo leads NO-manychat + leads manychat que YA respondieron
-  // 'manychat': solo leads con origen=manychat (todos, para ver en pestaña ManyChat)
-  // 'all': todos los leads sin filtro de origen
   const origenParam = (req.query.origen || 'regular').toLowerCase();
   let origenFilter = '';
   if (origenParam === 'regular') {
-    // Excluir leads manychat que aún no interactuaron (estado_sofia = bienvenida)
     origenFilter = '&or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)';
   } else if (origenParam === 'manychat') {
-    // Solo leads de ManyChat
     origenFilter = '&origen=eq.manychat';
   }
-  // 'all' → sin filtro adicional
+
+  // ── Filtros server-side (query params) ──
+  let extraFilters = '';
+  const { estado, atendido, fecha, search } = req.query;
+  if (estado && estado !== 'all') {
+    if (estado === 'sin_estado') {
+      extraFilters += '&estado_sofia=is.null';
+    } else {
+      extraFilters += `&estado_sofia=eq.${encodeURIComponent(estado)}`;
+    }
+  }
+  if (atendido && atendido !== 'all') {
+    if (atendido === 'sin_atender') {
+      extraFilters += '&or=(atendido_por.is.null,atendido_por.eq.)';
+    } else if (atendido === 'atendido') {
+      extraFilters += '&atendido_por=neq.&atendido_por=not.is.null';
+    } else {
+      // admin específico (arturo, sandy, hugo)
+      extraFilters += `&atendido_por=ilike.*${encodeURIComponent(atendido)}*`;
+    }
+  }
+  if (fecha) {
+    extraFilters += `&created_at=gte.${fecha}T00:00:00&created_at=lt.${fecha}T23:59:59`;
+  }
+  if (search && search.trim()) {
+    const q = search.trim();
+    extraFilters += `&or=(nombre.ilike.*${encodeURIComponent(q)}*,wa_id.ilike.*${encodeURIComponent(q)}*,carrera.ilike.*${encodeURIComponent(q)}*,tema.ilike.*${encodeURIComponent(q)}*,atendido_por.ilike.*${encodeURIComponent(q)}*)`;
+  }
 
   // ── Paginación (query params ?limit=100&offset=0) ──
-  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
   const offset = parseInt(req.query.offset) || 0;
   const paginationParams = `&limit=${limit}&offset=${offset}`;
 
   // Query 1: metadata de leads filtrados (paginado)
-  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${origenFilter}&order=updated_at.desc${paginationParams}`;
-  // Query 2: historial de TODOS los leads del lote (para preview + _lastMsgIsUser correcto)
-  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${origenFilter}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
+  const allFilters = `${origenFilter}${extraFilters}`;
+  const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${allFilters}&order=updated_at.desc${paginationParams}`;
+  // Query 2: historial de los leads del lote (para preview + _lastMsgIsUser correcto)
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${allFilters}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
   // Query 3: conteo total (solo header, sin datos)
-  const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${origenFilter}`;
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${allFilters}`;
 
   const [metaResp, previewResp, countResp] = await Promise.all([
     fetch(metaUrl, { headers: supabaseHeaders() }),
@@ -2990,10 +3013,19 @@ export const getLeadsStats = asyncHandler(async (req, res) => {
   const base = `${SUPABASE_URL}/rest/v1/leads`;
   const cntHdr = { ...supabaseHeaders(), 'Prefer': 'count=exact' };
 
+  // Filtro por origen/campaña (query param ?origen=all|regular|manychat)
+  const origenParam = (req.query.origen || 'all').toLowerCase();
+  let origenQs = '';
+  if (origenParam === 'regular') {
+    origenQs = '&or=(origen.neq.manychat,origen.is.null)';
+  } else if (origenParam === 'manychat') {
+    origenQs = '&origen=eq.manychat';
+  }
+
   // Helper: cuenta leads usando filtro PostgREST
   const cnt = async (qs) => {
     try {
-      const r = await fetch(`${base}?select=wa_id${qs}`, { headers: cntHdr });
+      const r = await fetch(`${base}?select=wa_id${origenQs}${qs}`, { headers: cntHdr });
       const h = r.headers.get('content-range');
       return h ? parseInt(h.match(/\/(\d+)/)?.[1] || '0') : 0;
     } catch { return 0; }
@@ -3008,7 +3040,9 @@ export const getLeadsStats = asyncHandler(async (req, res) => {
 
   const [
     total,
-    sBienvenida, sCalificando, sCotizando, sCotizacionEnviada, sDescartado, sModoHumano, sCotizacionLista,
+    sBienvenida, sCalificando, sCotizando, sCotizacionIniciada, sCotizacionLista, sCotizacionEnviada,
+    sCotizacionConfirmada, sEsperandoAprobacion, sClienteAcepto, sPagado,
+    sDescartado, sNoInteresado, sModoHumano,
     bloqueados, sinAtender, conPrecio,
     regular, manychat,
     nuevos24h, nuevos7d, nuevos30d,
@@ -3021,14 +3055,20 @@ export const getLeadsStats = asyncHandler(async (req, res) => {
     cnt('&estado_sofia=eq.bienvenida'),
     cnt('&estado_sofia=eq.calificando'),
     cnt('&estado_sofia=eq.cotizando'),
-    cnt('&estado_sofia=eq.cotizacion_enviada'),
-    cnt('&estado_sofia=eq.descartado'),
-    cnt('&modo_humano=eq.true&estado_sofia=neq.descartado'),
+    cnt('&estado_sofia=eq.cotizacion_iniciada'),
     cnt('&estado_sofia=eq.cotizacion_lista'),
+    cnt('&estado_sofia=eq.cotizacion_enviada'),
+    cnt('&estado_sofia=eq.cotizacion_confirmada'),
+    cnt('&estado_sofia=eq.esperando_aprobacion'),
+    cnt('&estado_sofia=eq.cliente_acepto'),
+    cnt('&estado_sofia=eq.pagado'),
+    cnt('&estado_sofia=eq.descartado'),
+    cnt('&estado_sofia=eq.no_interesado'),
+    cnt('&modo_humano=eq.true&estado_sofia=neq.descartado'),
     cnt('&bloqueado=eq.true'),
     cnt('&atendido_por=is.null&estado_sofia=neq.descartado&bloqueado=neq.true'),
     cnt('&precio=gt.0'),
-    cnt('&origen=eq.regular'),
+    cnt('&or=(origen.neq.manychat,origen.is.null)'),
     cnt('&origen=eq.manychat'),
     cnt(`&created_at=gte.${h24}`),
     cnt(`&created_at=gte.${d7}`),
@@ -3083,16 +3123,33 @@ export const getLeadsStats = asyncHandler(async (req, res) => {
 
   res.json({
     general: { total, bloqueados, sinAtender, conPrecio, precioPromedio, precioMin, precioMax, regular, manychat, tasaConversion, tasaCalificacion },
-    porEstado: { bienvenida: sBienvenida, calificando: sCalificando, cotizando: sCotizando, cotizacion_enviada: sCotizacionEnviada, cotizacion_lista: sCotizacionLista, descartado: sDescartado, modo_humano: sModoHumano },
+    porEstado: {
+      bienvenida: sBienvenida, calificando: sCalificando, cotizando: sCotizando,
+      cotizacion_iniciada: sCotizacionIniciada, cotizacion_lista: sCotizacionLista,
+      cotizacion_enviada: sCotizacionEnviada, cotizacion_confirmada: sCotizacionConfirmada,
+      esperando_aprobacion: sEsperandoAprobacion, cliente_acepto: sClienteAcepto,
+      pagado: sPagado, descartado: sDescartado, no_interesado: sNoInteresado,
+      modo_humano: sModoHumano,
+    },
     porAdmin: { arturo: admArturo, sandy: admSandy, hugo: admHugo, sinAtender },
     recientes: { h24: nuevos24h, d7: nuevos7d, d30: nuevos30d },
     problemas: { calificandoStale48h, cotizandoStale24h, sinAtender48h, sinAtender72h, cotizEnviadaSinCerrar },
     alertas: problemas,
     embudo: [
-      { etapa: 'Nuevos', value: sBienvenida, color: '#6b7280' },
+      { etapa: 'Nuevos (Bienvenida)', value: sBienvenida, color: '#6b7280' },
       { etapa: 'Calificando', value: sCalificando, color: '#f59e0b' },
       { etapa: 'Cotizando', value: sCotizando, color: '#3b82f6' },
+      { etapa: 'Cotización iniciada', value: sCotizacionIniciada, color: '#8b5cf6' },
+      { etapa: 'Cotización lista', value: sCotizacionLista, color: '#6366f1' },
       { etapa: 'Cotización enviada', value: sCotizacionEnviada, color: '#10b981' },
+      { etapa: 'Cotización confirmada', value: sCotizacionConfirmada, color: '#059669' },
+      { etapa: 'Esperando aprobación', value: sEsperandoAprobacion, color: '#d97706' },
+      { etapa: 'Cliente aceptó', value: sClienteAcepto, color: '#16a34a' },
+      { etapa: 'Pagado', value: sPagado, color: '#15803d' },
+    ],
+    perdidos: [
+      { etapa: 'Descartado', value: sDescartado, color: '#ef4444' },
+      { etapa: 'No interesado', value: sNoInteresado, color: '#dc2626' },
     ],
   });
 });
