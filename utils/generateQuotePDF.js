@@ -198,7 +198,7 @@ export const generateQuotePDF = async (data) => {
         clientName: data.clientName || data.nombre || 'Cliente',
         tipoTrabajo: tipoTrabajoResuelto,
         extensionEstimada: data.extensionEstimada || data.paginas || data.pages || '',
-        descripcionServicio: generarDescripcion(data),
+        descripcionServicio: generarDescripcion({ ...data, tipoTrabajo: tipoTrabajoResuelto }),
         serviciosIncluidos: data.serviciosIncluidos || ['1 Escáner antiplagio.', '1 Escáner anti-IA.', '1 Correcciones de fondo y estilo del asesor y sinodales.', '1 Asesoría 1:1 en cuanto se entregue versión preliminar.'],
         beneficiosAdicionales: data.beneficiosAdicionales || [],
         precioBase: precioBaseCalc,
@@ -654,7 +654,9 @@ export const generateQuotePDF = async (data) => {
     doc.setTextColor(220, 53, 69); // Rojo
     const tiempoEntregaTexto = quoteData.tiempoEntrega || '3 semanas';
     const fechaEntrega = quoteData.fechaEntrega || '';
-    const textEntrega = `Tiempo estimado de entrega: ${tiempoEntregaTexto}${fechaEntrega ? ` (${fechaEntrega})` : ''}`;
+    // No repetir la fecha si ya está incluida en tiempoEntrega
+    const showFechaExtra = fechaEntrega && !tiempoEntregaTexto.includes(fechaEntrega) && fechaEntrega !== tiempoEntregaTexto;
+    const textEntrega = `Tiempo estimado de entrega: ${tiempoEntregaTexto}${showFechaExtra ? ` (${fechaEntrega})` : ''}`;
 
     // Centrar texto
     const textWidth = doc.getTextWidth(textEntrega);
