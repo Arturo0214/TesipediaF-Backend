@@ -9,7 +9,8 @@ export const createCotizarLead = async (req, res) => {
   try {
     const {
       nombre, telefono, telefono_e164, carrera, nivel_estudios,
-      tipo_proyecto, num_paginas, fecha_entrega, source, page
+      tipo_proyecto, num_paginas, fecha_entrega, source, page,
+      utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbclid, gclid, referrer,
     } = req.body;
 
     // Validación básica
@@ -30,8 +31,16 @@ export const createCotizarLead = async (req, res) => {
       tipo_proyecto,
       num_paginas: num_paginas ? Number(num_paginas) : undefined,
       fecha_entrega: fecha_entrega || '',
-      source: source || 'landing_tesipedia_instagram',
-      page: page || '/cotizar'
+      source: source || 'direct',
+      page: page || '/cotizar',
+      utm_source: utm_source || '',
+      utm_medium: utm_medium || '',
+      utm_campaign: utm_campaign || '',
+      utm_content: utm_content || '',
+      utm_term: utm_term || '',
+      fbclid: fbclid || '',
+      gclid: gclid || '',
+      referrer: referrer || '',
     });
 
     // Intentar enviar al webhook de n8n como respaldo (no bloquea la respuesta)

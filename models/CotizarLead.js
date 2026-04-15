@@ -40,12 +40,21 @@ const cotizarLeadSchema = new mongoose.Schema({
   },
   source: {
     type: String,
-    default: 'landing_tesipedia_instagram'
+    default: 'direct'
   },
   page: {
     type: String,
     default: '/cotizar'
   },
+  // UTM tracking / atribución de campaña
+  utm_source: { type: String, default: '' },
+  utm_medium: { type: String, default: '' },
+  utm_campaign: { type: String, default: '' },
+  utm_content: { type: String, default: '' },
+  utm_term: { type: String, default: '' },
+  fbclid: { type: String, default: '' },
+  gclid: { type: String, default: '' },
+  referrer: { type: String, default: '' },
   // Tracking
   webhook_sent: {
     type: Boolean,
