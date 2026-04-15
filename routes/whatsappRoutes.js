@@ -31,6 +31,7 @@ import {
   getCalificacionFollowUpStatus,
   configCalificacionFollowUp,
   runCalificacionFollowUpManual,
+  updateLeadNotes,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -53,6 +54,9 @@ router.patch('/leads/:waId/modo-humano', toggleModoHumano);
 
 // Actualizar estado del lead
 router.patch('/leads/:waId/estado', updateLeadEstado);
+
+// Notas y etiquetas del lead
+router.patch('/leads/:waId/notes', updateLeadNotes);
 
 // Reclamar un lead (asignar dueño, solo si no tiene)
 router.patch('/leads/:waId/claim', claimLead);

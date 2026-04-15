@@ -665,6 +665,34 @@ export const deleteDashboardPayment = asyncHandler(async (req, res) => {
 });
 
 // 👤 Asignar vendedor a un pago de cualquier fuente (admin)
+// PATCH /payments/dashboard/:id/installment — marcar parcialidad como paid/pending
+export const updateInstallmentStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { source } = req.query;
+  const { installmentIndex, status } = req.body; // status: 'paid' | 'pending'
+
+  if (installmentIndex === undefined || !status) {
+    res.status(400);
+    throw new Error('installmentIndex y status son requeridos');
+  }
+
+  // Solo Payment model tiene schedule editable (manual/stripe)
+  if (source === 'manual' || source === 'stripe') {
+    const payment = await Payment.findById(id);
+    if (!payment) { res.status(404); throw new Error('Pago no encontrado'); }
+    if (!payment.schedule || !payment.schedule[installmentIndex]) {
+      res.status(400); throw new Error('Parcialidad no encontrada');
+    }
+    payment.schedule[installmentIndex].status = status;
+    await payment.save();
+    return res.json({ success: true, schedule: payment.schedule });
+  }
+
+  // Para sofia/guest no hay schedule editable en DB, responder error amigable
+  res.status(400);
+  throw new Error('Solo pagos manuales/stripe tienen parcialidades editables');
+});
+
 export const assignVendedor = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { source } = req.query;
@@ -1104,16 +1132,20 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const totalComisiones = realPayments.reduce((s, p) => s + p.commission, 0);
   const totalPagos = realPayments.length;
 
-  // Calcular cobrado vs pendiente basado en parcialidades
+  // Calcular cobrado vs pendiente — SOLO lo marcado explícitamente como paid
   let cobrado = 0;
   let pendiente = 0;
   for (const p of realPayments) {
     if (!p.schedule || p.schedule.length <= 1) {
-      // Pago único — todo cobrado
-      cobrado += p.amount;
+      // Pago único — cobrado si status es completed/paid
+      if (p.status === 'completed' || p.status === 'paid') {
+        cobrado += p.amount;
+      } else {
+        pendiente += p.amount;
+      }
     } else {
       for (const inst of p.schedule) {
-        if (inst.status === 'paid' || new Date(inst.dueDate) < new Date()) {
+        if (inst.status === 'paid') {
           cobrado += inst.amount || 0;
         } else {
           pendiente += inst.amount || 0;

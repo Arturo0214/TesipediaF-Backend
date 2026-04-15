@@ -22,7 +22,8 @@ import {
     deleteDashboardPayment,
     assignVendedor,
     createProjectFromPayment,
-    getSalesByVendedor
+    getSalesByVendedor,
+    updateInstallmentStatus
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -54,6 +55,7 @@ router.get('/:id', getPaymentById);
 router.put('/:id', updatePayment);
 router.delete('/:id', deletePayment);
 router.put('/dashboard/:id/vendedor', superAdminOnly, assignVendedor);
+router.patch('/dashboard/:id/installment', updateInstallmentStatus);
 router.post('/dashboard/:id/create-project', createProjectFromPayment);
 router.delete('/dashboard/:id', superAdminOnly, deleteDashboardPayment);
 router.post('/:id/refund', refundPayment);

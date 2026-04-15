@@ -165,7 +165,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
-    'ultimo_mensaje_preview',
+    'ultimo_mensaje_preview', 'notas_admin', 'etiquetas',
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
@@ -385,6 +385,33 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
     throw new Error(`Error actualizando estado: ${err}`);
   }
   res.json({ success: true, estado_sofia });
+});
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/notes
+ * Actualizar notas y etiquetas de un lead
+ */
+export const updateLeadNotes = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { notas_admin, etiquetas } = req.body;
+
+  const updateData = { updated_at: new Date().toISOString() };
+  if (notas_admin !== undefined) updateData.notas_admin = notas_admin;
+  if (etiquetas !== undefined) updateData.etiquetas = etiquetas; // array de strings
+
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const response = await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify(updateData),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    res.status(response.status);
+    throw new Error(`Error actualizando notas: ${err}`);
+  }
+  res.json({ success: true });
 });
 
 /**
