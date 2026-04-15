@@ -5,6 +5,7 @@ import asyncHandler from 'express-async-handler';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 import createNotification from '../utils/createNotification.js';
 import cloudinary from '../config/cloudinary.js';
+import { autoSyncProject } from './googleCalendarController.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -159,6 +160,9 @@ export const updateProjectStatus = asyncHandler(async (req, res) => {
 
     project.status = status;
     await project.save();
+
+    // Auto-sync al calendario
+    autoSyncProject(project).catch(e => console.warn('[UpdateProjectStatus] Calendar sync:', e.message));
 
     const statusLabels = {
         pending: 'Pendiente', in_progress: 'En progreso', review: 'En revisión',
@@ -660,6 +664,12 @@ export const updateProject = asyncHandler(async (req, res) => {
     if (dueDate !== undefined) project.dueDate = dueDate;
 
     await project.save();
+
+    // Auto-sync al calendario si cambió fecha, estado o prioridad
+    if (dueDate !== undefined || status !== undefined || priority !== undefined) {
+        autoSyncProject(project).catch(e => console.warn('[UpdateProject] Calendar sync:', e.message));
+    }
+
     res.json(project);
 });
 

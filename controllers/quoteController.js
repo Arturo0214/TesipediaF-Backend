@@ -13,6 +13,7 @@ import generateQuotePDF from '../utils/generateQuotePDF.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
 import { notifyQuoteSent, notifyNewClient } from '../utils/sendWhatsAppNotification.js';
 import Project from '../models/Project.js';
+import { autoSyncProject, autoSyncPaymentSchedule } from './googleCalendarController.js';
 import Payment from '../models/Payment.js';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 
@@ -257,6 +258,10 @@ const handleQuotePaid = async ({
     await payment.save();
 
     console.log(`[handleQuotePaid] Proyecto creado: ${linkedProject._id}, Pago: ${payment._id}`);
+
+    // Auto-sync al Google Calendar (fire-and-forget)
+    autoSyncProject(linkedProject).catch(e => console.warn('[handleQuotePaid] Calendar sync project:', e.message));
+    autoSyncPaymentSchedule({ ...payment.toObject(), clientName, clientPhone, title }).catch(e => console.warn('[handleQuotePaid] Calendar sync payment:', e.message));
   } catch (err) {
     if (err.errors) {
       const details = Object.entries(err.errors).map(([f, e]) => `${f}: ${e.message}`).join(', ');
