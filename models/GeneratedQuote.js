@@ -156,6 +156,11 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: String,
             default: null,
         },
+        // Mapa de estado de parcialidades: { "0": "paid", "1": "pending", ... }
+        installmentStatuses: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {},
+        },
     },
     { timestamps: true }
 );

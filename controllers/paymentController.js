@@ -676,7 +676,6 @@ export const updateInstallmentStatus = asyncHandler(async (req, res) => {
     throw new Error('installmentIndex y status son requeridos');
   }
 
-  // Solo Payment model tiene schedule editable (manual/stripe)
   if (source === 'manual' || source === 'stripe') {
     const payment = await Payment.findById(id);
     if (!payment) { res.status(404); throw new Error('Pago no encontrado'); }
@@ -688,9 +687,34 @@ export const updateInstallmentStatus = asyncHandler(async (req, res) => {
     return res.json({ success: true, schedule: payment.schedule });
   }
 
-  // Para sofia/guest no hay schedule editable en DB, responder error amigable
+  if (source === 'sofia') {
+    // Sofia quotes: guardar schedule status en el campo installmentStatuses del GeneratedQuote
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const quote = await GeneratedQuote.findById(id);
+    if (!quote) { res.status(404); throw new Error('Cotización no encontrada'); }
+
+    // installmentStatuses es un Map/Object que guarda { "0": "paid", "1": "pending", ... }
+    if (!quote.installmentStatuses) quote.installmentStatuses = {};
+    quote.installmentStatuses = { ...quote.installmentStatuses, [String(installmentIndex)]: status };
+    quote.markModified('installmentStatuses');
+    await quote.save();
+    return res.json({ success: true, installmentStatuses: quote.installmentStatuses });
+  }
+
+  if (source === 'guest') {
+    const GuestPayment = (await import('../models/guestPayment.js')).default;
+    const guest = await GuestPayment.findById(id);
+    if (!guest) { res.status(404); throw new Error('Pago invitado no encontrado'); }
+
+    if (!guest.installmentStatuses) guest.installmentStatuses = {};
+    guest.installmentStatuses = { ...guest.installmentStatuses, [String(installmentIndex)]: status };
+    guest.markModified('installmentStatuses');
+    await guest.save();
+    return res.json({ success: true, installmentStatuses: guest.installmentStatuses });
+  }
+
   res.status(400);
-  throw new Error('Solo pagos manuales/stripe tienen parcialidades editables');
+  throw new Error('Fuente de pago no soportada');
 });
 
 export const assignVendedor = asyncHandler(async (req, res) => {
@@ -1005,7 +1029,15 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       status: 'paid',
       esquema,
       esquemaRaw: q.esquemaPago || '',
-      schedule: generateSchedule(amount, esquema, payDate),
+      schedule: (() => {
+        const sched = generateSchedule(amount, esquema, payDate);
+        // Aplicar estados guardados de parcialidades
+        const statuses = q.installmentStatuses || {};
+        sched.forEach((inst, idx) => {
+          if (statuses[String(idx)]) inst.status = statuses[String(idx)];
+        });
+        return sched;
+      })(),
       commission: Math.round(amount * 0.20),
       date: payDate,
       dueDate: q.fechaEntrega || null,
