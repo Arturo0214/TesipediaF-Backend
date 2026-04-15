@@ -3,6 +3,8 @@ import asyncHandler from 'express-async-handler';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import Expense from '../models/Expense.js';
 import Payment from '../models/Payment.js';
+import GeneratedQuote from '../models/GeneratedQuote.js';
+import GuestPayment from '../models/guestPayment.js';
 import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
 import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
@@ -26,40 +28,100 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   const startOfYear = new Date(targetYear, 0, 1);
   const endOfYear = new Date(targetYear, 11, 31, 23, 59, 59);
 
-  // ── INGRESOS: pagos completados ──
-  // Usar paymentDate (cuando existe) en vez de createdAt para que pagos
-  // manuales o marcados como pagados aparezcan en el mes correcto.
+  // ── INGRESOS: pagos de TODAS las fuentes ──
+  // 1. Payment model (stripe, manual, paypal)
   const dateField = { $ifNull: ['$paymentDate', '$createdAt'] };
 
-  const [monthlyIncome, yearlyIncome] = await Promise.all([
-    Payment.aggregate([
-      { $match: { status: 'completed' } },
+  // 2. GeneratedQuote (Sofia) — status: 'paid', usar paidAt o updatedAt
+  const sofiaDateField = { $ifNull: ['$paidAt', '$updatedAt'] };
+  const sofiaAmountField = { $ifNull: ['$precioConDescuento', { $ifNull: ['$precioConRecargo', '$precioBase'] }] };
+
+  // 3. GuestPayment — paymentStatus: 'completed'
+  const guestDateField = '$createdAt';
+
+  // Helper: ejecutar aggregations en paralelo para las 3 fuentes
+  const aggregateIncome = async (dateRange) => {
+    const [payments, sofia, guest] = await Promise.all([
+      Payment.aggregate([
+        { $match: { status: 'completed' } },
+        { $addFields: { _effectiveDate: dateField } },
+        { $match: { _effectiveDate: dateRange } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]),
+      GeneratedQuote.aggregate([
+        { $match: { status: 'paid' } },
+        { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
+        { $match: { _effectiveDate: dateRange } },
+        { $group: { _id: null, total: { $sum: '$_amount' }, count: { $sum: 1 } } }
+      ]),
+      GuestPayment.aggregate([
+        { $match: { paymentStatus: 'completed' } },
+        { $addFields: { _effectiveDate: guestDateField } },
+        { $match: { _effectiveDate: dateRange } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]),
+    ]);
+
+    // Deduplicar: Sofia quotes que generaron un Payment auto no deben contarse doble
+    // El Payment auto tiene notes con "Auto-generado al marcar cotización"
+    // Solución simple: confiar en que la mayoría de pagos recientes son Sofia-only
+    // y restar los pagos auto-generados del total de Payment
+    const autoPayments = await Payment.aggregate([
+      { $match: { status: 'completed', notes: { $regex: /Auto-generado al marcar cotización generated/i } } },
       { $addFields: { _effectiveDate: dateField } },
-      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $match: { _effectiveDate: dateRange } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-    ]),
+    ]);
+
+    const payTotal = (payments[0]?.total || 0) - (autoPayments[0]?.total || 0);
+    const payCount = (payments[0]?.count || 0) - (autoPayments[0]?.count || 0);
+
+    return {
+      total: payTotal + (sofia[0]?.total || 0) + (guest[0]?.total || 0),
+      count: payCount + (sofia[0]?.count || 0) + (guest[0]?.count || 0),
+    };
+  };
+
+  const [monthlyIncome, yearlyIncome] = await Promise.all([
+    aggregateIncome({ $gte: startOfMonth, $lte: endOfMonth }),
+    aggregateIncome({ $gte: startOfYear, $lte: endOfYear }),
+  ]);
+
+  // Ingresos por mes (para gráfica anual) — combinando las 3 fuentes
+  const [payByMonth, sofiaByMonth, guestByMonth] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed' } },
+      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
-      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      { $group: { _id: { $month: '$_effectiveDate' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]),
+    GeneratedQuote.aggregate([
+      { $match: { status: 'paid' } },
+      { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
+      { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
+      { $group: { _id: { $month: '$_effectiveDate' }, total: { $sum: '$_amount' }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]),
+    GuestPayment.aggregate([
+      { $match: { paymentStatus: 'completed' } },
+      { $addFields: { _effectiveDate: guestDateField } },
+      { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
+      { $group: { _id: { $month: '$_effectiveDate' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
     ]),
   ]);
 
-  // Ingresos por mes (para gráfica anual)
-  const incomeByMonth = await Payment.aggregate([
-    { $match: { status: 'completed' } },
-    { $addFields: { _effectiveDate: dateField } },
-    { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
-    {
-      $group: {
-        _id: { $month: '$_effectiveDate' },
-        total: { $sum: '$amount' },
-        count: { $sum: 1 },
-      }
-    },
-    { $sort: { _id: 1 } }
-  ]);
+  // Merge by month
+  const incomeByMonth = [];
+  for (let m = 1; m <= 12; m++) {
+    const pay = payByMonth.find(r => r._id === m);
+    const sof = sofiaByMonth.find(r => r._id === m);
+    const gue = guestByMonth.find(r => r._id === m);
+    const total = (pay?.total || 0) + (sof?.total || 0) + (gue?.total || 0);
+    const count = (pay?.count || 0) + (sof?.count || 0) + (gue?.count || 0);
+    if (total > 0) incomeByMonth.push({ _id: m, total, count });
+  }
 
   // ── GASTOS: del modelo Expense ──
   const [monthlyExpenses, yearlyExpenses] = await Promise.all([
@@ -88,46 +150,84 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   ]);
 
   // ── COSTO POR TESIS: cálculo promedio ──
-  const completedPaymentsThisMonth = monthlyIncome[0]?.count || 0;
+  const completedPaymentsThisMonth = monthlyIncome.count || 0;
   const totalMonthlyExpenses = monthlyExpenses.reduce((acc, e) => acc + e.total, 0);
   const costPerThesis = completedPaymentsThisMonth > 0
     ? (totalMonthlyExpenses / completedPaymentsThisMonth)
     : 0;
 
-  // ── Ingresos por vendedor este mes ──
-  const incomeByVendedor = await Payment.aggregate([
-    { $match: { status: 'completed', vendedor: { $ne: '' } } },
-    { $addFields: { _effectiveDate: dateField } },
-    { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-    { $group: { _id: '$vendedor', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    { $sort: { total: -1 } }
-  ]);
-
-  // ── Pagos individuales del mes (para contraste ingreso vs gasto) ──
-  const recentPayments = await Payment.aggregate([
-    { $match: { status: 'completed' } },
-    { $addFields: { _effectiveDate: dateField } },
-    { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-    { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, currency: 1, status: 1 } },
-    { $sort: { _effectiveDate: -1 } },
-  ]);
-
-  const monthlyIncomeTotal = monthlyIncome[0]?.total || 0;
-  const yearlyIncomeTotal = yearlyIncome[0]?.total || 0;
-
-  // Total histórico (all-time)
-  const [allTimeIncome] = await Promise.all([
+  // ── Ingresos por vendedor este mes (Payment + Sofia) ──
+  const [payVendedor, sofiaVendedor] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed' } },
+      { $match: { status: 'completed', vendedor: { $ne: '' }, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $addFields: { _effectiveDate: dateField } },
+      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $group: { _id: '$vendedor', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    GeneratedQuote.aggregate([
+      { $match: { status: 'paid', vendedor: { $ne: '' } } },
+      { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
+      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $group: { _id: '$vendedor', total: { $sum: '$_amount' }, count: { $sum: 1 } } },
+    ]),
+  ]);
+  const vendedorMap = {};
+  for (const v of [...payVendedor, ...sofiaVendedor]) {
+    if (!v._id) continue;
+    if (!vendedorMap[v._id]) vendedorMap[v._id] = { _id: v._id, total: 0, count: 0 };
+    vendedorMap[v._id].total += v.total;
+    vendedorMap[v._id].count += v.count;
+  }
+  const incomeByVendedor = Object.values(vendedorMap).sort((a, b) => b.total - a.total);
+
+  // ── Pagos individuales del mes (Payment + Sofia) ──
+  const [payRecent, sofiaRecent] = await Promise.all([
+    Payment.aggregate([
+      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $addFields: { _effectiveDate: dateField } },
+      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, status: 1, _source: { $literal: 'payment' } } },
+      { $sort: { _effectiveDate: -1 } },
+    ]),
+    GeneratedQuote.aggregate([
+      { $match: { status: 'paid' } },
+      { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
+      { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
+      { $project: { clientName: 1, title: { $ifNull: ['$tituloTrabajo', '$tipoTrabajo'] }, amount: '$_amount', method: '$metodoPago', vendedor: 1, createdAt: 1, paymentDate: '$paidAt', status: 1, _source: { $literal: 'sofia' } } },
+      { $sort: { _effectiveDate: -1 } },
+    ]),
+  ]);
+  const recentPayments = [...payRecent, ...sofiaRecent].sort((a, b) => new Date(b.paymentDate || b.createdAt) - new Date(a.paymentDate || a.createdAt));
+
+  const monthlyIncomeTotal = monthlyIncome.total || 0;
+  const yearlyIncomeTotal = yearlyIncome.total || 0;
+
+  // Total histórico (all-time) — todas las fuentes
+  const [allTimePay, allTimeSofia, allTimeGuest] = await Promise.all([
+    Payment.aggregate([
+      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]),
+    GeneratedQuote.aggregate([
+      { $match: { status: 'paid' } },
+      { $addFields: { _amount: sofiaAmountField } },
+      { $group: { _id: null, total: { $sum: '$_amount' }, count: { $sum: 1 } } }
+    ]),
+    GuestPayment.aggregate([
+      { $match: { paymentStatus: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
   ]);
+  const allTimeIncome = [{
+    total: (allTimePay[0]?.total || 0) + (allTimeSofia[0]?.total || 0) + (allTimeGuest[0]?.total || 0),
+    count: (allTimePay[0]?.count || 0) + (allTimeSofia[0]?.count || 0) + (allTimeGuest[0]?.count || 0),
+  }];
 
   res.json({
     period: { year: targetYear, month: targetMonth },
     income: {
-      monthly: { total: monthlyIncomeTotal, count: monthlyIncome[0]?.count || 0 },
-      yearly: { total: yearlyIncomeTotal, count: yearlyIncome[0]?.count || 0 },
+      monthly: { total: monthlyIncomeTotal, count: monthlyIncome.count || 0 },
+      yearly: { total: yearlyIncomeTotal, count: yearlyIncome.count || 0 },
       allTime: { total: allTimeIncome[0]?.total || 0, count: allTimeIncome[0]?.count || 0 },
       byMonth: incomeByMonth,
       byVendedor: incomeByVendedor,
