@@ -1099,10 +1099,28 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const cutoffDate = new Date('2026-01-01T00:00:00Z');
   const realPayments = unified.filter(p => new Date(p.date) >= cutoffDate);
 
-  // Calculate summary (only real data)
+  // Calculate summary with installment tracking (only real data)
   const totalIngresos = realPayments.reduce((s, p) => s + p.amount, 0);
   const totalComisiones = realPayments.reduce((s, p) => s + p.commission, 0);
   const totalPagos = realPayments.length;
+
+  // Calcular cobrado vs pendiente basado en parcialidades
+  let cobrado = 0;
+  let pendiente = 0;
+  for (const p of realPayments) {
+    if (!p.schedule || p.schedule.length <= 1) {
+      // Pago único — todo cobrado
+      cobrado += p.amount;
+    } else {
+      for (const inst of p.schedule) {
+        if (inst.status === 'paid' || new Date(inst.dueDate) < new Date()) {
+          cobrado += inst.amount || 0;
+        } else {
+          pendiente += inst.amount || 0;
+        }
+      }
+    }
+  }
 
   // --- Time-series breakdowns ---
 
@@ -1150,6 +1168,8 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     payments: realPayments,
     summary: {
       totalIngresos,
+      cobrado,
+      pendiente,
       totalComisiones,
       netoEmpresa: totalIngresos - totalComisiones,
       totalPagos,
