@@ -36,6 +36,7 @@ import gaRoutes from './routes/gaRoutes.js';
 import cotizarLeadRoutes from './routes/cotizarLeadRoutes.js';
 import revenueRoutes from './routes/revenueRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
+import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -161,6 +162,7 @@ notificationSocket(io);
 
 // Start cron jobs
 startRevenueSyncCron();
+startPaymentReminderCron();
 
 // Start server
 server.listen(PORT, () => {
