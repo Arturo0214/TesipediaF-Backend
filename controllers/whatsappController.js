@@ -169,40 +169,56 @@ export const getLeads = asyncHandler(async (req, res) => {
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
+  // Construir todas las condiciones como un array para combinarlas correctamente
   const origenParam = (req.query.origen || 'regular').toLowerCase();
-  let origenFilter = '';
+  const andConditions = []; // condiciones AND de nivel top
+  const orConditions = [];  // condiciones OR que se combinarán en un solo or=()
+
   if (origenParam === 'regular') {
-    origenFilter = '&or=(origen.neq.manychat,origen.is.null,estado_sofia.neq.bienvenida)';
+    // Excluir leads ManyChat que aún están en bienvenida
+    // Lógica: (origen != manychat) OR (origen IS NULL) OR (estado_sofia != bienvenida)
+    orConditions.push('origen.neq.manychat', 'origen.is.null', 'estado_sofia.neq.bienvenida');
   } else if (origenParam === 'manychat') {
-    origenFilter = '&origen=eq.manychat';
+    andConditions.push('origen=eq.manychat');
   }
 
   // ── Filtros server-side (query params) ──
-  let extraFilters = '';
   const { estado, atendido, fecha, search } = req.query;
   if (estado && estado !== 'all') {
     if (estado === 'sin_estado') {
-      extraFilters += '&estado_sofia=is.null';
+      andConditions.push('estado_sofia=is.null');
     } else {
-      extraFilters += `&estado_sofia=eq.${encodeURIComponent(estado)}`;
+      andConditions.push(`estado_sofia=eq.${encodeURIComponent(estado)}`);
     }
   }
   if (atendido && atendido !== 'all') {
     if (atendido === 'sin_atender') {
-      extraFilters += '&or=(atendido_por.is.null,atendido_por.eq.)';
+      // atendido_por IS NULL o vacío — usar and() para agrupar condiciones OR de atendido
+      andConditions.push('or=(atendido_por.is.null,atendido_por.eq.)');
     } else if (atendido === 'atendido') {
-      extraFilters += '&atendido_por=neq.&atendido_por=not.is.null';
+      // atendido_por tiene valor no vacío y no nulo
+      andConditions.push('not.or=(atendido_por.is.null,atendido_por.eq.)');
     } else {
       // admin específico (arturo, sandy, hugo)
-      extraFilters += `&atendido_por=ilike.*${encodeURIComponent(atendido)}*`;
+      andConditions.push(`atendido_por=ilike.*${encodeURIComponent(atendido)}*`);
     }
   }
   if (fecha) {
-    extraFilters += `&created_at=gte.${fecha}T00:00:00&created_at=lt.${fecha}T23:59:59`;
+    andConditions.push(`created_at=gte.${fecha}T00:00:00`);
+    andConditions.push(`created_at=lt.${fecha}T23:59:59`);
   }
   if (search && search.trim()) {
-    const q = search.trim();
-    extraFilters += `&or=(nombre.ilike.*${encodeURIComponent(q)}*,wa_id.ilike.*${encodeURIComponent(q)}*,carrera.ilike.*${encodeURIComponent(q)}*,tema.ilike.*${encodeURIComponent(q)}*,atendido_por.ilike.*${encodeURIComponent(q)}*)`;
+    const q = encodeURIComponent(search.trim());
+    andConditions.push(`or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*)`);
+  }
+
+  // Combinar: un solo or=() para origen, y condiciones AND para el resto
+  let extraFilters = '';
+  if (orConditions.length > 0) {
+    extraFilters += `&or=(${orConditions.join(',')})`;
+  }
+  for (const cond of andConditions) {
+    extraFilters += `&${cond}`;
   }
 
   // ── Paginación (query params ?limit=100&offset=0) ──
@@ -211,7 +227,7 @@ export const getLeads = asyncHandler(async (req, res) => {
   const paginationParams = `&limit=${limit}&offset=${offset}`;
 
   // Query 1: metadata de leads filtrados (paginado)
-  const allFilters = `${origenFilter}${extraFilters}`;
+  const allFilters = extraFilters;
   const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${allFilters}&order=updated_at.desc${paginationParams}`;
   // Query 2: historial de los leads del lote (para preview + _lastMsgIsUser correcto)
   const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${allFilters}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
@@ -1833,15 +1849,183 @@ function stopAutoRevival() {
  * POST /api/v1/whatsapp/incoming-webhook
  * Webhook público (sin auth) que n8n/Sofia llama cuando un lead envía un mensaje.
  * Crea una notificación para el admin en tiempo real.
- * Body: { wa_id, nombre, mensaje, is_new_lead? }
+ * Soporta multimedia: si n8n envía media_id (de WhatsApp Cloud API), el backend
+ * descarga el archivo, lo sube a Cloudinary y lo guarda en historial_chat.
+ * Body: { wa_id, nombre, mensaje, is_new_lead?, media_id?, media_type?, mimetype?, filename?, caption? }
  */
 export const incomingMessageWebhook = asyncHandler(async (req, res) => {
-  const { wa_id, nombre, mensaje, is_new_lead } = req.body;
+  const { wa_id, nombre, mensaje, is_new_lead, media_id, media_type, mimetype, filename, caption } = req.body;
   if (!wa_id) return res.status(400).json({ error: 'wa_id requerido' });
 
   const displayName = nombre || `+${wa_id}`;
-  const preview = mensaje ? (mensaje.length > 80 ? mensaje.substring(0, 80) + '...' : mensaje) : '(mensaje)';
+  const hasMedia = !!media_id;
+  const messageText = mensaje || caption || '';
+  const preview = hasMedia
+    ? `📎 ${media_type === 'image' ? 'Imagen' : media_type === 'audio' ? 'Audio' : media_type === 'video' ? 'Video' : 'Archivo'}${messageText ? ': ' + messageText.substring(0, 60) : ''}`
+    : messageText ? (messageText.length > 80 ? messageText.substring(0, 80) + '...' : messageText) : '(mensaje)';
 
+  // ── PROCESAR MULTIMEDIA DEL CLIENTE ──
+  let mediaUrl = null;
+  let mediaMetadata = {};
+
+  if (hasMedia && WA_TOKEN) {
+    try {
+      console.log(`📥 Procesando media entrante: media_id=${media_id}, type=${media_type}, wa_id=${wa_id}`);
+
+      // Paso 1: Obtener la URL de descarga del media desde WhatsApp API
+      const mediaInfoResp = await fetch(`https://graph.facebook.com/v22.0/${media_id}`, {
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}` },
+      });
+      if (!mediaInfoResp.ok) {
+        const errText = await mediaInfoResp.text();
+        throw new Error(`WA Media API info failed (${mediaInfoResp.status}): ${errText}`);
+      }
+      const mediaInfo = await mediaInfoResp.json();
+      const downloadUrl = mediaInfo.url;
+
+      if (!downloadUrl) throw new Error('WA Media API no devolvió URL de descarga');
+
+      // Paso 2: Descargar el archivo binario desde WhatsApp
+      const downloadResp = await fetch(downloadUrl, {
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}` },
+      });
+      if (!downloadResp.ok) {
+        throw new Error(`WA Media download failed (${downloadResp.status})`);
+      }
+      const mediaBuffer = Buffer.from(await downloadResp.arrayBuffer());
+      console.log(`📥 Media descargado: ${mediaBuffer.length} bytes, type=${mimetype || media_type}`);
+
+      // Paso 3: Determinar tipo de recurso para Cloudinary
+      const effectiveMimetype = mimetype || mediaInfo.mime_type || '';
+      const isAudio = !!effectiveMimetype.match(/audio|ogg|opus/i) || media_type === 'audio';
+      const isDoc = !!effectiveMimetype.match(/pdf|msword|officedocument|csv|text/i) || media_type === 'document';
+      const isVideo = !!effectiveMimetype.match(/video\//i) || media_type === 'video';
+      const isImage = !!effectiveMimetype.match(/image\//i) || media_type === 'image';
+
+      const ts = Date.now();
+      const rnd = Math.floor(Math.random() * 10000);
+      let uploadBuffer = mediaBuffer;
+      let cloudinaryOptions = { folder: 'whatsapp_admin_media' };
+      let finalMimetype = effectiveMimetype;
+      let finalFilename = filename || `media_${ts}`;
+
+      if (isAudio) {
+        // Convertir audio a OGG/Opus para reproducción consistente en el admin
+        try {
+          const inExt = effectiveMimetype.includes('mp4') ? 'mp4' : effectiveMimetype.includes('ogg') ? 'ogg' : 'webm';
+          const tmpIn = join(tmpdir(), `wa_incoming_audio_${ts}.${inExt}`);
+          const tmpWav = join(tmpdir(), `wa_incoming_clean_${ts}.wav`);
+          const tmpOut = join(tmpdir(), `wa_incoming_out_${ts}.ogg`);
+          writeFileSync(tmpIn, mediaBuffer);
+
+          execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpIn}" -vn -map_metadata -1 -ac 1 -ar 48000 -c:a pcm_s16le "${tmpWav}"`, { timeout: 15000 });
+          execSync(`${ffmpegPath} -hide_banner -loglevel error -nostdin -y -i "${tmpWav}" -c:a libopus -b:a 32k -ac 1 -ar 48000 -avoid_negative_ts make_zero "${tmpOut}"`, { timeout: 15000 });
+
+          uploadBuffer = readFileSync(tmpOut);
+          try { unlinkSync(tmpIn); unlinkSync(tmpWav); unlinkSync(tmpOut); } catch (_) {}
+          console.log(`✅ Audio entrante convertido: ${mediaBuffer.length}b → ${uploadBuffer.length}b ogg/opus`);
+        } catch (convErr) {
+          console.error('⚠️ ffmpeg conversion failed para audio entrante, subiendo original:', convErr.message);
+        }
+
+        cloudinaryOptions.resource_type = 'video'; // Cloudinary sirve audio/ogg con resource_type 'video'
+        cloudinaryOptions.public_id = `incoming_audio_${ts}_${rnd}`;
+        cloudinaryOptions.format = 'ogg';
+        finalMimetype = 'audio/ogg';
+        finalFilename = (filename || 'audio').replace(/\.[^.]+$/, '') + '.ogg';
+      } else if (isDoc) {
+        const ext = filename?.includes('.') ? filename.split('.').pop() : 'pdf';
+        cloudinaryOptions.resource_type = 'raw';
+        cloudinaryOptions.public_id = `incoming_doc_${ts}_${rnd}.${ext}`;
+        finalFilename = filename || `documento_${ts}.${ext}`;
+      } else if (isVideo) {
+        cloudinaryOptions.resource_type = 'video';
+        cloudinaryOptions.public_id = `incoming_video_${ts}_${rnd}`;
+        finalFilename = filename || `video_${ts}.mp4`;
+      } else {
+        // Imagen u otro
+        cloudinaryOptions.resource_type = 'auto';
+        cloudinaryOptions.public_id = `incoming_img_${ts}_${rnd}`;
+        finalFilename = filename || `imagen_${ts}.jpg`;
+      }
+
+      // Paso 4: Subir a Cloudinary
+      const b64 = `data:${isAudio ? 'audio/ogg' : effectiveMimetype};base64,${uploadBuffer.toString('base64')}`;
+      const cloudResult = await cloudinary.uploader.upload(b64, cloudinaryOptions);
+      mediaUrl = cloudResult.secure_url;
+
+      mediaMetadata = {
+        mediaUrl,
+        mimetype: finalMimetype,
+        filename: finalFilename,
+        mediaType: isAudio ? 'audio' : isDoc ? 'document' : isVideo ? 'video' : 'image',
+      };
+
+      console.log(`✅ Media entrante subido a Cloudinary: ${mediaUrl} (${mediaMetadata.mediaType})`);
+    } catch (mediaErr) {
+      console.error(`❌ Error procesando media entrante (media_id=${media_id}):`, mediaErr.message);
+      // No bloquear el webhook — el mensaje de texto aún se procesará
+    }
+  }
+
+  // ── GUARDAR MEDIA EN HISTORIAL_CHAT ──
+  // Si se procesó multimedia, actualizar el historial del lead en Supabase
+  if (mediaUrl) {
+    try {
+      const leadUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat&limit=1`;
+      const leadResp = await fetch(leadUrl, { headers: supabaseHeaders() });
+      if (leadResp.ok) {
+        const leadData = await leadResp.json();
+        if (leadData.length > 0) {
+          let historial = [];
+          try { historial = JSON.parse(leadData[0].historial_chat || '[]'); } catch (_) { historial = []; }
+
+          // Buscar el último mensaje del usuario para agregar media
+          // Si n8n ya escribió el mensaje de texto, encontramos el último msg del user y le agregamos media
+          let mediaAdded = false;
+          for (let i = historial.length - 1; i >= 0; i--) {
+            const msg = historial[i];
+            if (msg.role === 'user' && !msg.mediaUrl) {
+              // Agregar metadata de media al mensaje existente
+              historial[i] = { ...msg, ...mediaMetadata };
+              mediaAdded = true;
+              console.log(`✅ Media agregada al mensaje existente en historial (index=${i})`);
+              break;
+            }
+            // Solo buscar en los últimos 3 mensajes para no modificar mensajes viejos
+            if (historial.length - 1 - i >= 3) break;
+          }
+
+          // Si no encontramos un mensaje reciente del usuario, crear uno nuevo con la media
+          if (!mediaAdded) {
+            const newMsg = {
+              role: 'user',
+              content: messageText || '',
+              timestamp: new Date().toISOString(),
+              ...mediaMetadata,
+            };
+            historial.push(newMsg);
+            console.log(`✅ Nuevo mensaje con media creado en historial`);
+          }
+
+          // Guardar historial actualizado
+          const updateUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+          await fetch(updateUrl, {
+            method: 'PATCH',
+            headers: supabaseHeaders(),
+            body: JSON.stringify({
+              historial_chat: JSON.stringify(historial),
+              updated_at: new Date().toISOString(),
+            }),
+          });
+        }
+      }
+    } catch (histErr) {
+      console.error('❌ Error actualizando historial con media:', histErr.message);
+    }
+  }
+
+  // ── NOTIFICACIONES ──
   if (SUPER_ADMIN_ID) {
     await createNotification(req.app, {
       user: SUPER_ADMIN_ID,
@@ -1958,7 +2142,7 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
     console.error('❌ Error enviando mensaje pendiente:', pendingErr.message);
   }
 
-  res.json({ ok: true });
+  res.json({ ok: true, media_processed: !!mediaUrl, mediaUrl: mediaUrl || undefined });
 });
 
 /* ═══════════════════════════════════════════════════════════════════

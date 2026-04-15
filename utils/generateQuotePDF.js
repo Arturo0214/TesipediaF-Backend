@@ -103,7 +103,17 @@ export const generateQuotePDF = async (data) => {
     };
 
     const generarEsquema = (total, d) => {
-        if (d.esquemaPago && d.esquemaPago.trim() !== '') return d.esquemaPago;
+        // Solo usar esquemaPago literal si ya es un texto largo con montos (>50 chars)
+        // Strings cortos como "33-33-34", "50-50", "6-quincenales" son esquemaTipo y deben expandirse
+        if (d.esquemaPago && d.esquemaPago.trim().length > 50) return d.esquemaPago;
+        // Si esquemaPago es un tipo corto, usarlo como esquemaTipo
+        if (d.esquemaPago && !d.esquemaTipo) {
+            const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico'];
+            const lower = d.esquemaPago.trim().toLowerCase();
+            if (shortKeys.some(k => lower.includes(k))) {
+                d.esquemaTipo = d.esquemaPago.trim();
+            }
+        }
         const fmt = (v) => '$' + new Intl.NumberFormat('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
         
         // Fechas default
@@ -650,6 +660,23 @@ export const generateQuotePDF = async (data) => {
 
     yPos += 3; // Menor espacio desde la tabla
 
+    // Verificar si la sección de totales + pagos + esquema cabe en esta página
+    // Totales (24) + pagos (30) + esquema (~40) + footer (30) = ~124mm mínimo
+    if (yPos + 90 > pageHeight) {
+        // Dibujar footer en la página actual
+        const footerYCurr = pageHeight - 20;
+        doc.setFillColor(...darkBlue);
+        doc.triangle(0, pageHeight, 0, footerYCurr + 5, pageWidth, footerYCurr, 'F');
+        doc.triangle(0, pageHeight, pageWidth, footerYCurr, pageWidth, pageHeight, 'F');
+        doc.setFillColor(...accentOrange);
+        doc.triangle(0, footerYCurr + 5, pageWidth, footerYCurr, pageWidth, footerYCurr - 3, 'F');
+        doc.triangle(0, footerYCurr + 5, 0, footerYCurr + 2, pageWidth, footerYCurr - 3, 'F');
+        doc.triangle(0, footerYCurr + 5, 0, footerYCurr, pageWidth, footerYCurr - 3, 'F');
+
+        doc.addPage();
+        yPos = margin;
+    }
+
     // ============ SECCIÓN DE TOTALES Y CTA (Compacta) ============
     const boxHeight = 24; // Altura muy compacta (antes 32)
     const ctaWidth = contentWidth * 0.35;
@@ -1029,6 +1056,33 @@ export const generateQuotePDF = async (data) => {
 
     const firmaCenterX = margin + 145;
 
+    // --- Calcular espacio necesario para esquema + firma + nota + footer ---
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    const esquemaLines = doc.splitTextToSize(quoteData.esquemaPago, colWidth);
+    const paymentLineHeight = 3.5 * 1.15;
+    const esquemaHeight = 5 + (esquemaLines.length * paymentLineHeight) + 5; // título + líneas + margen
+    const firmaHeight = 20; // Atentamente + TESIPEDIA + subtítulo
+    const notaFooterHeight = 30; // nota de validez + footer diagonal
+    const spaceNeeded = Math.max(esquemaHeight, firmaHeight) + notaFooterHeight;
+    const spaceAvailable = pageHeight - yPos;
+
+    // Si no cabe, agregar nueva página y redibujar footer en la primera
+    if (spaceNeeded > spaceAvailable) {
+        // Dibujar footer en la página actual (antes de crear la nueva)
+        const footerY1 = pageHeight - 20;
+        doc.setFillColor(...darkBlue);
+        doc.triangle(0, pageHeight, 0, footerY1 + 5, pageWidth, footerY1, 'F');
+        doc.triangle(0, pageHeight, pageWidth, footerY1, pageWidth, pageHeight, 'F');
+        doc.setFillColor(...accentOrange);
+        doc.triangle(0, footerY1 + 5, pageWidth, footerY1, pageWidth, footerY1 - 3, 'F');
+        doc.triangle(0, footerY1 + 5, 0, footerY1 + 2, pageWidth, footerY1 - 3, 'F');
+        doc.triangle(0, footerY1 + 5, 0, footerY1, pageWidth, footerY1 - 3, 'F');
+
+        doc.addPage();
+        yPos = margin;
+    }
+
     const startSectionY = yPos;
 
     // --- Columna 1: Esquema de Pago ---
@@ -1043,8 +1097,6 @@ export const generateQuotePDF = async (data) => {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...darkGray);
 
-    const esquemaLines = doc.splitTextToSize(quoteData.esquemaPago, colWidth);
-    const paymentLineHeight = 3.5 * 1.15;
     esquemaLines.forEach((line, i) => {
         doc.text(line, col1X, col1Y + 5 + (i * paymentLineHeight));
     });
@@ -1061,7 +1113,7 @@ export const generateQuotePDF = async (data) => {
 
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...darkBlue);
-    doc.setFontSize(12); // Aumentado a 1.5x (de 10 a 15)
+    doc.setFontSize(12);
     doc.text('TESIPEDIA', firmaCenterX, col2Y, { align: 'center' });
 
     doc.setFontSize(8);
@@ -1069,7 +1121,7 @@ export const generateQuotePDF = async (data) => {
     doc.text('Servicios Académicos Profesionales', firmaCenterX, col2Y + 5, { align: 'center' });
 
     // --- Sección Final: Nota de Validez (Posición fija) ---
-    const finalNoteY = pageHeight - 25; // Bajado 30px (de -25 a -55)
+    const finalNoteY = pageHeight - 25;
 
     doc.setFontSize(7);
     doc.setFont('helvetica', 'bold');
@@ -1082,15 +1134,13 @@ export const generateQuotePDF = async (data) => {
 
     // Fondo azul oscuro diagonal (Completo hasta abajo)
     doc.setFillColor(...darkBlue);
-    // Triángulo 1 (Parte superior del corte)
     doc.triangle(0, pageHeight, 0, footerY + 5, pageWidth, footerY, 'F');
-    // Triángulo 2 (Relleno esquina inferior derecha restante)
     doc.triangle(0, pageHeight, pageWidth, footerY, pageWidth, pageHeight, 'F');
 
     // Línea naranja diagonal
     doc.setFillColor(...accentOrange);
     doc.triangle(0, footerY + 5, pageWidth, footerY, pageWidth, footerY - 3, 'F');
-    doc.triangle(0, footerY + 5, 0, footerY + 2, pageWidth, footerY - 3, 'F'); // Completar grosor si es necesario
+    doc.triangle(0, footerY + 5, 0, footerY + 2, pageWidth, footerY - 3, 'F');
     doc.triangle(0, footerY + 5, 0, footerY, pageWidth, footerY - 3, 'F');
 
     // ============ RETORNAR BUFFER PARA MANTENER COMPATIBILIDAD CON ENTORNO NODE ============
