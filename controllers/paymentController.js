@@ -11,6 +11,7 @@ import { generateTrackingToken } from '../utils/tokenGenerator.js';
 import jwt from 'jsonwebtoken';
 import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPaymentStatusFromGuest } from './guestPaymentController.js';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
+import { autoSyncProject, autoSyncPaymentSchedule } from './googleCalendarController.js';
 
 
 // 💳 Crear sesión de pago con Stripe
@@ -604,10 +605,15 @@ export const createManualPayment = asyncHandler(async (req, res) => {
     // Vincular proyecto al pago
     payment.project = linkedProject._id;
     await payment.save();
+
+    // Auto-sync al Google Calendar (fire-and-forget)
+    autoSyncProject(linkedProject).catch(err => console.warn('[ManualPayment] AutoSync project error:', err.message));
   } catch (err) {
     console.error('[ManualPayment] Error creando proyecto vinculado:', err.message);
-    // El pago se creó correctamente, el proyecto es complementario
   }
+
+  // Auto-sync parcialidades al calendario (fire-and-forget)
+  autoSyncPaymentSchedule({ ...payment.toObject(), clientName, clientPhone, title }).catch(err => console.warn('[ManualPayment] AutoSync payment error:', err.message));
 
   res.status(201).json({
     payment,
@@ -809,6 +815,9 @@ export const createProjectFromPayment = asyncHandler(async (req, res) => {
     client: clientUser?._id || null,
     payment: paymentRef || null,
   });
+
+  // Auto-sync al Google Calendar
+  autoSyncProject(project).catch(err => console.warn('[CreateProject] AutoSync error:', err.message));
 
   res.status(201).json({
     project,

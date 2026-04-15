@@ -7,7 +7,11 @@ import {
     createCalendarEvent,
     updateCalendarEvent,
     deleteCalendarEvent,
-    syncProjectToCalendar
+    syncProjectToCalendar,
+    getConnectedAdmins,
+    toggleAutoSync,
+    disconnectAdmin,
+    scheduleCall,
 } from '../controllers/googleCalendarController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 
@@ -15,18 +19,27 @@ const router = express.Router();
 
 // OAuth endpoints
 router.get('/auth-url', protect, admin, getAuthUrlEndpoint);
-router.get('/callback', handleCallback);
+router.get('/callback', handleCallback); // público (redirect de Google)
 
-// Status and events
+// Multi-admin management
+router.get('/admins', protect, admin, getConnectedAdmins);
+router.get('/status', protect, admin, getConnectionStatus);
+router.post('/toggle-autosync', protect, admin, toggleAutoSync);
+router.post('/disconnect', protect, admin, disconnectAdmin);
+
+// Legacy compat
 router.get('/connection-status', protect, admin, getConnectionStatus);
-router.get('/events', protect, admin, getCalendarEvents);
 
-// Event management
+// Events
+router.get('/events', protect, admin, getCalendarEvents);
 router.post('/events', protect, admin, createCalendarEvent);
 router.put('/events/:eventId', protect, admin, updateCalendarEvent);
 router.delete('/events/:eventId', protect, admin, deleteCalendarEvent);
 
 // Project sync
 router.post('/sync-project/:projectId', protect, admin, syncProjectToCalendar);
+
+// Agendar llamada (desde WhatsApp)
+router.post('/schedule-call', protect, admin, scheduleCall);
 
 export default router;
