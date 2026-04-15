@@ -360,6 +360,106 @@ export const syncProjectToCalendar = asyncHandler(async (req, res) => {
     res.json(event.data);
 });
 
+// POST /google/bulk-sync — sincronizar TODOS los proyectos activos + pagos pendientes
+export const bulkSync = asyncHandler(async (req, res) => {
+    const { adminKey } = req.body;
+    const admin = (adminKey || 'arturo').toLowerCase().trim();
+
+    const calendar = await getAdminCalendarClient(admin);
+
+    // 1. Proyectos activos (no completados ni cancelados)
+    const projects = await Project.find({
+        status: { $in: ['pending', 'in_progress', 'review'] },
+        dueDate: { $ne: null },
+    }).populate('client', 'name email phone').lean();
+
+    let syncedProjects = 0;
+    for (const p of projects) {
+        try {
+            const summary = `📋 ${p.taskTitle || p.taskType || 'Proyecto'}`;
+            const desc = [
+                `Cliente: ${p.clientName || p.client?.name || 'N/A'}`,
+                p.taskType ? `Tipo: ${p.taskType}` : '',
+                p.career ? `Carrera: ${p.career}` : '',
+                p.clientPhone || p.client?.phone ? `Tel: ${p.clientPhone || p.client?.phone}` : '',
+                `Estado: ${p.status}`,
+            ].filter(Boolean).join('\n');
+
+            const eventData = {
+                summary,
+                description: desc,
+                start: { date: new Date(p.dueDate).toISOString().split('T')[0] },
+                end: { date: new Date(p.dueDate).toISOString().split('T')[0] },
+                colorId: COLOR_MAP[p.priority] || '5',
+            };
+
+            if (p.googleCalendarEventId) {
+                try {
+                    await calendar.events.update({ calendarId: 'primary', eventId: p.googleCalendarEventId, resource: eventData });
+                } catch (updateErr) {
+                    // Evento no existe, crear uno nuevo
+                    const created = await calendar.events.insert({ calendarId: 'primary', resource: eventData });
+                    await Project.findByIdAndUpdate(p._id, { googleCalendarEventId: created.data.id });
+                }
+            } else {
+                const created = await calendar.events.insert({ calendarId: 'primary', resource: eventData });
+                await Project.findByIdAndUpdate(p._id, { googleCalendarEventId: created.data.id });
+            }
+            syncedProjects++;
+        } catch (err) {
+            console.warn(`[BulkSync] Error syncing project ${p._id}:`, err.message);
+        }
+    }
+
+    // 2. Pagos con parcialidades pendientes
+    const Payment = (await import('../models/Payment.js')).default;
+    const payments = await Payment.find({
+        'schedule.status': 'pending',
+        'schedule.dueDate': { $gte: new Date() },
+    }).lean();
+
+    let syncedPayments = 0;
+    for (const pay of payments) {
+        for (const inst of (pay.schedule || [])) {
+            if (inst.status === 'paid' || !inst.dueDate || new Date(inst.dueDate) < new Date()) continue;
+            try {
+                const summary = `💰 Pago: ${pay.clientName || 'Cliente'} — ${inst.label || `Pago ${inst.number}`}`;
+                const desc = [
+                    `Monto: $${(inst.amount || 0).toLocaleString('es-MX')}`,
+                    `Proyecto: ${pay.title || 'N/A'}`,
+                    pay.clientPhone ? `Tel: ${pay.clientPhone}` : '',
+                ].filter(Boolean).join('\n');
+
+                await calendar.events.insert({
+                    calendarId: 'primary',
+                    resource: {
+                        summary,
+                        description: desc,
+                        start: { date: new Date(inst.dueDate).toISOString().split('T')[0] },
+                        end: { date: new Date(inst.dueDate).toISOString().split('T')[0] },
+                        colorId: '10',
+                    },
+                });
+                syncedPayments++;
+            } catch (err) {
+                console.warn(`[BulkSync] Error syncing payment installment:`, err.message);
+            }
+        }
+    }
+
+    // 3. Cotizaciones Sofia pagadas con parcialidades
+    const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+    const paidQuotes = await GeneratedQuote.find({ status: 'paid' }).lean();
+    // Solo las que tienen esquema multi-pago (generado en el dashboard)
+
+    res.json({
+        success: true,
+        syncedProjects,
+        syncedPayments,
+        totalProjects: projects.length,
+    });
+});
+
 // POST /google/schedule-call — agendar llamada desde WhatsApp
 export const scheduleCall = asyncHandler(async (req, res) => {
     const { adminKey, clientName, clientPhone, date, time, notes } = req.body;

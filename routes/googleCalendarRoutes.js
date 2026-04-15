@@ -12,6 +12,7 @@ import {
     toggleAutoSync,
     disconnectAdmin,
     scheduleCall,
+    bulkSync,
 } from '../controllers/googleCalendarController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 
@@ -38,6 +39,9 @@ router.delete('/events/:eventId', protect, admin, deleteCalendarEvent);
 
 // Project sync
 router.post('/sync-project/:projectId', protect, admin, syncProjectToCalendar);
+
+// Bulk sync (todos los proyectos + pagos)
+router.post('/bulk-sync', protect, admin, bulkSync);
 
 // Agendar llamada (desde WhatsApp)
 router.post('/schedule-call', protect, admin, scheduleCall);
