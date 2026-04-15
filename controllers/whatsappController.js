@@ -1066,7 +1066,7 @@ export const sendReengagement = asyncHandler(async (req, res) => {
   // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   // Optimizado: NO traer historial_chat en la query masiva — se obtiene individualmente al enviar
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(500);
@@ -1074,7 +1074,7 @@ export const sendReengagement = asyncHandler(async (req, res) => {
   }
   const allLeads = await response.json();
 
-  // 2. Filtrar admins
+  // 2. Filtrar admins y leads que ya pagaron
   const stuckLeads = allLeads.filter(l => !ADMIN_IDS.includes(l.wa_id));
 
   if (stuckLeads.length === 0) {
@@ -1479,6 +1479,9 @@ function buildRevivalMessage(lead, tier) {
     return `${saludo}, te escribe Sofia de Tesipedia! Queria dar seguimiento a nuestra platica anterior. Sigues necesitando apoyo con tu proyecto academico? Estoy aqui para ayudarte.`;
   }
 
+  // Nota de opt-out para tiers 7+
+  const OPT_OUT = '\n\n_Si ya no deseas recibir mas mensajes, escribe *STOP* y no te contactaremos de nuevo._';
+
   // ═══════════════════════════════
   // TIER 7 DÍAS — Mencionar beneficio, crear urgencia suave
   // ═══════════════════════════════
@@ -1495,7 +1498,7 @@ function buildRevivalMessage(lead, tier) {
     if (estado === 'descartado') {
       return `${saludo}, soy Sofia de Tesipedia! Queria escribirte porque muchos estudiantes regresan justo en esta epoca. Si tu ${tieneProyecto ? proyectoLabel : 'proyecto academico'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue pendiente, tenemos asesoria inicial sin costo para retomar. Puedo orientarte?`;
     }
-    return `${saludo}, te escribe Sofia de Tesipedia! Ha pasado una semana y queria saber si puedo ayudarte con algo. Tenemos disponibilidad esta semana y asesoria sin compromiso. Me cuentas?`;
+    return `${saludo}, te escribe Sofia de Tesipedia! Ha pasado una semana y queria saber si puedo ayudarte con algo. Tenemos disponibilidad esta semana y asesoria sin compromiso. Me cuentas?` + OPT_OUT;
   }
 
   // ═══════════════════════════════
@@ -1503,18 +1506,18 @@ function buildRevivalMessage(lead, tier) {
   // ═══════════════════════════════
   if (tier === 14) {
     if (estado === 'bienvenida') {
-      return `${saludo}, soy Sofia de Tesipedia! Han pasado dos semanas y se que el semestre avanza rapido. No dejes tu proyecto academico para el final: tenemos un 10% de descuento especial para quienes retoman su cotizacion esta semana. Te interesa saber mas?`;
+      return `${saludo}, soy Sofia de Tesipedia! Han pasado dos semanas y se que el semestre avanza rapido. No dejes tu proyecto academico para el final: tenemos un 10% de descuento especial para quienes retoman su cotizacion esta semana. Te interesa saber mas?` + OPT_OUT;
     }
     if (estado === 'calificando') {
-      return `${saludo}, soy Sofia de Tesipedia! Tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue en nuestro sistema y no quiero que pierdas la oportunidad. Esta quincena tenemos un descuento del 10% para retomar proyectos. Quieres que completemos tu cotizacion?`;
+      return `${saludo}, soy Sofia de Tesipedia! Tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue en nuestro sistema y no quiero que pierdas la oportunidad. Esta quincena tenemos un descuento del 10% para retomar proyectos. Quieres que completemos tu cotizacion?` + OPT_OUT;
     }
     if (estado === 'cotizando') {
-      return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} ya tiene dos semanas esperandote. Para motivarte a decidir, tenemos un 10% de descuento si confirmas esta semana. Te la reenvio con el precio especial?`;
+      return `${saludo}, soy Sofia de Tesipedia! Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} ya tiene dos semanas esperandote. Para motivarte a decidir, tenemos un 10% de descuento si confirmas esta semana. Te la reenvio con el precio especial?` + OPT_OUT;
     }
     if (estado === 'descartado') {
-      return `${saludo}, soy Sofia de Tesipedia! Se que ha pasado tiempo, pero queria ofrecerte algo especial: 10% de descuento en cualquiera de nuestros servicios si retomas tu proyecto esta semana. ${tieneTema ? `Tu tema "${lead.tema}" suena muy interesante y me encantaria ayudarte.` : 'Me encantaria ayudarte con tu proyecto academico.'} Que dices?`;
+      return `${saludo}, soy Sofia de Tesipedia! Se que ha pasado tiempo, pero queria ofrecerte algo especial: 10% de descuento en cualquiera de nuestros servicios si retomas tu proyecto esta semana. ${tieneTema ? `Tu tema "${lead.tema}" suena muy interesante y me encantaria ayudarte.` : 'Me encantaria ayudarte con tu proyecto academico.'} Que dices?` + OPT_OUT;
     }
-    return `${saludo}, te escribe Sofia de Tesipedia! Ya pasaron dos semanas y tenemos una promocion especial: 10% de descuento para proyectos que se retomen esta semana. Te interesa?`;
+    return `${saludo}, te escribe Sofia de Tesipedia! Ya pasaron dos semanas y tenemos una promocion especial: 10% de descuento para proyectos que se retomen esta semana. Te interesa?` + OPT_OUT;
   }
 
   // ═══════════════════════════════
@@ -1522,15 +1525,15 @@ function buildRevivalMessage(lead, tier) {
   // ═══════════════════════════════
   if (tier >= 30) {
     if (estado === 'bienvenida' || estado === 'descartado') {
-      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ha pasado un buen tiempo y queria escribirte por ultima vez. Si en algun momento necesitas apoyo con tu tesis o proyecto academico, aqui seguimos. Nuestro equipo tiene experiencia en mas de 500 proyectos y nos encantaria ayudarte. Solo responde este mensaje y retomamos. Exito en todo!`;
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ha pasado un buen tiempo y queria escribirte por ultima vez. Si en algun momento necesitas apoyo con tu tesis o proyecto academico, aqui seguimos. Nuestro equipo tiene experiencia en mas de 500 proyectos y nos encantaria ayudarte. Solo responde este mensaje y retomamos. Exito en todo!` + OPT_OUT;
     }
     if (estado === 'calificando') {
-      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ya paso un mes y tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue registrado con nosotros. Este es mi ultimo mensaje, pero si decides retomar, solo responde y te atendemos de inmediato. Nuestro equipo ha ayudado a mas de 500 estudiantes a graduarse. Mucho exito!`;
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Ya paso un mes y tu ${tieneProyecto ? proyectoLabel : 'proyecto'}${tieneTema ? ` sobre "${lead.tema}"` : ''} sigue registrado con nosotros. Este es mi ultimo mensaje, pero si decides retomar, solo responde y te atendemos de inmediato. Nuestro equipo ha ayudado a mas de 500 estudiantes a graduarse. Mucho exito!` + OPT_OUT;
     }
     if (estado === 'cotizando') {
-      return `${saludo}, soy Sofia de Tesipedia! 🎓 Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} vencio, pero puedo generarte una nueva al instante si la necesitas. Este es mi ultimo seguimiento: si decides avanzar con tu proyecto, solo responde y retomamos donde nos quedamos. Te deseo mucho exito!`;
+      return `${saludo}, soy Sofia de Tesipedia! 🎓 Tu cotizacion${tieneTema ? ` para "${lead.tema}"` : ''} vencio, pero puedo generarte una nueva al instante si la necesitas. Este es mi ultimo seguimiento: si decides avanzar con tu proyecto, solo responde y retomamos donde nos quedamos. Te deseo mucho exito!` + OPT_OUT;
     }
-    return `${saludo}, te escribe Sofia de Tesipedia! 🎓 Ha pasado bastante tiempo. Este es mi ultimo mensaje de seguimiento, pero si algun dia necesitas apoyo academico, aqui estaremos. Solo responde y te atendemos. Mucho exito en todo!`;
+    return `${saludo}, te escribe Sofia de Tesipedia! 🎓 Ha pasado bastante tiempo. Este es mi ultimo mensaje de seguimiento, pero si algun dia necesitas apoyo academico, aqui estaremos. Solo responde y te atendemos. Mucho exito en todo!` + OPT_OUT;
   }
 
   // Fallback (no debería llegar aquí)
@@ -1563,7 +1566,9 @@ async function runRevivalCore(options = {}) {
   // Incluimos todos los estados: bienvenida, calificando, cotizando, descartado, modo_humano
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
 
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${threeDaysAgo}&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,modo_humano&order=updated_at.asc&limit=500`;
+  // Excluir bloqueados y leads que ya pagaron/compraron
+  const PAID_STATES = 'pagado,cliente_acepto,esperando_aprobacion';
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${threeDaysAgo}&bloqueado=neq.true&estado_sofia=not.in.(${PAID_STATES})&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,modo_humano&order=updated_at.asc&limit=500`;
 
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
@@ -2169,7 +2174,45 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
     console.error('❌ Error enviando mensaje pendiente:', pendingErr.message);
   }
 
-  res.json({ ok: true, media_processed: !!mediaUrl, mediaUrl: mediaUrl || undefined });
+  // ── DETECCIÓN DE OPT-OUT (STOP / no más mensajes) ──
+  const msgLower = (messageText || '').toLowerCase().trim();
+  const STOP_KEYWORDS = ['stop', 'para', 'basta', 'no mas mensajes', 'no más mensajes', 'dejen de escribir', 'no me escriban', 'ya no quiero mensajes', 'cancelar mensajes', 'no quiero recibir'];
+  const isOptOut = STOP_KEYWORDS.some(kw => msgLower === kw || msgLower.includes(kw));
+
+  if (isOptOut) {
+    try {
+      console.log(`🛑 Opt-out detectado de ${wa_id}: "${messageText}"`);
+      // Bloquear el lead
+      const blockUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`;
+      await fetch(blockUrl, {
+        method: 'PATCH',
+        headers: supabaseHeaders(),
+        body: JSON.stringify({
+          bloqueado: true,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+
+      // Enviar mensaje de confirmación
+      const cleanNumber = wa_id.replace(/\D/g, '');
+      await fetch(`https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: cleanNumber,
+          type: 'text',
+          text: { body: 'Entendido, no te enviaremos mas mensajes. Si en algun momento necesitas ayuda con tu proyecto academico, solo escribenos y con gusto te atendemos. Mucho exito! 🎓' },
+        }),
+      });
+
+      console.log(`✅ Lead ${wa_id} bloqueado por opt-out y confirmación enviada`);
+    } catch (optOutErr) {
+      console.error('❌ Error procesando opt-out:', optOutErr.message);
+    }
+  }
+
+  res.json({ ok: true, media_processed: !!mediaUrl, mediaUrl: mediaUrl || undefined, opted_out: isOptOut || undefined });
 });
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -2263,8 +2306,8 @@ async function runQuoteFollowUpCore(options = {}) {
   // 3. Se actualizaron hace más de 1 día (para dar tiempo a que respondan)
   const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Query: leads cotizados que no han respondido en 1+ día
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&or=(estado_sofia.eq.cotizacion_enviada,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
+  // Query: leads cotizados que no han respondido en 1+ día (excluye pagados y bloqueados)
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&estado_sofia=not.in.(pagado,cliente_acepto)&or=(estado_sofia.eq.cotizacion_enviada,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
 
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
