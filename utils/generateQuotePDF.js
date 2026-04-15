@@ -205,7 +205,12 @@ export const generateQuotePDF = async (data) => {
         esquemaPago: generarEsquema(precioConDescuentoCalc, data),
         metodoPago: data.metodoPago || 'tarjeta-nu', // ← Forzamos default tarjeta NU
         tiempoEntrega: data.tiempoEntrega || '3 semanas',
-        fechaEntrega: data.fechaEntrega || ''
+        fechaEntrega: (() => {
+            const fe = data.fechaEntrega || '';
+            // Si es formato ISO (YYYY-MM-DD), convertir a legible
+            if (fe.match(/^\d{4}-\d{2}-\d{2}$/)) return formatDateForDisplay(fe);
+            return fe;
+        })()
     };
 
     // Letter size: 215.9mm x 279.4mm
