@@ -189,9 +189,14 @@ export const generateQuotePDF = async (data) => {
     const precioConDescuentoCalc = parseFloat(data.precioConDescuento) || (precioConRecargo - descuentoMontoCalc);
 
     // Normalizar datos del frontend (mapear datos del form)
+    // Resolver "Otro" en tipoTrabajo → usar tituloTrabajo o customTipoTrabajo
+    const tipoTrabajoResuelto = (data.tipoTrabajo === 'Otro')
+        ? (data.customTipoTrabajo || data.tituloTrabajo || 'Proyecto académico')
+        : (data.tipoTrabajo || data.taskType || '');
+
     const quoteData = {
         clientName: data.clientName || data.nombre || 'Cliente',
-        tipoTrabajo: data.tipoTrabajo || data.taskType || '',
+        tipoTrabajo: tipoTrabajoResuelto,
         extensionEstimada: data.extensionEstimada || data.paginas || data.pages || '',
         descripcionServicio: generarDescripcion(data),
         serviciosIncluidos: data.serviciosIncluidos || ['1 Escáner antiplagio.', '1 Escáner anti-IA.', '1 Correcciones de fondo y estilo del asesor y sinodales.', '1 Asesoría 1:1 en cuanto se entregue versión preliminar.'],
