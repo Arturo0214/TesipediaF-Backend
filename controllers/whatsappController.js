@@ -209,7 +209,7 @@ export const getLeads = asyncHandler(async (req, res) => {
   }
   if (search && search.trim()) {
     const q = encodeURIComponent(search.trim());
-    andConditions.push(`or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*)`);
+    andConditions.push(`or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,historial_chat.ilike.*${q}*)`);
   }
 
   // Combinar: un solo or=() para origen, y condiciones AND para el resto
