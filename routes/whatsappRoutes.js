@@ -8,6 +8,7 @@ import {
   getLeadsStats,
   getWindowStatus,
   toggleModoHumano,
+  toggleAutoPaused,
   updateLeadEstado,
   sendMessage,
   sendTemplate,
@@ -49,8 +50,11 @@ router.get('/leads-status', getLeadsStatus);
 router.get('/leads/:waId', getLeadByWaId);
 router.get('/leads/:waId/window-status', getWindowStatus);
 
-// Toggle modo humano
+// Toggle modo humano (detiene Sofia bot)
 router.patch('/leads/:waId/modo-humano', toggleModoHumano);
+
+// Toggle auto_paused (pausa automatizaciones: revival, follow-up, reengagement)
+router.patch('/leads/:waId/auto-paused', toggleAutoPaused);
 
 // Actualizar estado del lead
 router.patch('/leads/:waId/estado', updateLeadEstado);

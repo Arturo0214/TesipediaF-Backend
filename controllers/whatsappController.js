@@ -163,7 +163,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'paginas', 'paginas_avance', 'tipo_trabajo', 'fecha_entrega',
     'tiene_tema', 'tiene_avance', 'boton_actual', 'control_humano',
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
-    'tema', 'pdf_url', 'modo_humano', 'atendido_por',
+    'tema', 'pdf_url', 'modo_humano', 'auto_paused', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
     'ultimo_mensaje_preview', 'notas_admin', 'etiquetas',
   ].join(',');
@@ -338,6 +338,32 @@ export const toggleModoHumano = asyncHandler(async (req, res) => {
   if (!response.ok) {
     res.status(response.status);
     throw new Error('Error al cambiar modo humano');
+  }
+  const data = await response.json();
+  res.json({ success: true, data });
+});
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/auto-paused
+ * Pausar/reanudar automatizaciones (revival, follow-up, reengagement) para un lead.
+ * DISTINTO a modo_humano (que solo detiene a Sofia bot).
+ */
+export const toggleAutoPaused = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { auto_paused } = req.body;
+
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      auto_paused: Boolean(auto_paused),
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    res.status(response.status);
+    throw new Error('Error al cambiar auto_paused');
   }
   const data = await response.json();
   res.json({ success: true, data });
@@ -1066,7 +1092,7 @@ export const sendReengagement = asyncHandler(async (req, res) => {
   // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   // Optimizado: NO traer historial_chat en la query masiva — se obtiene individualmente al enviar
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=gte.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&auto_paused=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega`;
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
     res.status(500);
@@ -1193,7 +1219,7 @@ async function runAutoReminder() {
   try {
     // Leads que NO se han actualizado en los ultimos N minutos
     // Optimizado: NO traer historial_chat en query masiva — se obtiene individualmente
-    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${autoReminder.maxPerRun}`;
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(bienvenida,calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&auto_paused=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${autoReminder.maxPerRun}`;
     const resp = await fetch(url, { headers: supabaseHeaders() });
     if (!resp.ok) {
       console.error('Auto-reminder: error Supabase', resp.status);
@@ -1568,7 +1594,7 @@ async function runRevivalCore(options = {}) {
 
   // Excluir bloqueados y leads que ya pagaron/compraron
   const PAID_STATES = 'pagado,cliente_acepto,esperando_aprobacion';
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${threeDaysAgo}&bloqueado=neq.true&estado_sofia=not.in.(${PAID_STATES})&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,modo_humano&order=updated_at.asc&limit=500`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${threeDaysAgo}&bloqueado=neq.true&modo_humano=neq.true&auto_paused=neq.true&estado_sofia=not.in.(${PAID_STATES})&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,modo_humano&order=updated_at.asc&limit=500`;
 
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
@@ -2307,7 +2333,7 @@ async function runQuoteFollowUpCore(options = {}) {
   const oneDayAgo = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
 
   // Query: leads cotizados que no han respondido en 1+ día (excluye pagados y bloqueados)
-  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&estado_sofia=not.in.(pagado,cliente_acepto)&or=(estado_sofia.eq.cotizacion_enviada,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
+  const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${oneDayAgo}&bloqueado=neq.true&auto_paused=neq.true&estado_sofia=not.in.(pagado,cliente_acepto)&or=(estado_sofia.eq.cotizacion_enviada,and(estado_sofia.eq.cotizando,precio.neq.null))&select=wa_id,nombre,estado_sofia,updated_at,created_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega,precio,cotizacion_enviada,modo_humano,pdf_url&order=updated_at.asc&limit=500`;
 
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
@@ -3458,7 +3484,7 @@ async function runCalificacionFollowUp() {
   const since = new Date(Date.now() - calificacionFollowUp.staleMinutes * 60 * 1000).toISOString();
 
   try {
-    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${calificacionFollowUp.maxPerRun}`;
+    const url = `${SUPABASE_URL}/rest/v1/leads?updated_at=lt.${since}&estado_sofia=in.(calificando,cotizando)&modo_humano=eq.false&bloqueado=neq.true&auto_paused=neq.true&select=wa_id,nombre,estado_sofia,updated_at,tipo_servicio,tipo_proyecto,nivel,carrera,tema,paginas,fecha_entrega&order=updated_at.asc&limit=${calificacionFollowUp.maxPerRun}`;
     const resp = await fetch(url, { headers: supabaseHeaders() });
     if (!resp.ok) {
       calificacionFollowUp.lastResult = { error: 'Supabase error ' + resp.status, time: new Date().toISOString() };
