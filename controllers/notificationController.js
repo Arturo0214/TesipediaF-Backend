@@ -24,10 +24,19 @@ export const createNotification = asyncHandler(async (req, res) => {
 // @route   GET /api/notifications
 // @access  Private
 export const getMyNotifications = asyncHandler(async (req, res) => {
-  const notifications = await Notification.find({ user: req.user._id })
-    .sort({ createdAt: -1 });
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const offset = parseInt(req.query.offset) || 0;
 
-  res.json(notifications);
+  const [notifications, total, unreadCount] = await Promise.all([
+    Notification.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limit),
+    Notification.countDocuments({ user: req.user._id }),
+    Notification.countDocuments({ user: req.user._id, isRead: false }),
+  ]);
+
+  res.json({ notifications, total, unreadCount, limit, offset, hasMore: offset + notifications.length < total });
 });
 
 // @desc    Obtener todas las notificaciones (admin)

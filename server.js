@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import compression from 'compression';
 import http from 'http';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
@@ -66,6 +67,7 @@ connectDB().then(async () => {
 const app = express();
 
 // Middlewares globales
+app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(helmet());
