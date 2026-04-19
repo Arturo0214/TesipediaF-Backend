@@ -207,11 +207,6 @@ export const getLeads = asyncHandler(async (req, res) => {
     andConditions.push(`created_at=gte.${fecha}T00:00:00`);
     andConditions.push(`created_at=lt.${fecha}T23:59:59`);
   }
-  if (search && search.trim()) {
-    const q = encodeURIComponent(search.trim());
-    andConditions.push(`or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,ultimo_mensaje_preview.ilike.*${q}*)`);
-  }
-
   // Combinar: un solo or=() para origen, y condiciones AND para el resto
   let extraFilters = '';
   if (orConditions.length > 0) {
@@ -219,6 +214,20 @@ export const getLeads = asyncHandler(async (req, res) => {
   }
   for (const cond of andConditions) {
     extraFilters += `&${cond}`;
+  }
+  // Search: PostgREST no permite dos or=() al mismo nivel, así que el search
+  // se agrega como un or=() separado (funciona si no hay otro or=() de origen,
+  // y si hay, usamos la sintaxis de filtro client-side como fallback)
+  let searchFilter = '';
+  if (search && search.trim()) {
+    const q = encodeURIComponent(search.trim());
+    // Si ya hay un or=() de origen, mover el search a client-side filtering
+    if (orConditions.length > 0) {
+      // No se puede tener dos or=() en PostgREST — filtrar client-side después
+      searchFilter = search.trim().toLowerCase();
+    } else {
+      extraFilters += `&or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,ultimo_mensaje_preview.ilike.*${q}*)`;
+    }
   }
 
   // ── Paginación (query params ?limit=100&offset=0) ──
@@ -229,16 +238,18 @@ export const getLeads = asyncHandler(async (req, res) => {
   // Query 1: metadata de leads filtrados (paginado)
   const allFilters = extraFilters;
   const metaUrl = `${SUPABASE_URL}/rest/v1/leads?select=${metaColumns}${allFilters}&order=updated_at.desc${paginationParams}`;
-  // Query 2: historial de los leads del lote (para preview + _lastMsgIsUser correcto)
-  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat${allFilters}&order=updated_at.desc&limit=${limit}&offset=${offset}`;
+  // Query 2: ELIMINADA — ya no traemos historial_chat para previews (ahorro masivo de egress)
+  // Antes: traía historial_chat completo de TODOS los leads del lote (~100KB+ por lead)
+  // Ahora: el preview se construye con el campo 'ultimo_mensaje' que ya existe en la metadata
+  const previewUrl = null;
   // Query 3: conteo total (solo header, sin datos)
   const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id${allFilters}`;
 
-  const [metaResp, previewResp, countResp] = await Promise.all([
+  const [metaResp, countResp] = await Promise.all([
     fetch(metaUrl, { headers: supabaseHeaders() }),
-    fetch(previewUrl, { headers: supabaseHeaders() }),
     fetch(countUrl, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact', 'Range': '0-0' } }),
   ]);
+  const previewResp = { ok: false }; // Previews disabled to reduce egress
 
   if (!metaResp.ok) {
     const errorText = await metaResp.text();
@@ -250,33 +261,20 @@ export const getLeads = asyncHandler(async (req, res) => {
 
   // Extraer previews del último mensaje
   const previewMap = new Map();
-  if (previewResp.ok) {
-    const previewData = await previewResp.json();
-    for (const row of previewData) {
-      let hist = row.historial_chat;
-      if (typeof hist === 'string') {
-        try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
-      }
-      if (Array.isArray(hist) && hist.length > 0) {
-        // Guardar último mensaje como preview + último como historial_chat recortado
-        previewMap.set(row.wa_id, {
-          preview: buildLastMessagePreview(hist),
-          lastMsg: hist[hist.length - 1],
-        });
-      }
-    }
+  // Preview ahora viene de metaColumns (ultimo_mensaje_preview), no de historial_chat
+
+  // Filtrado client-side de búsqueda cuando PostgREST no puede combinar dos or=()
+  let filteredLeads = allLeads;
+  if (searchFilter) {
+    filteredLeads = allLeads.filter(lead => {
+      const fields = [lead.nombre, lead.wa_id, lead.carrera, lead.tema, lead.atendido_por, lead.ultimo_mensaje_preview];
+      return fields.some(f => f && String(f).toLowerCase().includes(searchFilter));
+    });
   }
 
-  // Enriquecer leads con preview
-  const enriched = allLeads.map(lead => {
-    const info = previewMap.get(lead.wa_id);
-    if (info) {
-      lead.ultimo_mensaje_preview = info.preview;
-      // Enviar solo el último mensaje como historial recortado (para unread detection)
-      lead.historial_chat = JSON.stringify([info.lastMsg]);
-      // Marcar si el último mensaje es del usuario (necesita atención)
-      lead._lastMsgIsUser = info.lastMsg?.role === 'user';
-    }
+  // Enriquecer leads con preview (ahora viene de metaColumns, sin descargar historial_chat)
+  const enriched = filteredLeads.map(lead => {
+    lead._lastMsgIsUser = false;
     return lead;
   });
 
@@ -614,13 +612,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
   }
 
   // 1. Obtener historial para verificar ventana de 24h ANTES de enviar
-  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre,updated_at,atendido_por&limit=1`;
+  const getUrlPre = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=historial_chat,wa_id,nombre,updated_at,atendido_por,estado_sofia&limit=1`;
   const getResponsePre = await fetch(getUrlPre, { headers: supabaseHeaders() });
   let historialPre = [];
   let leadExistsPre = false;
   let leadNombre = '';
   let leadUpdatedAt = null;
   let leadAtendidoPor = null;
+  let leadEstadoSofia = null;
   if (getResponsePre.ok) {
     const leadDataPre = await getResponsePre.json();
     if (leadDataPre.length > 0) {
@@ -628,6 +627,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       leadNombre = leadDataPre[0]?.nombre || '';
       leadUpdatedAt = leadDataPre[0]?.updated_at || null;
       leadAtendidoPor = leadDataPre[0]?.atendido_por || null;
+      leadEstadoSofia = leadDataPre[0]?.estado_sofia || null;
       if (leadDataPre[0]?.historial_chat) {
         const raw = leadDataPre[0].historial_chat;
         if (Array.isArray(raw)) {
@@ -754,6 +754,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
     if (!leadAtendidoPor) {
       patchBody.atendido_por = adminName.toLowerCase();
     }
+    // Auto-actualizar estado cuando se envía un PDF de cotización (incluso si ventana expirada)
+    const isPdfCotizacion = file && mediaType === 'document' && /pdf/i.test(mimetype || '') && /cotizaci[oó]n|quote/i.test(filename || '');
+    const estadosCotizacion = ['cotizando', 'cotizacion_iniciada', 'cotizacion_lista'];
+    if (isPdfCotizacion && estadosCotizacion.includes(leadEstadoSofia)) {
+      patchBody.estado_sofia = 'cotizacion_enviada';
+      patchBody.cotizacion_enviada = true;
+      patchBody.pdf_url = mediaUrl;
+    }
     const patchResp = await fetch(patchUrl, {
       method: 'PATCH',
       headers: supabaseHeaders(),
@@ -877,6 +885,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
   };
   if (!leadAtendidoPor) {
     patchBody.atendido_por = adminName.toLowerCase();
+  }
+  // Auto-actualizar estado cuando se envía un PDF de cotización
+  // Detectar envío de cotización: cualquier PDF cuando el estado indica cotización lista,
+  // o un PDF cuyo nombre contiene "cotizacion/cotización/quote"
+  const isPdf = file && mediaType === 'document' && /pdf/i.test(mimetype || '');
+  const estadosCotizacion = ['cotizando', 'cotizacion_iniciada', 'cotizacion_lista'];
+  const isPdfCotizacion = isPdf && (estadosCotizacion.includes(leadEstadoSofia) || /cotizaci[oó]n|quote/i.test(filename || ''));
+  if (isPdfCotizacion) {
+    patchBody.estado_sofia = 'cotizacion_enviada';
+    patchBody.cotizacion_enviada = true;
+    patchBody.pdf_url = mediaUrl;
+    console.log(`📄 PDF de cotización detectado → estado_sofia: ${leadEstadoSofia} → cotizacion_enviada`);
   }
   const patchResp = await fetch(patchUrl, {
     method: 'PATCH',
