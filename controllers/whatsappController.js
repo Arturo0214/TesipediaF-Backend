@@ -207,28 +207,27 @@ export const getLeads = asyncHandler(async (req, res) => {
     andConditions.push(`created_at=gte.${fecha}T00:00:00`);
     andConditions.push(`created_at=lt.${fecha}T23:59:59`);
   }
-  // Combinar: un solo or=() para origen, y condiciones AND para el resto
+  // Combinar filtros para PostgREST
+  // Si hay search Y or de origen, usar and=() para anidar ambos or=()
+  // PostgREST soporta: and=(or=(a,b),or=(c,d)) pero NO dos or=() al mismo nivel
   let extraFilters = '';
-  if (orConditions.length > 0) {
+  const searchFields = search && search.trim()
+    ? `or=(nombre.ilike.*${encodeURIComponent(search.trim())}*,wa_id.ilike.*${encodeURIComponent(search.trim())}*,carrera.ilike.*${encodeURIComponent(search.trim())}*,tema.ilike.*${encodeURIComponent(search.trim())}*,atendido_por.ilike.*${encodeURIComponent(search.trim())}*,ultimo_mensaje_preview.ilike.*${encodeURIComponent(search.trim())}*,historial_chat.ilike.*${encodeURIComponent(search.trim())}*)`
+    : null;
+
+  if (orConditions.length > 0 && searchFields) {
+    // Ambos usan or=() — anidar dentro de and=() para que PostgREST los combine con AND
+    extraFilters += `&and=(or=(${orConditions.join(',')}),${searchFields})`;
+  } else if (orConditions.length > 0) {
     extraFilters += `&or=(${orConditions.join(',')})`;
+  } else if (searchFields) {
+    extraFilters += `&${searchFields}`;
   }
+
   for (const cond of andConditions) {
     extraFilters += `&${cond}`;
   }
-  // Search: PostgREST no permite dos or=() al mismo nivel, así que el search
-  // se agrega como un or=() separado (funciona si no hay otro or=() de origen,
-  // y si hay, usamos la sintaxis de filtro client-side como fallback)
-  let searchFilter = '';
-  if (search && search.trim()) {
-    const q = encodeURIComponent(search.trim());
-    // Si ya hay un or=() de origen, mover el search a client-side filtering
-    if (orConditions.length > 0) {
-      // No se puede tener dos or=() en PostgREST — filtrar client-side después
-      searchFilter = search.trim().toLowerCase();
-    } else {
-      extraFilters += `&or=(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,ultimo_mensaje_preview.ilike.*${q}*)`;
-    }
-  }
+  const searchFilter = ''; // Ya no se necesita client-side
 
   // ── Paginación (query params ?limit=100&offset=0) ──
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
