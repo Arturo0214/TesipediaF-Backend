@@ -238,7 +238,7 @@ export const generateQuotePDF = async (data) => {
 
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 20;
+    const margin = 18;
     const contentWidth = pageWidth - (margin * 2);
 
     // Formatear precio
@@ -344,7 +344,7 @@ export const generateQuotePDF = async (data) => {
     let yPos = 40;
 
     // ============ CAJA DE DATOS DE COTIZACIÓN ============
-    const dataBoxHeight = 50;
+    const dataBoxHeight = 42;
 
     // Fondo de la caja
     doc.setFillColor(250, 250, 252);
@@ -367,8 +367,8 @@ export const generateQuotePDF = async (data) => {
     doc.line(pageWidth / 2 - 25, yPos + 13, pageWidth / 2 + 25, yPos + 13);
 
     // ===== Datos del cliente (izquierda) - lista apilada =====
-    const dataY = yPos + 20;
-    const lineSpacing = 10;
+    const dataY = yPos + 18;
+    const lineSpacing = 8;
 
     // Cliente
     doc.setFontSize(7.5);
@@ -440,7 +440,7 @@ export const generateQuotePDF = async (data) => {
     const esEsquemaLargo = esquemasLargos.some(texto => quoteData.esquemaPago && quoteData.esquemaPago.toLowerCase().includes(texto));
 
     // Si es esquema largo, reducimos el margen drásticamente (2mm), sino dejamos el normal (8mm)
-    yPos += dataBoxHeight + (esEsquemaLargo ? 2 : 8);
+    yPos += dataBoxHeight + (esEsquemaLargo ? 1 : 4);
 
     // ============ DESCRIPCIÓN DEL SERVICIO ============
     // Header de la tabla con diseño diagonal
@@ -528,7 +528,7 @@ export const generateQuotePDF = async (data) => {
     const serviciosActualizados = quoteData.serviciosIncluidos.filter(s => typeof s === 'string' && s.trim());
 
     doc.setFontSize(7);
-    const rowHeight = 6;
+    const rowHeight = 5.5;
 
     serviciosActualizados.forEach((item, index) => {
         // Fondo alternado
@@ -670,11 +670,10 @@ export const generateQuotePDF = async (data) => {
     doc.setLineWidth(0.5);
     doc.line(tableX, yPos, tableX + tableWidth, yPos);
 
-    yPos += 3; // Menor espacio desde la tabla
+    yPos += 2;
 
     // Verificar si la sección de totales + pagos + esquema cabe en esta página
-    // Totales (24) + pagos (30) + esquema (~40) + footer (30) = ~124mm mínimo
-    if (yPos + 90 > pageHeight) {
+    if (yPos + 105 > pageHeight) {
         // Dibujar footer en la página actual
         const footerYCurr = pageHeight - 20;
         doc.setFillColor(...darkBlue);
@@ -690,7 +689,7 @@ export const generateQuotePDF = async (data) => {
     }
 
     // ============ SECCIÓN DE TOTALES Y CTA (Compacta) ============
-    const boxHeight = 24; // Altura muy compacta (antes 32)
+    const boxHeight = 22;
     const ctaWidth = contentWidth * 0.35;
     const totalsWidth = contentWidth * 0.6;
     const spacing = contentWidth * 0.05;
@@ -961,7 +960,7 @@ export const generateQuotePDF = async (data) => {
     doc.setFontSize(10); // Ajustado
     doc.text(`$${formatPrice(granTotal)}`, alineacionDerecha, polyY + 5.5, { align: 'right' });
 
-    yPos += boxHeight + 8;
+    yPos += boxHeight + 4;
 
     // ============ FORMAS DE PAGO ============
     // Header
@@ -977,7 +976,7 @@ export const generateQuotePDF = async (data) => {
 
     // Contenido
     doc.setFillColor(...lightGray);
-    doc.rect(margin, yPos, contentWidth, 22, 'F');
+    doc.rect(margin, yPos, contentWidth, 20, 'F');
 
     doc.setFontSize(7);
     doc.setFont('helvetica', 'bold'); // Negritas
@@ -985,9 +984,9 @@ export const generateQuotePDF = async (data) => {
     doc.text('Aceptamos Visa, Mastercard, American Express, PayPal y Mercado Pago en Meses Sin Intereses.', margin + 5, yPos + 5);
 
     // Carga de Logos de métodos de pago
-    const logoY = yPos + 9;
+    const logoY = yPos + 7;
     const logoWidth = 28;
-    const logoHeight = 12;
+    const logoHeight = 11;
     const logoSpacing = 34;
     let currentLogoX = margin + 10;
 
@@ -1057,7 +1056,7 @@ export const generateQuotePDF = async (data) => {
         console.error("Error drawing payment logos:", error);
     }
 
-    yPos += 30; // Reducido de 35 a 15 para subir las columnas 20px
+    yPos += 24;
 
     // ============ SECCIÓN FINAL ============
     // Col 1: Esquema de Pago
@@ -1075,7 +1074,7 @@ export const generateQuotePDF = async (data) => {
     const paymentLineHeight = 3.5 * 1.15;
     const esquemaHeight = 5 + (esquemaLines.length * paymentLineHeight) + 5; // título + líneas + margen
     const firmaHeight = 20; // Atentamente + TESIPEDIA + subtítulo
-    const notaFooterHeight = 30; // nota de validez + footer diagonal
+    const notaFooterHeight = 25;
     const spaceNeeded = Math.max(esquemaHeight, firmaHeight) + notaFooterHeight;
     const spaceAvailable = pageHeight - yPos;
 
