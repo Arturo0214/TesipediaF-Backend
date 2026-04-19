@@ -208,26 +208,30 @@ export const getLeads = asyncHandler(async (req, res) => {
     andConditions.push(`created_at=lt.${fecha}T23:59:59`);
   }
   // Combinar filtros para PostgREST
-  // Si hay search Y or de origen, usar and=() para anidar ambos or=()
-  // PostgREST soporta: and=(or=(a,b),or=(c,d)) pero NO dos or=() al mismo nivel
+  // PostgREST no permite dos or=() al mismo nivel, pero sí anidados: and=(or(a,b),or(c,d))
+  // IMPORTANTE: dentro de and=(), los or internos NO llevan "=" → or(a,b) no or=(a,b)
+  // historial_chat es JSONB → ilike no funciona directamente, se busca client-side
   let extraFilters = '';
-  const searchFields = search && search.trim()
-    ? `or=(nombre.ilike.*${encodeURIComponent(search.trim())}*,wa_id.ilike.*${encodeURIComponent(search.trim())}*,carrera.ilike.*${encodeURIComponent(search.trim())}*,tema.ilike.*${encodeURIComponent(search.trim())}*,atendido_por.ilike.*${encodeURIComponent(search.trim())}*,ultimo_mensaje_preview.ilike.*${encodeURIComponent(search.trim())}*,historial_chat.ilike.*${encodeURIComponent(search.trim())}*)`
+  const q = search && search.trim() ? encodeURIComponent(search.trim()) : null;
+  const searchOrFields = q
+    ? `or(nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,ultimo_mensaje_preview.ilike.*${q}*)`
     : null;
 
-  if (orConditions.length > 0 && searchFields) {
-    // Ambos usan or=() — anidar dentro de and=() para que PostgREST los combine con AND
-    extraFilters += `&and=(or=(${orConditions.join(',')}),${searchFields})`;
+  if (orConditions.length > 0 && searchOrFields) {
+    // Anidar ambos or() dentro de and=() — sintaxis: and=(or(a,b),or(c,d))
+    extraFilters += `&and=(or(${orConditions.join(',')}),${searchOrFields})`;
   } else if (orConditions.length > 0) {
     extraFilters += `&or=(${orConditions.join(',')})`;
-  } else if (searchFields) {
-    extraFilters += `&${searchFields}`;
+  } else if (searchOrFields) {
+    extraFilters += `&or=(${q ? `nombre.ilike.*${q}*,wa_id.ilike.*${q}*,carrera.ilike.*${q}*,tema.ilike.*${q}*,atendido_por.ilike.*${q}*,ultimo_mensaje_preview.ilike.*${q}*` : ''})`;
   }
 
   for (const cond of andConditions) {
     extraFilters += `&${cond}`;
   }
-  const searchFilter = ''; // Ya no se necesita client-side
+  // Para búsqueda en historial_chat (JSONB), se necesita filtrado client-side
+  // porque PostgREST no soporta ilike en JSONB
+  const searchFilter = q ? decodeURIComponent(q).toLowerCase() : '';
 
   // ── Paginación (query params ?limit=100&offset=0) ──
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
@@ -262,13 +266,31 @@ export const getLeads = asyncHandler(async (req, res) => {
   const previewMap = new Map();
   // Preview ahora viene de metaColumns (ultimo_mensaje_preview), no de historial_chat
 
-  // Filtrado client-side de búsqueda cuando PostgREST no puede combinar dos or=()
+  // Si la búsqueda en metadata no encontró resultados, buscar dentro de historial_chat (JSONB)
+  // Esto cubre búsquedas de links, contenido de mensajes, etc.
   let filteredLeads = allLeads;
-  if (searchFilter) {
-    filteredLeads = allLeads.filter(lead => {
-      const fields = [lead.nombre, lead.wa_id, lead.carrera, lead.tema, lead.atendido_por, lead.ultimo_mensaje_preview];
-      return fields.some(f => f && String(f).toLowerCase().includes(searchFilter));
-    });
+  if (searchFilter && allLeads.length === 0) {
+    // Búsqueda profunda: traer leads con historial que contenga el texto
+    // Usamos historial_chat::text para castear JSONB a TEXT y poder usar ilike
+    try {
+      const deepUrl = `${SUPABASE_URL}/rest/v1/rpc/search_leads_by_message`;
+      // Fallback: traer últimos 500 leads con historial y filtrar client-side
+      const deepSearchUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,nombre,historial_chat,estado_sofia,updated_at,atendido_por,carrera,tema,ultimo_mensaje_preview&order=updated_at.desc&limit=500`;
+      const deepResp = await fetch(deepSearchUrl, { headers: supabaseHeaders() });
+      if (deepResp.ok) {
+        const deepData = await deepResp.json();
+        filteredLeads = deepData.filter(lead => {
+          const histStr = typeof lead.historial_chat === 'string' ? lead.historial_chat : JSON.stringify(lead.historial_chat || []);
+          return histStr.toLowerCase().includes(searchFilter);
+        }).map(lead => {
+          // Remover historial_chat del response (no lo necesita la lista)
+          const { historial_chat, ...rest } = lead;
+          return rest;
+        });
+      }
+    } catch (e) {
+      console.error('Deep search error:', e.message);
+    }
   }
 
   // Enriquecer leads con preview (ahora viene de metaColumns, sin descargar historial_chat)
