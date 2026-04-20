@@ -165,7 +165,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'auto_paused', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
-    'ultimo_mensaje_preview', 'notas_admin', 'etiquetas',
+    'ultimo_mensaje_preview', 'notas_admin', 'etiquetas', 'mensajes_sin_leer',
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
@@ -295,16 +295,16 @@ export const getLeads = asyncHandler(async (req, res) => {
 
   // Enriquecer leads con preview (ahora viene de metaColumns, sin descargar historial_chat)
   const enriched = filteredLeads.map(lead => {
-    lead._lastMsgIsUser = false;
+    lead._lastMsgIsUser = (lead.mensajes_sin_leer || 0) > 0;
     return lead;
   });
 
-  // Ordenar: leads con último mensaje del usuario primero (necesitan respuesta),
+  // Ordenar: leads con mensajes sin leer primero,
   // luego el resto, ambos grupos ordenados por updated_at desc
   enriched.sort((a, b) => {
-    const aUser = a._lastMsgIsUser ? 1 : 0;
-    const bUser = b._lastMsgIsUser ? 1 : 0;
-    if (aUser !== bUser) return bUser - aUser; // user-responded first
+    const aUnread = a.mensajes_sin_leer || 0;
+    const bUnread = b.mensajes_sin_leer || 0;
+    if (aUnread !== bUnread) return bUnread - aUnread; // más sin leer primero
     return new Date(b.updated_at) - new Date(a.updated_at);
   });
 
@@ -334,7 +334,18 @@ export const getLeadByWaId = asyncHandler(async (req, res) => {
     throw new Error('Error al obtener lead');
   }
   const data = await response.json();
-  res.json(data[0] || null);
+  const lead = data[0] || null;
+
+  // Resetear contador de mensajes sin leer al abrir la conversación
+  if (lead && lead.mensajes_sin_leer > 0) {
+    fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`, {
+      method: 'PATCH',
+      headers: supabaseHeaders(),
+      body: JSON.stringify({ mensajes_sin_leer: 0 }),
+    }).catch(() => {});
+  }
+
+  res.json(lead);
 });
 
 /**
@@ -2122,6 +2133,25 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
     } catch (histErr) {
       console.error('❌ Error actualizando historial con media:', histErr.message);
     }
+  }
+
+  // ── INCREMENTAR CONTADOR DE MENSAJES SIN LEER ──
+  try {
+    // Leer el valor actual para incrementarlo (Supabase REST no soporta incremento atómico)
+    const countUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=mensajes_sin_leer`;
+    const countResp = await fetch(countUrl, { headers: supabaseHeaders() });
+    let currentCount = 0;
+    if (countResp.ok) {
+      const countData = await countResp.json();
+      if (countData.length > 0) currentCount = countData[0].mensajes_sin_leer || 0;
+    }
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`, {
+      method: 'PATCH',
+      headers: supabaseHeaders(),
+      body: JSON.stringify({ mensajes_sin_leer: currentCount + 1 }),
+    });
+  } catch (e) {
+    console.warn('⚠️ Error incrementando mensajes_sin_leer:', e.message);
   }
 
   // ── NOTIFICACIONES ──
