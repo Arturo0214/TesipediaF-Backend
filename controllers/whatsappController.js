@@ -121,17 +121,24 @@ function isWindowExpired(historial, updatedAt) {
 }
 
 // Helper: generar preview del último mensaje (para el sidebar, sin traer todo el historial)
+// Prioriza el último mensaje del LEAD (role=user) para que el admin vea qué dijo el cliente
 function buildLastMessagePreview(historial) {
   if (!Array.isArray(historial) || historial.length === 0) return '';
-  const last = historial[historial.length - 1];
-  let text = last.content || '';
-  const role = last.role || '';
+  // Buscar el último mensaje del lead (user), no del bot/admin
+  let target = null;
+  for (let i = historial.length - 1; i >= 0; i--) {
+    if (historial[i].role === 'user') { target = historial[i]; break; }
+  }
+  // Si no hay mensaje de user, usar el último disponible
+  if (!target) target = historial[historial.length - 1];
+  let text = target.content || '';
+  const role = target.role || '';
   // Limpiar tags internos
   text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
   text = text.replace(/\[STATE:[\s\S]*?\]/g, '').replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
   // Prefijo según rol
   const prefix = role === 'user' ? '👤 ' : '';
-  if (!text && last.mediaUrl) text = '📎 Archivo';
+  if (!text && target.mediaUrl) text = '📎 Archivo';
   // Truncar a 60 chars
   if (text.length > 60) text = text.substring(0, 60) + '...';
   return prefix + text;
@@ -166,7 +173,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'tema', 'pdf_url', 'modo_humano', 'auto_paused', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
     'ultimo_mensaje_preview', 'notas_admin', 'etiquetas', 'mensajes_sin_leer',
-    'ad_source', 'ad_id', 'ad_source_url', 'ad_body',
+    'ad_source', 'ad_id', 'ad_source_url', 'ad_body', 'ad_campaign_name', 'ad_name',
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
@@ -2136,7 +2143,7 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
     }
   }
 
-  // ── INCREMENTAR CONTADOR DE MENSAJES SIN LEER ──
+  // ── INCREMENTAR CONTADOR DE MENSAJES SIN LEER + ACTUALIZAR PREVIEW ──
   try {
     // Leer el valor actual para incrementarlo (Supabase REST no soporta incremento atómico)
     const countUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=mensajes_sin_leer`;
@@ -2146,10 +2153,16 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
       const countData = await countResp.json();
       if (countData.length > 0) currentCount = countData[0].mensajes_sin_leer || 0;
     }
+    // Actualizar contador + preview + timestamp en un solo PATCH
+    const leadPreview = '👤 ' + (preview.length > 60 ? preview.substring(0, 60) + '...' : preview);
     await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`, {
       method: 'PATCH',
       headers: supabaseHeaders(),
-      body: JSON.stringify({ mensajes_sin_leer: currentCount + 1 }),
+      body: JSON.stringify({
+        mensajes_sin_leer: currentCount + 1,
+        ultimo_mensaje_preview: leadPreview,
+        ultimo_mensaje_at: new Date().toISOString(),
+      }),
     });
   } catch (e) {
     console.warn('⚠️ Error incrementando mensajes_sin_leer:', e.message);
