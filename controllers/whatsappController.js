@@ -166,6 +166,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'tema', 'pdf_url', 'modo_humano', 'auto_paused', 'atendido_por',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
     'ultimo_mensaje_preview', 'notas_admin', 'etiquetas', 'mensajes_sin_leer',
+    'ad_source', 'ad_id', 'ad_source_url', 'ad_body',
   ].join(',');
 
   // ── Filtro por origen (query param ?origen=regular|manychat|all) ──
