@@ -301,7 +301,50 @@ export const getLeads = asyncHandler(async (req, res) => {
     }
   }
 
-  // Enriquecer leads con preview (ahora viene de metaColumns, sin descargar historial_chat)
+  // Backfill lazy: si un lead tiene mensajes sin leer pero no tiene preview,
+  // traer su historial individualmente para generar el preview y guardarlo
+  const needsPreview = filteredLeads.filter(l =>
+    (l.mensajes_sin_leer || 0) > 0 && !l.ultimo_mensaje_preview
+  );
+  if (needsPreview.length > 0) {
+    const waIds = needsPreview.map(l => l.wa_id);
+    const batchUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat&wa_id=in.(${waIds.join(',')})`;
+    try {
+      const batchResp = await fetch(batchUrl, { headers: supabaseHeaders() });
+      if (batchResp.ok) {
+        const batchData = await batchResp.json();
+        const previewUpdates = [];
+        for (const item of batchData) {
+          let hist = item.historial_chat;
+          if (typeof hist === 'string') {
+            try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
+          }
+          if (Array.isArray(hist) && hist.length > 0) {
+            const preview = buildLastMessagePreview(hist);
+            if (preview) {
+              // Actualizar el lead en el response
+              const lead = filteredLeads.find(l => l.wa_id === item.wa_id);
+              if (lead) lead.ultimo_mensaje_preview = preview;
+              // Guardar en Supabase para futuras requests
+              previewUpdates.push(
+                fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${item.wa_id}`, {
+                  method: 'PATCH',
+                  headers: supabaseHeaders(),
+                  body: JSON.stringify({ ultimo_mensaje_preview: preview }),
+                }).catch(() => {})
+              );
+            }
+          }
+        }
+        // Fire-and-forget: no esperar a que se guarden los previews
+        Promise.all(previewUpdates).catch(() => {});
+      }
+    } catch (e) {
+      console.warn('⚠️ Backfill preview error:', e.message);
+    }
+  }
+
+  // Enriquecer leads
   const enriched = filteredLeads.map(lead => {
     lead._lastMsgIsUser = (lead.mensajes_sin_leer || 0) > 0;
     return lead;
