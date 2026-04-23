@@ -2162,6 +2162,7 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
         mensajes_sin_leer: currentCount + 1,
         ultimo_mensaje_preview: leadPreview,
         ultimo_mensaje_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       }),
     });
   } catch (e) {
