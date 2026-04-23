@@ -120,28 +120,23 @@ function isWindowExpired(historial, updatedAt) {
   return true;
 }
 
-// Helper: generar preview del último mensaje (para el sidebar, sin traer todo el historial)
-// Prioriza el último mensaje del LEAD (role=user) para que el admin vea qué dijo el cliente
+// Helper: generar preview del último mensaje (estilo WhatsApp)
+// Siempre muestra el ÚLTIMO mensaje real. Prefijo indica quién envió:
+// 👤 = cliente (necesita respuesta), sin prefijo = bot/admin (ya respondimos)
 function buildLastMessagePreview(historial) {
   if (!Array.isArray(historial) || historial.length === 0) return '';
-  // Buscar el último mensaje del lead (user), no del bot/admin
-  let target = null;
-  for (let i = historial.length - 1; i >= 0; i--) {
-    if (historial[i].role === 'user') { target = historial[i]; break; }
-  }
-  // Si no hay mensaje de user, usar el último disponible
-  if (!target) target = historial[historial.length - 1];
-  let text = target.content || '';
-  const role = target.role || '';
+  const last = historial[historial.length - 1];
+  let text = last.content || '';
+  const role = last.role || '';
   // Limpiar tags internos
   text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
   text = text.replace(/\[STATE:[\s\S]*?\]/g, '').replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
-  // Prefijo según rol
-  const prefix = role === 'user' ? '👤 ' : '';
-  if (!text && target.mediaUrl) text = '📎 Archivo';
+  if (!text && last.mediaUrl) text = '📎 Archivo';
+  if (!text) text = '...';
   // Truncar a 60 chars
   if (text.length > 60) text = text.substring(0, 60) + '...';
-  return prefix + text;
+  // Prefijo: 👤 solo si el ÚLTIMO mensaje es del cliente
+  return role === 'user' ? '👤 ' + text : text;
 }
 
 // Helper: headers para Supabase
@@ -301,11 +296,8 @@ export const getLeads = asyncHandler(async (req, res) => {
     }
   }
 
-  // Backfill lazy: si un lead tiene mensajes sin leer pero no tiene preview,
-  // traer su historial individualmente para generar el preview y guardarlo
-  const needsPreview = filteredLeads.filter(l =>
-    (l.mensajes_sin_leer || 0) > 0 && !l.ultimo_mensaje_preview
-  );
+  // Backfill lazy: si un lead no tiene preview, traer su historial para generarlo
+  const needsPreview = filteredLeads.filter(l => !l.ultimo_mensaje_preview);
   if (needsPreview.length > 0) {
     const waIds = needsPreview.map(l => l.wa_id);
     const batchUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,historial_chat&wa_id=in.(${waIds.join(',')})`;
