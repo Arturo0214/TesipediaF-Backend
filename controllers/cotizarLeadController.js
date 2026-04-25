@@ -1,9 +1,19 @@
 import CotizarLead from '../models/CotizarLead.js';
 
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+
+const supaHeaders = () => ({
+  'apikey': SUPABASE_SERVICE_KEY,
+  'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+  'Content-Type': 'application/json',
+  'Prefer': 'resolution=merge-duplicates,return=representation',
+});
+
 /**
  * POST /cotizar-leads
  * Guarda un lead del formulario de /cotizar (público, sin auth)
- * También intenta reenviar al webhook de n8n como respaldo
+ * También lo crea en Supabase para que aparezca en el panel de WhatsApp
  */
 export const createCotizarLead = async (req, res) => {
   try {
@@ -43,6 +53,53 @@ export const createCotizarLead = async (req, res) => {
       referrer: referrer || '',
     });
 
+    // ── CREAR LEAD EN SUPABASE (aparece en panel de WhatsApp) ──
+    const rawTel = telefono.replace(/\D/g, '');
+    const wa_id = rawTel.startsWith('521') ? rawTel
+      : rawTel.startsWith('52') ? '521' + rawTel.slice(2)
+      : '521' + rawTel.slice(-10);
+
+    const resumen = `[Formulario web] ${nombre.trim()} — ${tipo_proyecto}, ${carrera.trim()}, ${nivel_estudios}, ${num_paginas || '?'} págs, entrega: ${fecha_entrega || 'no especificada'}`;
+    const supaLead = {
+      wa_id,
+      nombre: nombre.trim(),
+      carrera: carrera.trim(),
+      nivel: nivel_estudios,
+      tipo_servicio: 'Redacción completa',
+      tipo_proyecto,
+      paginas: String(num_paginas || ''),
+      fecha_entrega: fecha_entrega || '',
+      estado_sofia: 'esperando_aprobacion',
+      origen: 'formulario_web',
+      historial_chat: JSON.stringify([{
+        role: 'user',
+        content: resumen,
+        timestamp: new Date().toISOString(),
+      }]),
+      updated_at: new Date().toISOString(),
+      mensajes_sin_leer: 1,
+      ultimo_mensaje_preview: `👤 ${tipo_proyecto} - ${carrera.trim()}`,
+    };
+
+    try {
+      const supaRes = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+        method: 'POST',
+        headers: supaHeaders(),
+        body: JSON.stringify(supaLead),
+      });
+      if (supaRes.ok) {
+        lead.supabase_synced = true;
+        console.log(`✅ Cotizar lead ${nombre} → Supabase (${wa_id})`);
+      } else {
+        const errText = await supaRes.text();
+        lead.supabase_error = `HTTP ${supaRes.status}: ${errText.slice(0, 200)}`;
+        console.warn(`⚠️ Cotizar lead Supabase error: ${lead.supabase_error}`);
+      }
+    } catch (supaErr) {
+      lead.supabase_error = supaErr.message;
+      console.warn(`⚠️ Cotizar lead Supabase exception: ${supaErr.message}`);
+    }
+
     // Intentar enviar al webhook de n8n como respaldo (no bloquea la respuesta)
     const webhookUrl = process.env.WEBHOOK_COTIZAR_URL;
     if (webhookUrl) {
@@ -66,8 +123,8 @@ export const createCotizarLead = async (req, res) => {
         lead.webhook_sent = false;
         lead.webhook_error = whErr.message;
       }
-      await lead.save();
     }
+    await lead.save();
 
     res.status(201).json({
       success: true,
