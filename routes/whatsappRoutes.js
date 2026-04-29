@@ -33,6 +33,8 @@ import {
   configCalificacionFollowUp,
   runCalificacionFollowUpManual,
   updateLeadNotes,
+  previewDiscountPromo,
+  sendDiscountPromo,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -97,6 +99,10 @@ router.post('/manychat/send', sendManyChatReactivation);
 router.get('/manychat/status', getManyChatStatus);
 router.get('/manychat/preview', previewManyChatMessages);
 router.get('/manychat/leads', getManyChatLeadsView);
+
+// Promo Descuento 10% — envío masivo de plantilla reactivacion_descuento
+router.get('/discount-promo/preview', previewDiscountPromo);
+router.post('/discount-promo/send', sendDiscountPromo);
 
 // Leads Stats — métricas completas para panel de informes
 router.get('/leads-stats', getLeadsStats);

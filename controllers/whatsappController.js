@@ -3760,6 +3760,170 @@ export const runCalificacionFollowUpManual = asyncHandler(async (req, res) => {
   res.json({ success: true, result: calificacionFollowUp.lastResult });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Promo Descuento 10% — Envío masivo de plantilla reactivacion_descuento
+// Aplica a leads con estado_sofia in (cotizacion_lista, cotizacion_enviada)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DISCOUNT_TEMPLATE_NAME = 'reactivacion_descuento';
+const DISCOUNT_TEMPLATE_LANG = 'es_MX';
+
+/**
+ * GET /api/v1/whatsapp/discount-promo/preview
+ * Preview: cuántos leads recibirían la promo y quiénes son
+ */
+export const previewDiscountPromo = asyncHandler(async (req, res) => {
+  const url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,precio,tema&order=updated_at.desc`;
+  const resp = await fetch(url, { headers: supabaseHeaders() });
+  if (!resp.ok) {
+    res.status(500);
+    throw new Error('Error al consultar leads en Supabase');
+  }
+  const leads = await resp.json();
+  res.json({
+    total: leads.length,
+    template: DISCOUNT_TEMPLATE_NAME,
+    leads: leads.map(l => ({
+      wa_id: l.wa_id,
+      nombre: l.nombre,
+      estado: l.estado_sofia,
+      precio: l.precio,
+      tema: l.tema,
+      updated_at: l.updated_at,
+    })),
+  });
+});
+
+/**
+ * POST /api/v1/whatsapp/discount-promo/send
+ * Envía la plantilla reactivacion_descuento a todos los leads con
+ * estado_sofia in (cotizacion_lista, cotizacion_enviada)
+ *
+ * Body opcional: { maxPerRun: number, dryRun: boolean }
+ */
+export const sendDiscountPromo = asyncHandler(async (req, res) => {
+  const { maxPerRun = 50, dryRun = false } = req.body || {};
+  const limit = Math.max(1, Math.min(200, Number(maxPerRun) || 50));
+
+  console.log(`🏷️ Promo Descuento 10% — iniciado por ${req.user?.name || 'admin'} — dryRun: ${!!dryRun}, max: ${limit}`);
+
+  // 1. Obtener leads elegibles
+  const url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,historial_chat,precio,tema&order=updated_at.asc&limit=${limit}`;
+  const resp = await fetch(url, { headers: supabaseHeaders() });
+  if (!resp.ok) {
+    res.status(500);
+    throw new Error('Error al consultar leads en Supabase');
+  }
+  const leads = await resp.json();
+
+  if (leads.length === 0) {
+    return res.json({ success: true, total: 0, sent: 0, failed: 0, skipped: 0, message: 'No hay leads con cotización lista/enviada' });
+  }
+
+  // Si es dryRun, solo devolver preview
+  if (dryRun) {
+    return res.json({
+      dryRun: true,
+      would_send: leads.length,
+      leads: leads.map(l => ({ wa_id: l.wa_id, nombre: l.nombre, estado: l.estado_sofia, precio: l.precio })),
+    });
+  }
+
+  // 2. Enviar plantilla a cada lead
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  let sent = 0, failed = 0, skipped = 0;
+  const errors = [];
+
+  for (const lead of leads) {
+    try {
+      const cleanNumber = lead.wa_id.replace(/\D/g, '');
+      const firstName = (lead.nombre || '').split(' ')[0] || 'cliente';
+
+      const templatePayload = {
+        messaging_product: 'whatsapp',
+        to: cleanNumber,
+        type: 'template',
+        template: {
+          name: DISCOUNT_TEMPLATE_NAME,
+          language: { code: DISCOUNT_TEMPLATE_LANG },
+          components: [
+            {
+              type: 'body',
+              parameters: [{ type: 'text', text: firstName }],
+            },
+          ],
+        },
+      };
+
+      const waResp = await fetch(waUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${WA_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(templatePayload),
+      });
+
+      if (!waResp.ok) {
+        const errText = await waResp.text();
+        console.error(`❌ Promo error para ${lead.wa_id}:`, errText);
+        errors.push({ wa_id: lead.wa_id, error: errText });
+        failed++;
+        continue;
+      }
+
+      // 3. Registrar en historial del lead
+      let historial = [];
+      const raw = lead.historial_chat;
+      if (Array.isArray(raw)) historial = raw;
+      else if (typeof raw === 'string' && raw.trim()) {
+        try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+      }
+
+      historial.push({
+        role: 'assistant',
+        content: `[TEMPLATE:reactivacion_descuento] Promo 10% de descuento enviada a ${firstName}.`,
+        timestamp: new Date().toISOString(),
+        isTemplate: true,
+      });
+
+      // 4. Actualizar historial en Supabase
+      const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`;
+      await fetch(patchUrl, {
+        method: 'PATCH',
+        headers: supabaseHeaders(),
+        body: JSON.stringify({
+          historial_chat: JSON.stringify(historial),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+
+      sent++;
+      console.log(`✅ Promo descuento enviada a ${lead.wa_id} (${firstName})`);
+
+      // Pausa breve entre envíos para no saturar la API
+      if (sent < leads.length) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    } catch (err) {
+      console.error(`❌ Promo error inesperado para ${lead.wa_id}:`, err.message);
+      errors.push({ wa_id: lead.wa_id, error: err.message });
+      failed++;
+    }
+  }
+
+  console.log(`🏷️ Promo Descuento 10% completada — ${sent} enviados, ${failed} fallidos, ${skipped} omitidos`);
+
+  res.json({
+    success: true,
+    total: leads.length,
+    sent,
+    failed,
+    skipped,
+    errors: errors.length > 0 ? errors : undefined,
+  });
+});
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
 

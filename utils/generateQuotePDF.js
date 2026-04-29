@@ -199,7 +199,14 @@ export const generateQuotePDF = async (data) => {
         tipoTrabajo: tipoTrabajoResuelto,
         extensionEstimada: data.extensionEstimada || data.paginas || data.pages || '',
         descripcionServicio: generarDescripcion({ ...data, tipoTrabajo: tipoTrabajoResuelto }),
-        serviciosIncluidos: data.serviciosIncluidos || ['1 Escáner antiplagio.', '1 Escáner anti-IA.', '1 Correcciones de fondo y estilo del asesor y sinodales.', '1 Asesoría 1:1 en cuanto se entregue versión preliminar.'],
+        serviciosIncluidos: (() => {
+            const arr = Array.isArray(data.serviciosIncluidos) ? data.serviciosIncluidos.filter(s => s && s.trim()) : [];
+            if (arr.length > 0) return arr;
+            const tipo = data.tipoServicio || '';
+            if (tipo === 'correccion') return ['1 Escáner antiplagio.', '1 Escáner anti-IA.'];
+            if (tipo === 'modalidad2') return ['1 Escáner antiplagio.', '1 Escáner anti-IA.', '1 Acompañamiento continuo.'];
+            return ['1 Escáner antiplagio.', '1 Escáner anti-IA.', '1 Correcciones de fondo y estilo del asesor y sinodales.', '1 Asesoría 1:1 en cuanto se entregue versión preliminar.'];
+        })(),
         beneficiosAdicionales: data.beneficiosAdicionales || [],
         precioBase: precioBaseCalc,
         descuentoEfectivo: descuentoEfectivoCalc,
