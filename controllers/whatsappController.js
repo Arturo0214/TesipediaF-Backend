@@ -3805,20 +3805,88 @@ export const previewDiscountPromo = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/v1/whatsapp/discount-promo/leads
+ * Todos los leads elegibles con preview de últimos 3 mensajes del historial.
+ * Query params: ?page=1&limit=50&search=texto
+ */
+export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const search = (req.query.search || '').trim();
+  const offset = (page - 1) * limit;
+
+  // Count total
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id&limit=0`;
+  const countResp = await fetch(countUrl, {
+    method: 'HEAD',
+    headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' },
+  });
+  const range = countResp.headers.get('content-range') || '';
+  const total = parseInt((range.match(/\/(\d+)/) || [])[1]) || 0;
+
+  // Fetch leads with historial
+  let dataUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,precio,tema,carrera,historial_chat&order=updated_at.desc&offset=${offset}&limit=${limit}`;
+  if (search) {
+    dataUrl += `&or=(nombre.ilike.*${encodeURIComponent(search)}*,wa_id.ilike.*${encodeURIComponent(search)}*,carrera.ilike.*${encodeURIComponent(search)}*,tema.ilike.*${encodeURIComponent(search)}*)`;
+  }
+  const resp = await fetch(dataUrl, { headers: supabaseHeaders() });
+  if (!resp.ok) { res.status(500); throw new Error('Error al consultar leads'); }
+  const leads = await resp.json();
+
+  // Extraer últimos 3 mensajes de cada lead
+  const result = leads.map(l => {
+    let hist = [];
+    const raw = l.historial_chat;
+    if (Array.isArray(raw)) hist = raw;
+    else if (typeof raw === 'string' && raw.trim()) {
+      try { hist = JSON.parse(raw.replace(/^=/, '')); } catch { hist = []; }
+    }
+    // Últimos 3 mensajes limpios
+    const lastMessages = hist.slice(-3).map(m => {
+      let text = m.content || '';
+      text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
+      text = text.replace(/\[TEMPLATE:[^\]]*\]\s*/, '');
+      text = text.replace(/\[STATE:[\s\S]*?\]/g, '').replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
+      if (!text && m.mediaUrl) text = '📎 Archivo';
+      if (text.length > 80) text = text.substring(0, 80) + '...';
+      return { role: m.role, text, timestamp: m.timestamp };
+    });
+    return {
+      wa_id: l.wa_id,
+      nombre: l.nombre,
+      estado: l.estado_sofia,
+      precio: l.precio,
+      tema: l.tema,
+      carrera: l.carrera,
+      updated_at: l.updated_at,
+      lastMessages,
+    };
+  });
+
+  res.json({ leads: result, total, page, limit, hasMore: offset + leads.length < total });
+});
+
+/**
  * POST /api/v1/whatsapp/discount-promo/send
- * Envía la plantilla reactivacion_descuento a todos los leads con
- * estado_sofia in (cotizacion_lista, cotizacion_enviada)
- *
- * Body opcional: { maxPerRun: number, dryRun: boolean }
+ * Envía la plantilla reactivacion_descuento.
+ * Body: { waIds?: string[], maxPerRun?: number, dryRun?: boolean }
+ * Si waIds viene, solo envía a esos leads específicos.
  */
 export const sendDiscountPromo = asyncHandler(async (req, res) => {
-  const { maxPerRun = 50, dryRun = false } = req.body || {};
-  const limit = Math.max(1, Math.min(200, Number(maxPerRun) || 50));
+  const { maxPerRun = 50, dryRun = false, waIds } = req.body || {};
+  const limit = Math.max(1, Math.min(500, Number(maxPerRun) || 50));
+  const selectedIds = Array.isArray(waIds) && waIds.length > 0 ? waIds : null;
 
-  console.log(`🏷️ Promo Descuento 10% — iniciado por ${req.user?.name || 'admin'} — dryRun: ${!!dryRun}, max: ${limit}`);
+  console.log(`🏷️ Promo Descuento 10% — iniciado por ${req.user?.name || 'admin'} — dryRun: ${!!dryRun}, seleccionados: ${selectedIds ? selectedIds.length : 'todos'}, max: ${limit}`);
 
   // 1. Obtener leads elegibles
-  const url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,historial_chat,precio,tema&order=updated_at.asc&limit=${limit}`;
+  let url;
+  if (selectedIds) {
+    // Solo los seleccionados
+    url = `${SUPABASE_URL}/rest/v1/leads?wa_id=in.(${selectedIds.join(',')})&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,historial_chat,precio,tema&order=updated_at.asc&limit=${limit}`;
+  } else {
+    url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,historial_chat,precio,tema&order=updated_at.asc&limit=${limit}`;
+  }
   const resp = await fetch(url, { headers: supabaseHeaders() });
   if (!resp.ok) {
     res.status(500);

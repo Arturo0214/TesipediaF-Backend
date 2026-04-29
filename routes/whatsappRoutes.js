@@ -34,6 +34,7 @@ import {
   runCalificacionFollowUpManual,
   updateLeadNotes,
   previewDiscountPromo,
+  getDiscountPromoLeads,
   sendDiscountPromo,
 } from '../controllers/whatsappController.js';
 
@@ -102,6 +103,7 @@ router.get('/manychat/leads', getManyChatLeadsView);
 
 // Promo Descuento 10% — envío masivo de plantilla reactivacion_descuento
 router.get('/discount-promo/preview', previewDiscountPromo);
+router.get('/discount-promo/leads', getDiscountPromoLeads);
 router.post('/discount-promo/send', sendDiscountPromo);
 
 // Leads Stats — métricas completas para panel de informes
