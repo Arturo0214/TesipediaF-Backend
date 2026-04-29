@@ -3806,17 +3806,54 @@ export const previewDiscountPromo = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/v1/whatsapp/discount-promo/leads
- * Todos los leads elegibles con preview de últimos 3 mensajes del historial.
- * Query params: ?page=1&limit=50&search=texto
+ * Leads elegibles con preview de últimos 3 mensajes del historial.
+ * Query params:
+ *   ?page=1&limit=50&search=texto
+ *   &estado=cotizacion_enviada          (filtrar por estado específico)
+ *   &carrera=Derecho                    (filtrar por carrera, coincidencia parcial)
+ *   &atendido_por=sandy                 (filtrar por quién atiende)
+ *   &include_blocked=true               (incluir bloqueados, default: false)
+ *   &days=30                            (solo leads actualizados en los últimos N días)
+ *   &sort=updated_at.desc               (ordenar: updated_at.desc, updated_at.asc, nombre.asc)
  */
 export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
   const search = (req.query.search || '').trim();
+  const estado = (req.query.estado || '').trim();
+  const carrera = (req.query.carrera || '').trim();
+  const atendidoPor = (req.query.atendido_por || '').trim();
+  const includeBlocked = req.query.include_blocked === 'true';
+  const days = Number(req.query.days) || 0;
+  const sort = req.query.sort || 'updated_at.desc';
   const offset = (page - 1) * limit;
 
-  // Count total
-  const countUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id&limit=0`;
+  // Build filters
+  let filters = '';
+  if (estado) {
+    filters += `&estado_sofia=eq.${encodeURIComponent(estado)}`;
+  } else {
+    filters += '&estado_sofia=in.(cotizacion_lista,cotizacion_enviada)';
+  }
+  if (!includeBlocked) filters += '&bloqueado=neq.true';
+  if (atendidoPor) {
+    if (atendidoPor === 'sin_atender') {
+      filters += '&atendido_por=is.null';
+    } else {
+      filters += `&atendido_por=ilike.*${encodeURIComponent(atendidoPor)}*`;
+    }
+  }
+  if (carrera) filters += `&carrera=ilike.*${encodeURIComponent(carrera)}*`;
+  if (days > 0) {
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    filters += `&updated_at=gte.${since}`;
+  }
+  if (search) {
+    filters += `&or=(nombre.ilike.*${encodeURIComponent(search)}*,wa_id.ilike.*${encodeURIComponent(search)}*,carrera.ilike.*${encodeURIComponent(search)}*,tema.ilike.*${encodeURIComponent(search)}*)`;
+  }
+
+  // Count total with these filters
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id&limit=0${filters}`;
   const countResp = await fetch(countUrl, {
     method: 'HEAD',
     headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' },
@@ -3825,10 +3862,7 @@ export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
   const total = parseInt((range.match(/\/(\d+)/) || [])[1]) || 0;
 
   // Fetch leads with historial
-  let dataUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,precio,tema,carrera,historial_chat&order=updated_at.desc&offset=${offset}&limit=${limit}`;
-  if (search) {
-    dataUrl += `&or=(nombre.ilike.*${encodeURIComponent(search)}*,wa_id.ilike.*${encodeURIComponent(search)}*,carrera.ilike.*${encodeURIComponent(search)}*,tema.ilike.*${encodeURIComponent(search)}*)`;
-  }
+  const dataUrl = `${SUPABASE_URL}/rest/v1/leads?select=wa_id,nombre,estado_sofia,updated_at,precio,tema,carrera,nivel,atendido_por,bloqueado,historial_chat&order=${sort}&offset=${offset}&limit=${limit}${filters}`;
   const resp = await fetch(dataUrl, { headers: supabaseHeaders() });
   if (!resp.ok) { res.status(500); throw new Error('Error al consultar leads'); }
   const leads = await resp.json();
@@ -3841,7 +3875,6 @@ export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
     else if (typeof raw === 'string' && raw.trim()) {
       try { hist = JSON.parse(raw.replace(/^=/, '')); } catch { hist = []; }
     }
-    // Últimos 3 mensajes limpios
     const lastMessages = hist.slice(-3).map(m => {
       let text = m.content || '';
       text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
@@ -3858,12 +3891,29 @@ export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
       precio: l.precio,
       tema: l.tema,
       carrera: l.carrera,
+      nivel: l.nivel,
+      atendido_por: l.atendido_por,
+      bloqueado: l.bloqueado,
       updated_at: l.updated_at,
       lastMessages,
     };
   });
 
-  res.json({ leads: result, total, page, limit, hasMore: offset + leads.length < total });
+  // Fetch distinct carreras for filter dropdown (one-time, lightweight)
+  let carreras = [];
+  if (page === 1) {
+    try {
+      const carreraUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=carrera&carrera=neq.&order=carrera.asc&limit=500`;
+      const cResp = await fetch(carreraUrl, { headers: supabaseHeaders() });
+      if (cResp.ok) {
+        const cData = await cResp.json();
+        const unique = [...new Set(cData.map(c => c.carrera).filter(Boolean))].sort();
+        carreras = unique;
+      }
+    } catch {}
+  }
+
+  res.json({ leads: result, total, page, limit, hasMore: offset + leads.length < total, ...(carreras.length > 0 ? { carreras } : {}) });
 });
 
 /**
