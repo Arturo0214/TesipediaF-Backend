@@ -78,7 +78,7 @@ export const createCotizarLead = async (req, res) => {
       }]),
       updated_at: new Date().toISOString(),
       mensajes_sin_leer: 1,
-      ultimo_mensaje_preview: `👤 ${tipo_proyecto} - ${carrera.trim()}`,
+      ultimo_mensaje_preview: `👤 ${nombre.trim()}: ${tipo_proyecto} - ${carrera.trim()}`,
     };
 
     try {

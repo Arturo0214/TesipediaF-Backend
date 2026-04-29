@@ -121,22 +121,40 @@ function isWindowExpired(historial, updatedAt) {
 }
 
 // Helper: generar preview del último mensaje (estilo WhatsApp)
-// Siempre muestra el ÚLTIMO mensaje real. Prefijo indica quién envió:
-// 👤 = cliente (necesita respuesta), sin prefijo = bot/admin (ya respondimos)
-function buildLastMessagePreview(historial) {
+// Siempre muestra el ÚLTIMO mensaje real con prefijo claro de quién envió:
+// 👤 NombreCliente: texto  |  Tú: texto  |  Sofia: texto  |  📋 Plantilla: texto
+function buildLastMessagePreview(historial, nombreCliente) {
   if (!Array.isArray(historial) || historial.length === 0) return '';
   const last = historial[historial.length - 1];
   let text = last.content || '';
   const role = last.role || '';
+
+  // Detectar tipo de mensaje assistant
+  const isTemplate = role !== 'user' && (last.isTemplate || text.startsWith('[TEMPLATE:'));
+  const humanoMatch = text.match(/^\[HUMANO:([^\]]*)\]\s*/);
+  const isHuman = role !== 'user' && (humanoMatch || text.startsWith('[HUMANO]'));
+
   // Limpiar tags internos
   text = text.replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '');
+  text = text.replace(/\[TEMPLATE:[^\]]*\]\s*/, '');
   text = text.replace(/\[STATE:[\s\S]*?\]/g, '').replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
   if (!text && last.mediaUrl) text = '📎 Archivo';
   if (!text) text = '...';
-  // Truncar a 60 chars
-  if (text.length > 60) text = text.substring(0, 60) + '...';
-  // Prefijo: 👤 solo si el ÚLTIMO mensaje es del cliente
-  return role === 'user' ? '👤 ' + text : text;
+  // Truncar a 50 chars (dejamos espacio para el prefijo)
+  if (text.length > 50) text = text.substring(0, 50) + '...';
+
+  // Prefijo claro de quién envió el mensaje
+  if (role === 'user') {
+    const clientName = nombreCliente || 'Cliente';
+    return `👤 ${clientName}: ${text}`;
+  } else if (isTemplate) {
+    return `📋 Plantilla: ${text}`;
+  } else if (isHuman) {
+    const adminName = humanoMatch ? humanoMatch[1].trim() : 'Admin';
+    return `Tú (${adminName}): ${text}`;
+  } else {
+    return `Sofia: ${text}`;
+  }
 }
 
 // Helper: headers para Supabase
@@ -312,11 +330,11 @@ export const getLeads = asyncHandler(async (req, res) => {
             try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
           }
           if (Array.isArray(hist) && hist.length > 0) {
-            const preview = buildLastMessagePreview(hist);
+            const leadObj = filteredLeads.find(l => l.wa_id === item.wa_id);
+            const preview = buildLastMessagePreview(hist, leadObj?.nombre);
             if (preview) {
               // Actualizar el lead en el response
-              const lead = filteredLeads.find(l => l.wa_id === item.wa_id);
-              if (lead) lead.ultimo_mensaje_preview = preview;
+              if (leadObj) leadObj.ultimo_mensaje_preview = preview;
               // Guardar en Supabase para futuras requests
               previewUpdates.push(
                 fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${item.wa_id}`, {
@@ -379,15 +397,7 @@ export const getLeadByWaId = asyncHandler(async (req, res) => {
   const data = await response.json();
   const lead = data[0] || null;
 
-  // Resetear contador de mensajes sin leer al abrir la conversación
-  if (lead && lead.mensajes_sin_leer > 0) {
-    fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`, {
-      method: 'PATCH',
-      headers: supabaseHeaders(),
-      body: JSON.stringify({ mensajes_sin_leer: 0 }),
-    }).catch(() => {});
-  }
-
+  // Ya NO reseteamos mensajes_sin_leer al abrir — solo se resetea cuando el admin RESPONDE
   res.json(lead);
 });
 
@@ -823,7 +833,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
       modo_humano: true,
       mensaje_pendiente: JSON.stringify(mensajePendiente),
       updated_at: new Date().toISOString(),
-      ultimo_mensaje_preview: buildLastMessagePreview(historial),
+      ultimo_mensaje_preview: buildLastMessagePreview(historial, leadNombre),
+      mensajes_sin_leer: 0,
     };
     // Solo asignar dueño si el lead no tiene uno
     if (!leadAtendidoPor) {
@@ -956,7 +967,8 @@ export const sendMessage = asyncHandler(async (req, res) => {
     historial_chat: JSON.stringify(historial),
     modo_humano: true,
     updated_at: new Date().toISOString(),
-    ultimo_mensaje_preview: buildLastMessagePreview(historial),
+    ultimo_mensaje_preview: buildLastMessagePreview(historial, leadNombre),
+    mensajes_sin_leer: 0,
   };
   if (!leadAtendidoPor) {
     patchBody.atendido_por = adminName.toLowerCase();
@@ -2181,15 +2193,21 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
   // ── INCREMENTAR CONTADOR DE MENSAJES SIN LEER + ACTUALIZAR PREVIEW ──
   try {
     // Leer el valor actual para incrementarlo (Supabase REST no soporta incremento atómico)
-    const countUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=mensajes_sin_leer`;
+    const countUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}&select=mensajes_sin_leer,nombre`;
     const countResp = await fetch(countUrl, { headers: supabaseHeaders() });
     let currentCount = 0;
+    let leadNombreWebhook = '';
     if (countResp.ok) {
       const countData = await countResp.json();
-      if (countData.length > 0) currentCount = countData[0].mensajes_sin_leer || 0;
+      if (countData.length > 0) {
+        currentCount = countData[0].mensajes_sin_leer || 0;
+        leadNombreWebhook = countData[0].nombre || '';
+      }
     }
     // Actualizar contador + preview + timestamp en un solo PATCH
-    const leadPreview = '👤 ' + (preview.length > 60 ? preview.substring(0, 60) + '...' : preview);
+    const clientName = leadNombreWebhook || 'Cliente';
+    const previewText = preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
+    const leadPreview = `👤 ${clientName}: ${previewText}`;
     await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${wa_id}`, {
       method: 'PATCH',
       headers: supabaseHeaders(),
