@@ -3773,15 +3773,25 @@ const DISCOUNT_TEMPLATE_LANG = 'es_MX';
  * Preview: cuántos leads recibirían la promo y quiénes son
  */
 export const previewDiscountPromo = asyncHandler(async (req, res) => {
-  const url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,precio,tema&order=updated_at.desc`;
-  const resp = await fetch(url, { headers: supabaseHeaders() });
+  // 1. Contar total con HEAD + Prefer: count=exact (rápido, sin descargar data)
+  const countUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id&limit=0`;
+  const countResp = await fetch(countUrl, {
+    method: 'HEAD',
+    headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' },
+  });
+  const range = countResp.headers.get('content-range') || '';
+  const total = parseInt((range.match(/\/(\d+)/) || [])[1]) || 0;
+
+  // 2. Traer solo los primeros 10 para preview
+  const previewUrl = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=in.(cotizacion_lista,cotizacion_enviada)&bloqueado=neq.true&select=wa_id,nombre,estado_sofia,updated_at,precio,tema&order=updated_at.desc&limit=10`;
+  const resp = await fetch(previewUrl, { headers: supabaseHeaders() });
   if (!resp.ok) {
     res.status(500);
     throw new Error('Error al consultar leads en Supabase');
   }
   const leads = await resp.json();
   res.json({
-    total: leads.length,
+    total,
     template: DISCOUNT_TEMPLATE_NAME,
     leads: leads.map(l => ({
       wa_id: l.wa_id,
