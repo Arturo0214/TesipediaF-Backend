@@ -1501,4 +1501,165 @@ router.get('/campaigns/meta/pixel', protect, adminOnly, asyncHandler(async (req,
   }
 }));
 
+// ═══════════════════════════════════════════════════════
+// META ADS — Advanced Breakdowns (placement, device, age, gender, platform)
+// ═══════════════════════════════════════════════════════
+router.get('/campaigns/meta/breakdowns', protect, adminOnly, asyncHandler(async (req, res) => {
+  const token = process.env.META_ACCESS_TOKEN;
+  const accountId = process.env.META_AD_ACCOUNT_ID;
+  if (!token || !accountId) return res.status(400).json({ error: 'Meta credentials not configured' });
+
+  const { breakdown = 'placement', days = 30 } = req.query;
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const until = new Date().toISOString().slice(0, 10);
+  const validBreakdowns = ['publisher_platform', 'platform_position', 'device_platform', 'age', 'gender', 'country'];
+  const bdField = validBreakdowns.includes(breakdown) ? breakdown : 'publisher_platform';
+
+  try {
+    const url = `https://graph.facebook.com/v21.0/act_${accountId}/insights?fields=spend,impressions,clicks,reach,cpc,ctr,actions,cost_per_action_type&breakdowns=${bdField}&time_range={"since":"${since}","until":"${until}"}&limit=50&access_token=${token}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    if (data.error) return res.status(400).json({ error: data.error.message });
+
+    const rows = (data.data || []).map(row => {
+      const leads = row.actions?.find(a => a.action_type === 'lead')?.value || 0;
+      const cpl = row.cost_per_action_type?.find(a => a.action_type === 'lead')?.value || 0;
+      return {
+        breakdown: row[bdField] || 'unknown',
+        spend: parseFloat(row.spend || 0),
+        impressions: parseInt(row.impressions || 0),
+        clicks: parseInt(row.clicks || 0),
+        reach: parseInt(row.reach || 0),
+        cpc: parseFloat(row.cpc || 0),
+        ctr: parseFloat(row.ctr || 0),
+        leads: parseInt(leads),
+        cpl: parseFloat(cpl),
+      };
+    }).sort((a, b) => b.spend - a.spend);
+
+    res.json({ breakdown: bdField, days: parseInt(days), rows });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}));
+
+// GET /revenue/campaigns/meta/adsets — Adset-level data with targeting
+router.get('/campaigns/meta/adsets', protect, adminOnly, asyncHandler(async (req, res) => {
+  const token = process.env.META_ACCESS_TOKEN;
+  const accountId = process.env.META_AD_ACCOUNT_ID;
+  if (!token || !accountId) return res.status(400).json({ error: 'Meta credentials not configured' });
+
+  const { days = 30 } = req.query;
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const until = new Date().toISOString().slice(0, 10);
+
+  try {
+    // Fetch adsets with targeting info
+    const adsetsUrl = `https://graph.facebook.com/v21.0/act_${accountId}/adsets?fields=id,name,status,effective_status,daily_budget,targeting,campaign_id,optimization_goal,bid_strategy&limit=50&access_token=${token}`;
+    const adsetsRes = await fetch(adsetsUrl);
+    const adsetsData = await adsetsRes.json();
+
+    // Fetch insights at adset level
+    const insightsUrl = `https://graph.facebook.com/v21.0/act_${accountId}/insights?fields=adset_id,adset_name,spend,impressions,clicks,reach,cpc,ctr,cpm,frequency,actions,cost_per_action_type&level=adset&time_range={"since":"${since}","until":"${until}"}&limit=50&access_token=${token}`;
+    const insightsRes = await fetch(insightsUrl);
+    const insightsData = await insightsRes.json();
+
+    const insightsMap = {};
+    (insightsData.data || []).forEach(i => { insightsMap[i.adset_id] = i; });
+
+    const adsets = (adsetsData.data || []).map(adset => {
+      const insights = insightsMap[adset.id] || {};
+      const leads = insights.actions?.find(a => a.action_type === 'lead')?.value || 0;
+      const cpl = insights.cost_per_action_type?.find(a => a.action_type === 'lead')?.value || 0;
+      const targeting = adset.targeting || {};
+
+      return {
+        id: adset.id,
+        name: adset.name,
+        status: adset.effective_status,
+        dailyBudget: adset.daily_budget ? parseInt(adset.daily_budget) / 100 : 0,
+        optimization: adset.optimization_goal,
+        bidStrategy: adset.bid_strategy,
+        // Targeting summary
+        ages: targeting.age_min && targeting.age_max ? `${targeting.age_min}-${targeting.age_max}` : 'all',
+        genders: targeting.genders?.map(g => g === 1 ? 'M' : g === 2 ? 'F' : 'All').join(',') || 'All',
+        locations: targeting.geo_locations?.countries?.join(', ') || targeting.geo_locations?.cities?.map(c => c.name).join(', ') || '—',
+        interests: targeting.flexible_spec?.[0]?.interests?.map(i => i.name).slice(0, 5) || [],
+        // Metrics
+        spend: parseFloat(insights.spend || 0),
+        impressions: parseInt(insights.impressions || 0),
+        clicks: parseInt(insights.clicks || 0),
+        reach: parseInt(insights.reach || 0),
+        cpc: parseFloat(insights.cpc || 0),
+        ctr: parseFloat(insights.ctr || 0),
+        frequency: parseFloat(insights.frequency || 0),
+        leads: parseInt(leads),
+        cpl: parseFloat(cpl),
+      };
+    }).sort((a, b) => b.spend - a.spend);
+
+    res.json({ adsets, total: adsets.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}));
+
+// GET /revenue/campaigns/meta/ads — Individual ad performance with creatives
+router.get('/campaigns/meta/ads', protect, adminOnly, asyncHandler(async (req, res) => {
+  const token = process.env.META_ACCESS_TOKEN;
+  const accountId = process.env.META_AD_ACCOUNT_ID;
+  if (!token || !accountId) return res.status(400).json({ error: 'Meta credentials not configured' });
+
+  const { days = 30, campaign_id } = req.query;
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const until = new Date().toISOString().slice(0, 10);
+
+  try {
+    let adsUrl = `https://graph.facebook.com/v21.0/act_${accountId}/ads?fields=id,name,status,effective_status,creative{id,title,body,image_url,thumbnail_url,video_id,call_to_action_type,link_url}&limit=50&access_token=${token}`;
+    if (campaign_id) adsUrl += `&filtering=[{"field":"campaign.id","operator":"EQUAL","value":"${campaign_id}"}]`;
+    const adsRes = await fetch(adsUrl);
+    const adsData = await adsRes.json();
+
+    let insightsUrl = `https://graph.facebook.com/v21.0/act_${accountId}/insights?fields=ad_id,ad_name,spend,impressions,clicks,reach,cpc,ctr,actions,cost_per_action_type&level=ad&time_range={"since":"${since}","until":"${until}"}&limit=50&access_token=${token}`;
+    if (campaign_id) insightsUrl += `&filtering=[{"field":"campaign.id","operator":"EQUAL","value":"${campaign_id}"}]`;
+    const insightsRes = await fetch(insightsUrl);
+    const insightsData = await insightsRes.json();
+
+    const insightsMap = {};
+    (insightsData.data || []).forEach(i => { insightsMap[i.ad_id] = i; });
+
+    const ads = (adsData.data || []).map(ad => {
+      const insights = insightsMap[ad.id] || {};
+      const leads = insights.actions?.find(a => a.action_type === 'lead')?.value || 0;
+      const cpl = insights.cost_per_action_type?.find(a => a.action_type === 'lead')?.value || 0;
+      const creative = ad.creative || {};
+
+      return {
+        id: ad.id,
+        name: ad.name,
+        status: ad.effective_status,
+        // Creative info
+        title: creative.title || '',
+        body: creative.body || '',
+        imageUrl: creative.image_url || creative.thumbnail_url || '',
+        cta: creative.call_to_action_type || '',
+        linkUrl: creative.link_url || '',
+        // Metrics
+        spend: parseFloat(insights.spend || 0),
+        impressions: parseInt(insights.impressions || 0),
+        clicks: parseInt(insights.clicks || 0),
+        reach: parseInt(insights.reach || 0),
+        cpc: parseFloat(insights.cpc || 0),
+        ctr: parseFloat(insights.ctr || 0),
+        leads: parseInt(leads),
+        cpl: parseFloat(cpl),
+      };
+    }).sort((a, b) => b.spend - a.spend);
+
+    res.json({ ads, total: ads.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}));
+
 export default router;

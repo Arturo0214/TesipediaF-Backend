@@ -109,6 +109,28 @@ router.post('/discount-promo/send', sendDiscountPromo);
 // Leads Stats — métricas completas para panel de informes
 router.get('/leads-stats', getLeadsStats);
 
+// Health check — verifica que n8n (Sofia) y Supabase estén activos
+router.get('/health', async (req, res) => {
+    const results = { n8n: false, supabase: false, timestamp: new Date().toISOString() };
+    try {
+        const n8nUrl = process.env.N8N_BASE_URL || 'https://primary-production-73558.up.railway.app';
+        const n8nRes = await fetch(`${n8nUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
+        results.n8n = n8nRes.ok;
+    } catch { results.n8n = false; }
+    try {
+        const sbUrl = process.env.SUPABASE_URL;
+        if (sbUrl) {
+            const sbRes = await fetch(`${sbUrl}/rest/v1/`, {
+                headers: { apikey: process.env.SUPABASE_ANON_KEY || '', Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY || ''}` },
+                signal: AbortSignal.timeout(5000),
+            });
+            results.supabase = sbRes.ok || sbRes.status === 200;
+        }
+    } catch { results.supabase = false; }
+    results.healthy = results.n8n && results.supabase;
+    res.json(results);
+});
+
 // Calificación Follow-Up — seguimiento a leads en calificando/cotizando
 router.get('/calificacion-followup/status', getCalificacionFollowUpStatus);
 router.post('/calificacion-followup/config', configCalificacionFollowUp);
