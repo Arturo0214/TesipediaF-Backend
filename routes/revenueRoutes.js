@@ -1509,9 +1509,9 @@ router.get('/campaigns/meta/breakdowns', protect, adminOnly, asyncHandler(async 
   const accountId = process.env.META_AD_ACCOUNT_ID;
   if (!token || !accountId) return res.status(400).json({ error: 'Meta credentials not configured' });
 
-  const { breakdown = 'placement', days = 30 } = req.query;
-  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-  const until = new Date().toISOString().slice(0, 10);
+  const { breakdown = 'placement', days = 30, since: qSince, until: qUntil } = req.query;
+  const since = qSince || new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const until = qUntil || new Date().toISOString().slice(0, 10);
   const validBreakdowns = ['publisher_platform', 'platform_position', 'device_platform', 'age', 'gender', 'country'];
   const bdField = validBreakdowns.includes(breakdown) ? breakdown : 'publisher_platform';
 
