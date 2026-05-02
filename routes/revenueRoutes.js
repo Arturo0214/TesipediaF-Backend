@@ -1628,11 +1628,33 @@ router.get('/campaigns/meta/ads', protect, adminOnly, asyncHandler(async (req, r
     const insightsMap = {};
     (insightsData.data || []).forEach(i => { insightsMap[i.ad_id] = i; });
 
+    // Collect video IDs to fetch thumbnails
+    const videoIds = (adsData.data || [])
+      .map(ad => ad.creative?.video_id)
+      .filter(Boolean);
+
+    // Batch fetch video thumbnails
+    const videoThumbnails = {};
+    if (videoIds.length > 0) {
+      try {
+        const uniqueIds = [...new Set(videoIds)];
+        await Promise.all(uniqueIds.map(async (vid) => {
+          try {
+            const vRes = await fetch(`https://graph.facebook.com/v21.0/${vid}?fields=thumbnails,source,picture&access_token=${token}`);
+            const vData = await vRes.json();
+            videoThumbnails[vid] = vData.picture || vData.thumbnails?.data?.[0]?.uri || '';
+          } catch {}
+        }));
+      } catch {}
+    }
+
     const ads = (adsData.data || []).map(ad => {
       const insights = insightsMap[ad.id] || {};
       const leads = insights.actions?.find(a => a.action_type === 'lead')?.value || 0;
       const cpl = insights.cost_per_action_type?.find(a => a.action_type === 'lead')?.value || 0;
       const creative = ad.creative || {};
+      const videoId = creative.video_id || '';
+      const isVideo = !!videoId;
 
       return {
         id: ad.id,
@@ -1641,7 +1663,9 @@ router.get('/campaigns/meta/ads', protect, adminOnly, asyncHandler(async (req, r
         // Creative info
         title: creative.title || '',
         body: creative.body || '',
-        imageUrl: creative.image_url || creative.thumbnail_url || '',
+        imageUrl: creative.image_url || creative.thumbnail_url || (videoId ? videoThumbnails[videoId] : '') || '',
+        videoId,
+        isVideo,
         cta: creative.call_to_action_type || '',
         linkUrl: creative.link_url || '',
         // Metrics
