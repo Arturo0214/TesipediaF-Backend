@@ -1,5 +1,6 @@
 import asyncHandler from 'express-async-handler';
 import { getOverview } from '../services/googleAnalyticsService.js';
+import cloudinary from '../config/cloudinary.js';
 
 const CACHE = {};
 const CACHE_TTL = 15 * 60 * 1000;
@@ -240,3 +241,70 @@ async function fetchWebData() {
         };
     } catch { return null; }
 }
+
+// ════════════════════════════════════════
+// POST /social/generate-image — Gemini Imagen + Cloudinary
+// ════════════════════════════════════════
+export const generateImage = asyncHandler(async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt) { res.status(400); throw new Error('prompt is required'); }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) { res.status(500); throw new Error('GEMINI_API_KEY not configured'); }
+
+    console.log(`[Social:GenImage] "${prompt.slice(0, 80)}..."`);
+
+    // Try Gemini 2.0 Flash with image generation
+    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: `Generate an image based on this description. Make it professional, high quality, suitable for social media (Instagram/Facebook). Description: ${prompt}` }] }],
+            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+        }),
+    });
+
+    const data = await geminiRes.json();
+    const imagePart = data?.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+    if (!imagePart) {
+        // Fallback: try Imagen 3
+        try {
+            const img3Res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: '1:1', sampleImageSize: 1024 } }),
+            });
+            const img3Data = await img3Res.json();
+            const b64 = img3Data?.predictions?.[0]?.bytesBase64Encoded;
+            if (b64) {
+                const upload = await cloudinary.uploader.upload(`data:image/png;base64,${b64}`, { folder: 'tesipedia-social' });
+                return res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: 'imagen-3' });
+            }
+        } catch {}
+
+        const errMsg = data?.error?.message || 'No image generated';
+        console.error('[Social:GenImage]', errMsg);
+        res.status(500);
+        throw new Error(errMsg);
+    }
+
+    // Upload to Cloudinary
+    const b64 = imagePart.inlineData.data;
+    const mime = imagePart.inlineData.mimeType || 'image/png';
+    const upload = await cloudinary.uploader.upload(`data:${mime};base64,${b64}`, { folder: 'tesipedia-social' });
+
+    console.log(`[Social:GenImage] Done → ${upload.secure_url}`);
+    res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: 'gemini-flash' });
+});
+
+// ════════════════════════════════════════
+// POST /social/upload-image — Save external image to Cloudinary
+// ════════════════════════════════════════
+export const uploadImage = asyncHandler(async (req, res) => {
+    const { imageUrl } = req.body;
+    if (!imageUrl) { res.status(400); throw new Error('imageUrl required'); }
+
+    const upload = await cloudinary.uploader.upload(imageUrl, { folder: 'tesipedia-social' });
+    res.json({ success: true, url: upload.secure_url, publicId: upload.public_id });
+});
