@@ -37,6 +37,7 @@ import gaRoutes from './routes/gaRoutes.js';
 import cotizarLeadRoutes from './routes/cotizarLeadRoutes.js';
 import revenueRoutes from './routes/revenueRoutes.js';
 import leadNoteRoutes from './routes/leadNoteRoutes.js';
+import socialRoutes from './routes/socialRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 
@@ -140,6 +141,7 @@ app.use('/google', googleCalendarRoutes);
 app.use('/cotizar-leads', cotizarLeadRoutes);
 app.use('/revenue', revenueRoutes);
 app.use('/api/v1/lead-notes', leadNoteRoutes);
+app.use('/social', socialRoutes);
 
 // Middlewares de error
 app.use(notFound);
