@@ -254,48 +254,57 @@ export const generateImage = asyncHandler(async (req, res) => {
 
     console.log(`[Social:GenImage] "${prompt.slice(0, 80)}..."`);
 
-    // Try Gemini 2.0 Flash with image generation
-    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ parts: [{ text: `Generate an image based on this description. Make it professional, high quality, suitable for social media (Instagram/Facebook). Description: ${prompt}` }] }],
-            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
-        }),
-    });
+    // Try models in order of preference
+    const models = [
+        { name: 'gemini-2.5-flash-image', type: 'generateContent' },
+        { name: 'gemini-3-pro-image-preview', type: 'generateContent' },
+        { name: 'imagen-4.0-fast-generate-001', type: 'predict' },
+        { name: 'imagen-4.0-generate-001', type: 'predict' },
+    ];
 
-    const data = await geminiRes.json();
-    const imagePart = data?.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-
-    if (!imagePart) {
-        // Fallback: try Imagen 3
+    for (const model of models) {
         try {
-            const img3Res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: '1:1', sampleImageSize: 1024 } }),
-            });
-            const img3Data = await img3Res.json();
-            const b64 = img3Data?.predictions?.[0]?.bytesBase64Encoded;
-            if (b64) {
-                const upload = await cloudinary.uploader.upload(`data:image/png;base64,${b64}`, { folder: 'tesipedia-social' });
-                return res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: 'imagen-3' });
-            }
-        } catch {}
+            let b64, mime = 'image/png';
 
-        const errMsg = data?.error?.message || 'No image generated';
-        console.error('[Social:GenImage]', errMsg);
-        res.status(500);
-        throw new Error(errMsg);
+            if (model.type === 'generateContent') {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model.name}:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `Generate a professional social media image: ${prompt}` }] }],
+                        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+                    }),
+                });
+                const data = await r.json();
+                if (data.error) { console.log(`[GenImage] ${model.name}: ${data.error.message?.slice(0, 80)}`); continue; }
+                const imgPart = data?.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+                if (!imgPart) continue;
+                b64 = imgPart.inlineData.data;
+                mime = imgPart.inlineData.mimeType || mime;
+            } else {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model.name}:predict?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: '1:1' } }),
+                });
+                const data = await r.json();
+                if (data.error) { console.log(`[GenImage] ${model.name}: ${data.error.message?.slice(0, 80)}`); continue; }
+                b64 = data?.predictions?.[0]?.bytesBase64Encoded;
+                if (!b64) continue;
+            }
+
+            // Upload to Cloudinary
+            const upload = await cloudinary.uploader.upload(`data:${mime};base64,${b64}`, { folder: 'tesipedia-social' });
+            console.log(`[Social:GenImage] ${model.name} → ${upload.secure_url}`);
+            return res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: model.name });
+        } catch (err) {
+            console.log(`[GenImage] ${model.name} failed:`, err.message?.slice(0, 80));
+        }
     }
 
-    // Upload to Cloudinary
-    const b64 = imagePart.inlineData.data;
-    const mime = imagePart.inlineData.mimeType || 'image/png';
-    const upload = await cloudinary.uploader.upload(`data:${mime};base64,${b64}`, { folder: 'tesipedia-social' });
-
-    console.log(`[Social:GenImage] Done → ${upload.secure_url}`);
-    res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: 'gemini-flash' });
+    // All models failed
+    res.status(402);
+    throw new Error('La generación de imágenes con IA requiere habilitar billing en Google AI Studio (aistudio.google.com → Settings → Billing). El costo es ~$0.02 por imagen. Por ahora, copia el prompt y genera en gemini.google.com (web) gratis.');
 });
 
 // ════════════════════════════════════════
