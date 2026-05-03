@@ -2,8 +2,7 @@ import asyncHandler from 'express-async-handler';
 import { getOverview } from '../services/googleAnalyticsService.js';
 
 const CACHE = {};
-const CACHE_TTL = 15 * 60 * 1000; // 15 min
-
+const CACHE_TTL = 15 * 60 * 1000;
 const PAGE_ID = '855962324262046';
 const IG_ID = '17841477846360365';
 
@@ -14,7 +13,7 @@ function cached(key, ttl = CACHE_TTL) {
 function setCache(key, data) { CACHE[key] = { data, ts: Date.now() }; }
 
 async function getPageToken() {
-    const c = cached('pageToken', 60 * 60 * 1000); // 1h cache for token
+    const c = cached('pageToken', 3600000);
     if (c) return c;
     const userToken = process.env.META_ACCESS_TOKEN;
     if (!userToken) return null;
@@ -27,15 +26,16 @@ async function getPageToken() {
     } catch { return null; }
 }
 
+function daysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
+
 // ════════════════════════════════════════
-// GET /social/metrics — All platforms overview
+// GET /social/metrics
 // ════════════════════════════════════════
 export const getSocialMetrics = asyncHandler(async (req, res) => {
     const c = cached('metrics');
     if (c) return res.json({ success: true, data: c, cached: true });
 
     const pageToken = await getPageToken();
-
     const [igData, fbData, webData] = await Promise.allSettled([
         pageToken ? fetchInstagram(pageToken) : Promise.resolve(null),
         pageToken ? fetchFacebook(pageToken) : Promise.resolve(null),
@@ -54,7 +54,67 @@ export const getSocialMetrics = asyncHandler(async (req, res) => {
 });
 
 // ════════════════════════════════════════
-// GET /social/posts/:platform — Recent posts with individual metrics
+// GET /social/insights/:platform — Time series + totals for charts
+// ════════════════════════════════════════
+export const getSocialInsights = asyncHandler(async (req, res) => {
+    const { platform } = req.params;
+    const days = parseInt(req.query.days) || 14;
+    const c = cached(`insights_${platform}_${days}`);
+    if (c) return res.json({ success: true, data: c, cached: true });
+
+    const pageToken = await getPageToken();
+    if (!pageToken) return res.json({ success: true, data: null, mock: true });
+
+    let result = null;
+
+    if (platform === 'instagram') {
+        const since = daysAgo(days);
+        const until = daysAgo(1);
+
+        const [timeSeries, totals, demographics] = await Promise.allSettled([
+            fetch(`https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach,follower_count&period=day&metric_type=time_series&since=${since}&until=${until}&access_token=${pageToken}`).then(r => r.json()),
+            fetch(`https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=profile_views,total_interactions,likes,comments,shares,saves,accounts_engaged&period=day&metric_type=total_value&since=${since}&until=${until}&access_token=${pageToken}`).then(r => r.json()),
+            fetch(`https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&timeframe=last_14_days&access_token=${pageToken}`).then(r => r.json()).catch(() => null),
+        ]);
+
+        // Parse time series
+        const charts = {};
+        if (timeSeries.status === 'fulfilled' && timeSeries.value.data) {
+            for (const metric of timeSeries.value.data) {
+                charts[metric.name] = (metric.values || []).map(v => ({
+                    date: v.end_time?.slice(5, 10), // MM-DD
+                    value: v.value || 0,
+                }));
+            }
+        }
+
+        // Parse totals
+        const totalsMap = {};
+        if (totals.status === 'fulfilled' && totals.value.data) {
+            for (const metric of totals.value.data) {
+                totalsMap[metric.name] = metric.total_value?.value || 0;
+            }
+        }
+
+        // Parse demographics
+        let demoData = null;
+        if (demographics.status === 'fulfilled' && demographics.value?.data?.[0]) {
+            const raw = demographics.value.data[0].total_value?.breakdowns?.[0]?.results || [];
+            demoData = raw.slice(0, 10).map(r => ({
+                label: r.dimension_values?.join(', ') || '?',
+                value: r.value || 0,
+            }));
+        }
+
+        result = { charts, totals: totalsMap, demographics: demoData };
+    }
+
+    if (result) setCache(`insights_${platform}_${days}`, result);
+    res.json({ success: true, data: result });
+});
+
+// ════════════════════════════════════════
+// GET /social/posts/:platform
 // ════════════════════════════════════════
 export const getSocialPosts = asyncHandler(async (req, res) => {
     const { platform } = req.params;
@@ -69,27 +129,18 @@ export const getSocialPosts = asyncHandler(async (req, res) => {
         const r = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media?fields=like_count,comments_count,timestamp,media_type,caption,permalink,media_url,thumbnail_url&limit=25&access_token=${pageToken}`);
         const data = await r.json();
         posts = (data.data || []).map(p => ({
-            id: p.id,
-            likes: p.like_count || 0,
-            comments: p.comments_count || 0,
-            type: p.media_type || 'IMAGE',
-            caption: p.caption || '',
-            date: p.timestamp,
-            url: p.permalink || '',
-            mediaUrl: p.media_url || p.thumbnail_url || '',
+            id: p.id, likes: p.like_count || 0, comments: p.comments_count || 0,
+            type: p.media_type || 'IMAGE', caption: p.caption || '',
+            date: p.timestamp, url: p.permalink || '', mediaUrl: p.media_url || p.thumbnail_url || '',
         }));
     } else if (platform === 'facebook') {
         const r = await fetch(`https://graph.facebook.com/v21.0/${PAGE_ID}/posts?fields=message,created_time,full_picture,likes.summary(true),comments.summary(true),shares,permalink_url&limit=20&access_token=${pageToken}`);
         const data = await r.json();
         posts = (data.data || []).map(p => ({
-            id: p.id,
-            likes: p.likes?.summary?.total_count || 0,
-            comments: p.comments?.summary?.total_count || 0,
-            shares: p.shares?.count || 0,
-            caption: p.message || '',
-            date: p.created_time,
-            url: p.permalink_url || '',
-            mediaUrl: p.full_picture || '',
+            id: p.id, likes: p.likes?.summary?.total_count || 0,
+            comments: p.comments?.summary?.total_count || 0, shares: p.shares?.count || 0,
+            caption: p.message || '', date: p.created_time,
+            url: p.permalink_url || '', mediaUrl: p.full_picture || '',
         }));
     }
 
@@ -98,83 +149,38 @@ export const getSocialPosts = asyncHandler(async (req, res) => {
 });
 
 // ════════════════════════════════════════
-// POST /social/publish — Publish to IG or FB
+// POST /social/publish
 // ════════════════════════════════════════
 export const publishPost = asyncHandler(async (req, res) => {
     const { platform, message, imageUrl } = req.body;
     if (!platform || (!message && !imageUrl)) {
-        res.status(400);
-        throw new Error('platform and (message or imageUrl) are required');
+        res.status(400); throw new Error('platform and (message or imageUrl) required');
     }
-
     const pageToken = await getPageToken();
-    if (!pageToken) {
-        res.status(500);
-        throw new Error('No Meta page token available');
-    }
+    if (!pageToken) { res.status(500); throw new Error('No Meta page token'); }
 
     let result;
-
     if (platform === 'facebook') {
-        // Publish to Facebook Page
         const body = { access_token: pageToken };
         if (message) body.message = message;
         if (imageUrl) body.url = imageUrl;
-
-        const endpoint = imageUrl
-            ? `https://graph.facebook.com/v21.0/${PAGE_ID}/photos`
-            : `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
-
-        const r = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
+        const endpoint = imageUrl ? `https://graph.facebook.com/v21.0/${PAGE_ID}/photos` : `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
+        const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         result = await r.json();
         if (result.error) throw new Error(result.error.message);
-
     } else if (platform === 'instagram') {
-        // IG requires 2-step: create container → publish
-        if (!imageUrl) {
-            res.status(400);
-            throw new Error('Instagram requires an image URL');
-        }
-
-        // Step 1: Create media container
-        const containerBody = {
-            image_url: imageUrl,
-            access_token: pageToken,
-        };
+        if (!imageUrl) { res.status(400); throw new Error('Instagram requires an image URL'); }
+        const containerBody = { image_url: imageUrl, access_token: pageToken };
         if (message) containerBody.caption = message;
-
-        const containerRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(containerBody),
-        });
-        const container = await containerRes.json();
+        const cRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(containerBody) });
+        const container = await cRes.json();
         if (container.error) throw new Error(container.error.message);
-
-        // Step 2: Publish the container
-        const publishRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                creation_id: container.id,
-                access_token: pageToken,
-            }),
-        });
-        result = await publishRes.json();
+        const pRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creation_id: container.id, access_token: pageToken }) });
+        result = await pRes.json();
         if (result.error) throw new Error(result.error.message);
-    } else {
-        res.status(400);
-        throw new Error(`Platform "${platform}" not supported for publishing`);
     }
 
-    // Clear cache so new post appears
-    delete CACHE[`posts_${platform}`];
-    delete CACHE['metrics'];
-
+    delete CACHE[`posts_${platform}`]; delete CACHE['metrics'];
     res.json({ success: true, data: result, message: `Published to ${platform}` });
 });
 
@@ -186,66 +192,39 @@ async function fetchInstagram(pageToken) {
         fetch(`https://graph.facebook.com/v21.0/${IG_ID}?fields=name,biography,followers_count,media_count,profile_picture_url&access_token=${pageToken}`).then(r => r.json()),
         fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media?fields=like_count,comments_count,timestamp,media_type,caption,permalink&limit=25&access_token=${pageToken}`).then(r => r.json()),
     ]);
-
     const posts = media.data || [];
     const totalLikes = posts.reduce((s, p) => s + (p.like_count || 0), 0);
     const totalComments = posts.reduce((s, p) => s + (p.comments_count || 0), 0);
     const avgEngPerPost = posts.length > 0 ? (totalLikes + totalComments) / posts.length : 0;
     const engagementRate = profile.followers_count > 0 && posts.length > 0
         ? ((avgEngPerPost / profile.followers_count) * 100).toFixed(2) + '%' : '—';
-
-    // Best performing post
-    const bestPost = posts.length > 0
-        ? posts.reduce((best, p) => (p.like_count || 0) > (best.like_count || 0) ? p : best, posts[0])
-        : null;
+    const bestPost = posts.length > 0 ? posts.reduce((b, p) => (p.like_count || 0) > (b.like_count || 0) ? p : b, posts[0]) : null;
 
     return {
-        followers: profile.followers_count || 0,
-        posts: profile.media_count || 0,
+        followers: profile.followers_count || 0, posts: profile.media_count || 0,
         engagement: engagementRate,
         avgLikes: posts.length > 0 ? Math.round(totalLikes / posts.length) : 0,
         avgComments: posts.length > 0 ? Math.round(totalComments / posts.length) : 0,
-        totalLikes,
-        totalComments,
-        profilePic: profile.profile_picture_url || '',
-        bio: profile.biography || '',
-        bestPost: bestPost ? {
-            likes: bestPost.like_count || 0,
-            comments: bestPost.comments_count || 0,
-            caption: (bestPost.caption || '').slice(0, 100),
-            url: bestPost.permalink || '',
-            type: bestPost.media_type || 'IMAGE',
-        } : null,
-        recentPosts: posts.slice(0, 6).map(p => ({
-            likes: p.like_count || 0,
-            comments: p.comments_count || 0,
-            type: p.media_type || 'IMAGE',
-            caption: (p.caption || '').slice(0, 80),
-            date: p.timestamp,
-            url: p.permalink || '',
-        })),
+        totalLikes, totalComments,
+        profilePic: profile.profile_picture_url || '', bio: profile.biography || '',
+        bestPost: bestPost ? { likes: bestPost.like_count || 0, comments: bestPost.comments_count || 0, caption: (bestPost.caption || '').slice(0, 100), url: bestPost.permalink || '', type: bestPost.media_type || 'IMAGE' } : null,
+        recentPosts: posts.slice(0, 6).map(p => ({ likes: p.like_count || 0, comments: p.comments_count || 0, type: p.media_type || 'IMAGE', caption: (p.caption || '').slice(0, 80), date: p.timestamp, url: p.permalink || '' })),
     };
 }
 
 async function fetchFacebook(pageToken) {
     const [page, postsRes] = await Promise.all([
         fetch(`https://graph.facebook.com/v21.0/${PAGE_ID}?fields=name,followers_count,fan_count&access_token=${pageToken}`).then(r => r.json()),
-        fetch(`https://graph.facebook.com/v21.0/${PAGE_ID}/posts?fields=message,created_time,full_picture,likes.summary(true),comments.summary(true),shares,permalink_url&limit=15&access_token=${pageToken}`).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch(`https://graph.facebook.com/v21.0/${PAGE_ID}/posts?fields=message,created_time,likes.summary(true),comments.summary(true),shares&limit=15&access_token=${pageToken}`).then(r => r.json()).catch(() => ({ data: [] })),
     ]);
-
     const posts = postsRes.data || [];
     const totalReactions = posts.reduce((s, p) => s + (p.likes?.summary?.total_count || 0), 0);
     const totalComments = posts.reduce((s, p) => s + (p.comments?.summary?.total_count || 0), 0);
     const totalShares = posts.reduce((s, p) => s + (p.shares?.count || 0), 0);
-
     return {
-        followers: page.followers_count || page.fan_count || 0,
-        likes: page.fan_count || 0,
-        posts: posts.length,
-        engagement: posts.length > 0 ? Math.round((totalReactions + totalComments + totalShares) / posts.length) : 0,
-        totalReactions,
-        totalComments,
-        totalShares,
+        followers: page.followers_count || page.fan_count || 0, likes: page.fan_count || 0,
+        posts: posts.length, engagement: posts.length > 0 ? Math.round((totalReactions + totalComments + totalShares) / posts.length) : 0,
+        totalReactions, totalComments, totalShares,
     };
 }
 
