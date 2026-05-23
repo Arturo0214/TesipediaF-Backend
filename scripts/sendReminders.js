@@ -32,11 +32,8 @@ function buildSofiaContextualMessage(lead) {
     return `${saludo} Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, que tipo de servicio necesitas? Ofrecemos redaccion completa, correccion de estilo, y asesoria.`;
   }
 
-  if (lead.estado_sofia === 'cotizando') {
-    return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
-  }
-
-  // calificando — detectar donde se quedo
+  // cotizando o calificando — detectar donde se quedo
+  // Solo decir "datos completos" si realmente tiene todos los campos
   if (!lead.tipo_servicio) {
     return `${saludo} Estabamos platicando sobre tu proyecto. Para ayudarte mejor, cuentame: que tipo de servicio necesitas? Tenemos redaccion completa, correccion de estilo, o asesoria.`;
   }
@@ -69,7 +66,7 @@ function buildSofiaContextualMessage(lead) {
     return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel.toLowerCase()} de ${lead.paginas} paginas?`;
   }
 
-  return `${saludo} Ya tengo todos tus datos para cotizarte. Voy a preparar tu cotizacion en un momento. Tienes alguna duda mientras tanto?`;
+  return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
 }
 
 async function main() {

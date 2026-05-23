@@ -37,13 +37,9 @@ function buildSofiaContextualMessage(lead) {
     return `${saludo} Vi que nos contactaste pero no alcanzamos a platicar. Me encantaria ayudarte con tu tesis o proyecto academico. Cuentame, que tipo de servicio necesitas? Ofrecemos redaccion completa, correccion de estilo, y asesoria.`;
   }
 
-  // Estado cotizando: ya tiene todos los datos, falta cerrar
-  if (lead.estado_sofia === 'cotizando') {
-    return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
-  }
-
-  // Estado calificando: detectar el ultimo campo llenado para pedir el siguiente
+  // Estado cotizando o calificando: detectar el ultimo campo llenado para pedir el siguiente
   // Orden: tipo_servicio → tipo_proyecto → nivel → carrera → tema → paginas → fecha_entrega
+  // Si ya tiene TODOS los datos, entonces sí decir que la cotización está lista
   if (!lead.tipo_servicio) {
     return `${saludo} Estabamos platicando sobre tu proyecto. Para ayudarte mejor, cuentame: que tipo de servicio necesitas? Tenemos redaccion completa, correccion de estilo, o asesoria.`;
   }
@@ -76,8 +72,8 @@ function buildSofiaContextualMessage(lead) {
     return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel.toLowerCase()} de ${lead.paginas} paginas?`;
   }
 
-  // Tiene todos los datos pero sigue en calificando (caso raro)
-  return `${saludo} Ya tengo todos tus datos para cotizarte. Voy a preparar tu cotizacion en un momento. Tienes alguna duda mientras tanto?`;
+  // Tiene todos los datos — ahora sí decir que la cotización está lista
+  return `${saludo} Ya tenemos todos tus datos y tu cotizacion esta casi lista! Te la envio en un momento si estas de acuerdo. Quieres que procedamos?`;
 }
 
 /**
