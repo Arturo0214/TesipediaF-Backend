@@ -503,7 +503,7 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto', 'tema',
     'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
     'created_at', 'updated_at', 'ultimo_mensaje_at',
-    'notas_admin', 'etiquetas', 'ultimo_mensaje_preview',
+    'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
     'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
   ].join(',');
 
