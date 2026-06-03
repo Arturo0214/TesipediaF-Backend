@@ -517,9 +517,9 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     throw new Error(`Error de Supabase: ${errorText}`);
   }
   const raw = await response.json();
-  // Filtrar calificando: solo los que avanzaron (tienen precio)
+  // Filtrar calificando: solo los que avanzaron (tienen tipo_servicio o carrera)
   const leads = raw.filter(l =>
-    l.estado_sofia !== 'calificando' || (l.precio && l.precio > 0)
+    l.estado_sofia !== 'calificando' || (l.tipo_servicio && l.tipo_servicio.trim() !== '')
   );
   res.json(leads);
 });
