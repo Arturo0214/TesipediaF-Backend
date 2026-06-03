@@ -138,6 +138,7 @@ const login = asyncHandler(async (req, res) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
+    comisionRate: user.comisionRate,
     token
   });
 });
@@ -159,6 +160,7 @@ const getProfile = asyncHandler(async (req, res) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      comisionRate: user.comisionRate,
     });
   } else {
     res.status(404);
