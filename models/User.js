@@ -35,6 +35,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    comisionRate: {
+      type: Number,
+      default: 0.20,
+      min: 0,
+      max: 1,
+    },
     resetPasswordToken: String,              // 🆕 Token hashed
     resetPasswordExpires: Date,              // 🆕 Fecha de expiración
   },

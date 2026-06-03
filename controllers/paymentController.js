@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPaymentStatusFromGuest } from './guestPaymentController.js';
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 import { autoSyncProject, autoSyncPaymentSchedule } from './googleCalendarController.js';
+import User from '../models/User.js';
 
 
 // 💳 Crear sesión de pago con Stripe
@@ -986,6 +987,20 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     return 'unico';
   };
 
+  // Build vendedor → comisionRate lookup from User collection
+  const vendedorUsers = await User.find(
+    { comisionRate: { $exists: true } },
+    { name: 1, comisionRate: 1 }
+  ).lean();
+  const comisionMap = {};
+  for (const u of vendedorUsers) {
+    comisionMap[u.name.toLowerCase().trim()] = u.comisionRate;
+  }
+  const getComision = (vendedor, amount) => {
+    const rate = comisionMap[(vendedor || '').toLowerCase().trim()] ?? 0.20;
+    return Math.round(amount * rate);
+  };
+
   // Build unified payment records
   const unified = [];
 
@@ -1004,7 +1019,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       status: p.status,
       esquema: 'unico',
       schedule: generateSchedule(amount, 'unico', p.createdAt),
-      commission: Math.round(amount * 0.20),
+      commission: getComision(p.vendedor, amount),
       date: p.createdAt,
       dueDate: p.order?.dueDate || null,
       vendedor: p.vendedor || '',
@@ -1038,7 +1053,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
         });
         return sched;
       })(),
-      commission: Math.round(amount * 0.20),
+      commission: getComision(q.vendedor, amount),
       date: payDate,
       dueDate: q.fechaEntrega || null,
       tipoServicio: q.tipoServicio || '',
@@ -1062,7 +1077,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       status: 'completed',
       esquema: 'unico',
       schedule: generateSchedule(amount, 'unico', g.createdAt),
-      commission: Math.round(amount * 0.20),
+      commission: getComision(g.vendedor, amount),
       date: g.createdAt,
       dueDate: g.quoteId?.dueDate || null,
       vendedor: g.vendedor || '',
@@ -1107,7 +1122,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       schedule: m.schedule && m.schedule.length > 0
         ? m.schedule
         : generateSchedule(amount, esquema, m.paymentDate || m.createdAt),
-      commission: Math.round(amount * 0.20),
+      commission: getComision(m.vendedor, amount),
       date: m.paymentDate || m.createdAt,
       dueDate: null,
       notes,

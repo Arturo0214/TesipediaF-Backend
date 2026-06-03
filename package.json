@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "createAdrianNava": "node scripts/createAdrianNava.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.86.0",
