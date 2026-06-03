@@ -507,8 +507,8 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
   ].join(',');
 
-  // cotizacion_enviada, esperando_aprobacion, y calificando con precio (avanzaron bastante)
-  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&or=(estado_sofia.eq.cotizacion_enviada,estado_sofia.eq.esperando_aprobacion,and(estado_sofia.eq.calificando,precio.gt.0))&bloqueado=neq.true&order=updated_at.desc&limit=500`;
+  // cotizacion_enviada + esperando_aprobacion + calificando (filtro precio en JS)
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&estado_sofia=in.(cotizacion_enviada,esperando_aprobacion,calificando)&bloqueado=neq.true&order=updated_at.desc&limit=1000`;
 
   const response = await fetch(url, { headers: supabaseHeaders() });
   if (!response.ok) {
@@ -516,7 +516,11 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     res.status(response.status);
     throw new Error(`Error de Supabase: ${errorText}`);
   }
-  const leads = await response.json();
+  const raw = await response.json();
+  // Filtrar calificando: solo los que avanzaron (tienen precio)
+  const leads = raw.filter(l =>
+    l.estado_sofia !== 'calificando' || (l.precio && l.precio > 0)
+  );
   res.json(leads);
 });
 
