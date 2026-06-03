@@ -1,52 +1,63 @@
-// Script para crear usuario vendedor: Adrian Nava (revival de cotizaciones)
+// Script para crear usuario Adrian Nava + actualizar comisiones de Hugo y Sandy
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
 
 dotenv.config();
 
-const createAdrianNava = async () => {
+const run = async () => {
   try {
     console.log('Conectando a la base de datos...');
     await mongoose.connect(process.env.MONGO_URI);
     console.log('Conexión exitosa a MongoDB');
 
+    // === 1. Crear Adrian Nava ===
     const email = 'adrian.nava@tesipedia.com';
-
-    // Verificar si ya existe
     const existing = await User.findOne({ email });
     if (existing) {
-      console.log(`El usuario ${email} ya existe (ID: ${existing._id})`);
-      // Actualizar comisionRate si es necesario
+      console.log(`Adrian Nava ya existe (ID: ${existing._id})`);
       if (existing.comisionRate !== 0.125) {
         existing.comisionRate = 0.125;
         await existing.save();
-        console.log('comisionRate actualizado a 12.5%');
+        console.log('  comisionRate actualizado a 12.5%');
       }
-      await mongoose.disconnect();
-      return;
+    } else {
+      const user = await User.create({
+        name: 'Adrian Nava',
+        email,
+        password: 'Adrian2026!',
+        phone: '',
+        role: 'admin',
+        isActive: true,
+        comisionRate: 0.125,
+      });
+      console.log(`Adrian Nava creado (ID: ${user._id}) — 12.5% comisión`);
+      console.log(`  Email: ${email} / Password: Adrian2026!`);
     }
 
-    const user = await User.create({
-      name: 'Adrian Nava',
-      email,
-      password: 'Adrian2026!',
-      phone: '',
-      role: 'admin',
-      isActive: true,
-      comisionRate: 0.125,
-    });
+    // === 2. Actualizar comisiones de Hugo y Sandy a 25% ===
+    const vendedores = [
+      { name: /hugo/i, rate: 0.25 },
+      { name: /sandy/i, rate: 0.25 },
+    ];
 
-    console.log('Usuario creado exitosamente:');
-    console.log(`  Nombre: ${user.name}`);
-    console.log(`  Email: ${user.email}`);
-    console.log(`  Role: ${user.role}`);
-    console.log(`  Comision: 12.5%`);
-    console.log(`  Password: Adrian2026!`);
-    console.log(`  ID: ${user._id}`);
+    for (const v of vendedores) {
+      const user = await User.findOne({ name: v.name });
+      if (user) {
+        if (user.comisionRate !== v.rate) {
+          user.comisionRate = v.rate;
+          await user.save();
+          console.log(`${user.name}: comisionRate actualizado a ${v.rate * 100}%`);
+        } else {
+          console.log(`${user.name}: ya tiene ${v.rate * 100}%`);
+        }
+      } else {
+        console.log(`No se encontró usuario con nombre ${v.name}`);
+      }
+    }
 
     await mongoose.disconnect();
-    console.log('Desconectado de MongoDB');
+    console.log('Listo');
   } catch (error) {
     console.error('Error:', error.message);
     await mongoose.disconnect();
@@ -54,4 +65,4 @@ const createAdrianNava = async () => {
   }
 };
 
-createAdrianNava();
+run();

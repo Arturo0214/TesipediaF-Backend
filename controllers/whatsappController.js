@@ -493,6 +493,62 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/v1/whatsapp/revival-pipeline
+ * Pipeline de leads para revivals: cotización enviada + esperando aprobación
+ * Mini-CRM para seguimiento de leads calientes
+ */
+export const getRevivalPipeline = asyncHandler(async (req, res) => {
+  const columns = [
+    'wa_id', 'nombre', 'estado_sofia', 'atendido_por', 'precio',
+    'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto', 'tema',
+    'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
+    'created_at', 'updated_at', 'ultimo_mensaje_at',
+    'notas_admin', 'etiquetas', 'ultimo_mensaje_preview',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
+  ].join(',');
+
+  // cotizacion_enviada, esperando_aprobacion, y calificando con precio (avanzaron bastante)
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&or=(estado_sofia.eq.cotizacion_enviada,estado_sofia.eq.esperando_aprobacion,and(estado_sofia.eq.calificando,precio.gt.0))&bloqueado=neq.true&order=updated_at.desc&limit=500`;
+
+  const response = await fetch(url, { headers: supabaseHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text();
+    res.status(response.status);
+    throw new Error(`Error de Supabase: ${errorText}`);
+  }
+  const leads = await response.json();
+  res.json(leads);
+});
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/revival
+ * Actualizar campos de revival CRM de un lead
+ */
+export const updateLeadRevival = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { revival_status, revival_notes, revival_assigned_to } = req.body;
+
+  const updateData = {};
+  if (revival_status !== undefined) updateData.revival_status = revival_status;
+  if (revival_notes !== undefined) updateData.revival_notes = revival_notes;
+  if (revival_assigned_to !== undefined) updateData.revival_assigned_to = revival_assigned_to;
+  updateData.revival_last_contact = new Date().toISOString();
+
+  const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const response = await fetch(patchUrl, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify(updateData),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    res.status(response.status);
+    throw new Error(`Error actualizando revival: ${err}`);
+  }
+  res.json({ success: true });
+});
+
+/**
  * PATCH /api/v1/whatsapp/leads/:waId/notes
  * Actualizar notas y etiquetas de un lead
  */

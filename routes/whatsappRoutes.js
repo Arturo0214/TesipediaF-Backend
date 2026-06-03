@@ -36,6 +36,8 @@ import {
   previewDiscountPromo,
   getDiscountPromoLeads,
   sendDiscountPromo,
+  getRevivalPipeline,
+  updateLeadRevival,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -105,6 +107,10 @@ router.get('/manychat/leads', getManyChatLeadsView);
 router.get('/discount-promo/preview', previewDiscountPromo);
 router.get('/discount-promo/leads', getDiscountPromoLeads);
 router.post('/discount-promo/send', sendDiscountPromo);
+
+// Revival Pipeline — CRM de leads con cotización enviada / esperando aprobación
+router.get('/revival-pipeline', getRevivalPipeline);
+router.patch('/leads/:waId/revival', updateLeadRevival);
 
 // Leads Stats — métricas completas para panel de informes
 router.get('/leads-stats', getLeadsStats);
