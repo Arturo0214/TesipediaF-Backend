@@ -68,7 +68,9 @@ const handleQuotePaid = async ({
     // Priorizar esquemas más específicos primero
     if (lower.includes('33%') || lower.includes('33-33-34') || lower.includes('33 33 34')) return '33-33-34';
     if (lower.includes('quincena')) return '6-quincenas';
-    if (lower.includes('msi') || lower.includes('meses sin intereses') || lower.includes('6 pagos mensuales')) return '6-msi';
+    const msiMatch = lower.match(/(\d+)\s*(?:msi|meses sin intereses)/);
+    if (msiMatch) return `${msiMatch[1]}-msi`;
+    if (lower.includes('6 pagos mensuales')) return '6-msi';
     if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50 50')) return '50-50';
     return 'unico';
   };
@@ -151,23 +153,30 @@ const handleQuotePaid = async ({
         const sumQ = installments.reduce((s, inst) => s + inst.amount, 0);
         if (sumQ !== total && !parsedAmounts.length) installments[5].amount += (total - sumQ);
         break;
-      case '6-msi':
-        for (let i = 0; i < 6; i++) {
-          installments.push({
-            number: i + 1,
-            amount: parsedAmounts[i] ? Math.round(parsedAmounts[i]) : Math.round(total / 6),
-            dueDate: parsedDates[i] || new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
-            label: `Mes ${i + 1} (MSI)`,
-            status: i === 0 ? 'paid' : 'pending',
-          });
+      default: {
+        // Check for N-msi pattern
+        const msiMatch = esquema.match(/^(\d+)-msi$/);
+        if (msiMatch) {
+          const count = parseInt(msiMatch[1]);
+          for (let i = 0; i < count; i++) {
+            installments.push({
+              number: i + 1,
+              amount: parsedAmounts[i] ? Math.round(parsedAmounts[i]) : Math.round(total / count),
+              dueDate: parsedDates[i] || new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+              label: `Mes ${i + 1} (MSI)`,
+              status: i === 0 ? 'paid' : 'pending',
+            });
+          }
+          const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
+          if (sumM !== total && !parsedAmounts.length) installments[count - 1].amount += (total - sumM);
+        } else {
+          // unico
+          installments.push(
+            { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
+          );
         }
-        const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
-        if (sumM !== total && !parsedAmounts.length) installments[5].amount += (total - sumM);
         break;
-      default: // unico
-        installments.push(
-          { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
-        );
+      }
     }
     return installments;
   };

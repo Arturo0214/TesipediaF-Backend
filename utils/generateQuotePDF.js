@@ -110,7 +110,7 @@ export const generateQuotePDF = async (data) => {
         if (d.esquemaPago && !d.esquemaTipo) {
             const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico'];
             const lower = d.esquemaPago.trim().toLowerCase();
-            if (shortKeys.some(k => lower.includes(k))) {
+            if (shortKeys.some(k => lower.includes(k)) || /^\d+-msi$/.test(lower)) {
                 d.esquemaTipo = d.esquemaPago.trim();
             }
         }
@@ -127,20 +127,23 @@ export const generateQuotePDF = async (data) => {
             const part2 = Math.round(total * 0.33 * 100) / 100;
             const part3 = Math.round((total - part1 - part2) * 100) / 100;
             return `33% (${fmt(part1)}) al iniciar el proyecto (${formatDateForDisplay(pago1)}), 33% (${fmt(part2)}) al entregar avance (${formatDateForDisplay(fechaAvanceStr)}) y 34% (${fmt(part3)}) al finalizar (${formatDateForDisplay(fechaEntregaStr)}), previo a la entrega de la versión final del documento.`;
-        } else if (d.esquemaTipo === '6-quincenales' || d.esquemaTipo === '6-mensuales') {
-            const numPagos = 6;
+        } else if (d.esquemaTipo === '6-quincenales' || d.esquemaTipo === '6-mensuales' || /^\d+-msi$/.test(d.esquemaTipo)) {
+            const msiMatch = d.esquemaTipo.match(/^(\d+)-msi$/);
+            const numPagos = msiMatch ? parseInt(msiMatch[1]) : 6;
+            const isQuincenal = d.esquemaTipo === '6-quincenales';
             const montoPago = Math.round((total / numPagos) * 100) / 100;
             const ultimoPago = Math.round((total - (montoPago * (numPagos - 1))) * 100) / 100;
-            let texto = `Esquema de ${numPagos} pagos ${d.esquemaTipo === '6-quincenales' ? 'quincenales' : 'mensuales'}: `;
-            
-            const fechas = Array.isArray(d.fechasPagos) && d.fechasPagos.length === 6 ? d.fechasPagos : Array(6).fill(0).map((_,i) => {
+            const tipoTexto = isQuincenal ? 'quincenales' : msiMatch ? 'mensuales sin intereses' : 'mensuales';
+            let texto = `Esquema de ${numPagos} pagos ${tipoTexto}: `;
+
+            const fechas = Array.isArray(d.fechasPagos) && d.fechasPagos.length === numPagos ? d.fechasPagos : Array(numPagos).fill(0).map((_,i) => {
                 const nd = new Date(pago1);
-                if (d.esquemaTipo === '6-quincenales') nd.setDate(nd.getDate() + (i * 15));
+                if (isQuincenal) nd.setDate(nd.getDate() + (i * 15));
                 else nd.setMonth(nd.getMonth() + i);
                 return nd.toISOString().split('T')[0];
             });
             const pagosTexto = fechas.map((fecha, index) => {
-                const monto = index === 5 ? ultimoPago : montoPago;
+                const monto = index === numPagos - 1 ? ultimoPago : montoPago;
                 return `Pago ${index + 1}: ${fmt(monto)} (${formatDateForDisplay(fecha)})`;
             }).join(', ');
             return texto + pagosTexto + '.';
