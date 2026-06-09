@@ -108,7 +108,7 @@ export const generateQuotePDF = async (data) => {
         if (d.esquemaPago && d.esquemaPago.trim().length > 50) return d.esquemaPago;
         // Si esquemaPago es un tipo corto, usarlo como esquemaTipo
         if (d.esquemaPago && !d.esquemaTipo) {
-            const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico'];
+            const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico', 'personalizado'];
             const lower = d.esquemaPago.trim().toLowerCase();
             if (shortKeys.some(k => lower.includes(k)) || /^\d+-msi$/.test(lower)) {
                 d.esquemaTipo = d.esquemaPago.trim();
@@ -127,6 +127,12 @@ export const generateQuotePDF = async (data) => {
             const part2 = Math.round(total * 0.33 * 100) / 100;
             const part3 = Math.round((total - part1 - part2) * 100) / 100;
             return `33% (${fmt(part1)}) al iniciar el proyecto (${formatDateForDisplay(pago1)}), 33% (${fmt(part2)}) al entregar avance (${formatDateForDisplay(fechaAvanceStr)}) y 34% (${fmt(part3)}) al finalizar (${formatDateForDisplay(fechaEntregaStr)}), previo a la entrega de la versión final del documento.`;
+        } else if (d.esquemaTipo === 'personalizado' && Array.isArray(d.pagosCustom) && d.pagosCustom.length > 0) {
+            let texto = `Esquema de ${d.pagosCustom.length} pagos personalizado: `;
+            const pagosTexto = d.pagosCustom.map((p, i) => {
+                return `Pago ${i + 1}: ${fmt(Number(p.monto) || 0)} (${formatDateForDisplay(p.fecha)})`;
+            }).join(', ');
+            return texto + pagosTexto + '.';
         } else if (d.esquemaTipo === '6-quincenales' || d.esquemaTipo === '6-mensuales' || /^\d+-msi$/.test(d.esquemaTipo)) {
             const msiMatch = d.esquemaTipo.match(/^(\d+)-msi$/);
             const numPagos = msiMatch ? parseInt(msiMatch[1]) : 6;
