@@ -161,6 +161,20 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.Mixed,
             default: {},
         },
+        // Esquema de pago detallado (para reconstruir las parcialidades en el dashboard)
+        esquemaTipo: {
+            type: String,
+            default: '',
+        },
+        fechasPagos: {
+            type: [String],
+            default: [],
+        },
+        // Pagos personalizados: [{ monto: Number, fecha: 'YYYY-MM-DD' }]
+        pagosCustom: {
+            type: [{ monto: Number, fecha: String }],
+            default: [],
+        },
     },
     { timestamps: true }
 );

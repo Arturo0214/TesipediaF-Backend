@@ -923,11 +923,26 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 });
 
   // Helper: generate installment schedule based on esquemaPago
-  const generateSchedule = (totalAmount, esquema, startDate) => {
+  const generateSchedule = (totalAmount, esquema, startDate, customPagos = null) => {
     const start = new Date(startDate);
     const installments = [];
 
     switch (esquema) {
+      case 'personalizado':
+        if (Array.isArray(customPagos) && customPagos.length) {
+          // Reconstruye las parcialidades con los montos y fechas reales guardados
+          customPagos.forEach((p, i) => installments.push({
+            number: i + 1,
+            amount: Math.round(Number(p.monto) || 0),
+            // 'T12:00:00' evita el corrimiento de día por zona horaria (UTC vs MX)
+            dueDate: p.fecha ? new Date(`${p.fecha}T12:00:00`) : new Date(start),
+            label: `Pago ${i + 1}`,
+          }));
+        } else {
+          // Sin desglose guardado (registros antiguos): cae a pago único
+          installments.push({ number: 1, amount: totalAmount, dueDate: new Date(start), label: 'Pago único' });
+        }
+        break;
       case '50-50':
         installments.push(
           { number: 1, amount: Math.round(totalAmount * 0.5), dueDate: new Date(start), label: '1er pago (50%)' },
@@ -980,7 +995,9 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const normalizeEsquema = (raw) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
+    if (lower.includes('personaliz')) return 'personalizado';
     if (lower.includes('quincena') || lower.includes('6 quincena')) return '6-quincenas';
+    if (lower.includes('mensual')) return '6-msi';
     if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
     if (lower.includes('33%') || lower.includes('33-33')) return '33-33-34';
     if (lower.includes('50%') || lower.includes('50-50')) return '50-50';
@@ -1029,7 +1046,8 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   // From GeneratedQuotes (Sofia paid quotes)
   for (const q of paidQuotes) {
     const amount = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
-    const esquema = normalizeEsquema(q.esquemaPago);
+    // Preferir esquemaTipo explícito; si no, inferir del texto de esquemaPago
+    const esquema = q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago);
     // Usar paidAt (fecha exacta de pago) en vez de updatedAt (que cambia con cada edición)
     const payDate = q.paidAt || q.updatedAt;
     unified.push({
@@ -1045,7 +1063,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       esquema,
       esquemaRaw: q.esquemaPago || '',
       schedule: (() => {
-        const sched = generateSchedule(amount, esquema, payDate);
+        const sched = generateSchedule(amount, esquema, payDate, q.pagosCustom);
         // Aplicar estados guardados de parcialidades
         const statuses = q.installmentStatuses || {};
         sched.forEach((inst, idx) => {
