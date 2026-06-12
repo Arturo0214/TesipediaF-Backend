@@ -119,7 +119,8 @@ export const generateQuotePDF = async (data) => {
         // Fechas default
         const hoyStr = new Date().toISOString().split('T')[0];
         const fechaEntregaStr = d.fechaPagoFinal || d.fechaEntregaRaw || (new Date(Date.now() + 21*24*60*60*1000)).toISOString().split('T')[0];
-        const fechaAvanceStr = (new Date(Date.now() + 14*24*60*60*1000)).toISOString().split('T')[0];
+        // Respetar la fecha de avance que ponga el agente; si no, default a hoy+14
+        const fechaAvanceStr = d.fechaAvance || (new Date(Date.now() + 14*24*60*60*1000)).toISOString().split('T')[0];
         const pago1 = d.fechaPago1 || hoyStr;
 
         if (d.esquemaTipo === '33-33-34') {
@@ -128,9 +129,12 @@ export const generateQuotePDF = async (data) => {
             const part3 = Math.round((total - part1 - part2) * 100) / 100;
             return `33% (${fmt(part1)}) al iniciar el proyecto (${formatDateForDisplay(pago1)}), 33% (${fmt(part2)}) al entregar avance (${formatDateForDisplay(fechaAvanceStr)}) y 34% (${fmt(part3)}) al finalizar (${formatDateForDisplay(fechaEntregaStr)}), previo a la entrega de la versión final del documento.`;
         } else if (d.esquemaTipo === 'personalizado' && Array.isArray(d.pagosCustom) && d.pagosCustom.length > 0) {
+            // Aplicar el descuento a los montos personalizados para que el esquema lo refleje
+            const descFactor = 1 - ((parseFloat(d.descuentoEfectivo) || 0) / 100);
             let texto = `Esquema de ${d.pagosCustom.length} pagos personalizado: `;
             const pagosTexto = d.pagosCustom.map((p, i) => {
-                return `Pago ${i + 1}: ${fmt(Number(p.monto) || 0)} (${formatDateForDisplay(p.fecha)})`;
+                const monto = Math.round((Number(p.monto) || 0) * descFactor * 100) / 100;
+                return `Pago ${i + 1}: ${fmt(monto)} (${formatDateForDisplay(p.fecha)})`;
             }).join(', ');
             return texto + pagosTexto + '.';
         } else if (d.esquemaTipo === '6-quincenales' || d.esquemaTipo === '6-mensuales' || /^\d+-msi$/.test(d.esquemaTipo)) {
