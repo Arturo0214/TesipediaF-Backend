@@ -25,17 +25,30 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   const targetYear = parseInt(year) || new Date().getFullYear();
 
   const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
-    .select('clientName tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
+    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
     .lean();
 
-  // Estado del proyecto vinculado (para marcar "concluido" = status 'completed')
+  // Proyecto vinculado: estatus (para "concluido"), avance, fecha de entrega, contacto y última nota.
   const quoteIds = paidQuotes.map((q) => q._id);
   const linkedProjects = quoteIds.length
-    ? await Project.find({ generatedQuote: { $in: quoteIds } }).select('generatedQuote status').lean()
+    ? await Project.find({ generatedQuote: { $in: quoteIds } })
+        .select('generatedQuote status progress dueDate clientPhone clientEmail comments')
+        .lean()
     : [];
-  const projStatusByQuote = {};
+  const projInfoByQuote = {};
   for (const pr of linkedProjects) {
-    if (pr.generatedQuote) projStatusByQuote[String(pr.generatedQuote)] = pr.status;
+    if (!pr.generatedQuote) continue;
+    const lastComment = Array.isArray(pr.comments) && pr.comments.length
+      ? pr.comments[pr.comments.length - 1].text
+      : '';
+    projInfoByQuote[String(pr.generatedQuote)] = {
+      status: pr.status,
+      progress: pr.progress,
+      dueDate: pr.dueDate,
+      phone: pr.clientPhone,
+      email: pr.clientEmail,
+      lastComment,
+    };
   }
 
   // Gastos por mes (para la ganancia mensual)
@@ -60,26 +73,34 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
     const insts = buildInstallments(q);
     const projInst = [];
     let cobrado = 0, porCobrar = 0;
-    for (const it of insts) {
+    insts.forEach((it, i) => {
       const k = monthKey(it.fecha);
       const m = touch(k);
       if (it.status === 'paid') { m.cobrado += it.amount; cobrado += it.amount; }
       else { m.porCobrar += it.amount; porCobrar += it.amount; }
-      projInst.push({ mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
-    }
+      // idx = índice real en installmentStatuses (para marcar pagado desde la matriz)
+      projInst.push({ idx: i, mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
+    });
 
-    const projStatus = projStatusByQuote[String(q._id)] || null;
+    const info = projInfoByQuote[String(q._id)] || {};
+    const projStatus = info.status || null;
     projects.push({
       id: String(q._id),
       client: q.clientName || 'Cliente',
       title: q.tituloTrabajo || q.tipoTrabajo || 'Proyecto',
       vendedor: q.vendedor || '',
+      // Contacto para llamar/escribir desde el desglose
+      phone: info.phone || q.clientPhone || '',
+      email: info.email || q.clientEmail || '',
       total: full,
       cobrado,
       porCobrar,
       pagado: porCobrar < 0.5,             // saldo cubierto al 100%
       projectStatus: projStatus,           // pending | in_progress | review | completed | cancelled | null
       concluido: projStatus === 'completed',
+      progress: info.progress ?? null,     // % de avance del proyecto vinculado
+      dueDate: info.dueDate || null,       // fecha de entrega
+      nota: info.lastComment || '',        // última nota/estatus del proyecto
       esquema: q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago),
       closeMonth: monthKey(closeDate),
       installments: projInst,

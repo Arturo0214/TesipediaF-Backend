@@ -60,10 +60,13 @@ export const buildInstallments = (q) => {
   const descFactor = 1 - ((parseFloat(q.descuentoEfectivo) || 0) / 100);
   const statusOf = (i) => (statuses[String(i)] === 'paid' ? 'paid' : 'pending');
 
+  // Redondea a 2 decimales sin perder centavos reales (evita 500.49999 por flotantes).
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
   // ── Personalizado: montos y fechas reales de pagosCustom ──
   if (esquema === 'personalizado' && Array.isArray(q.pagosCustom) && q.pagosCustom.length > 0) {
     return q.pagosCustom.map((p, i) => ({
-      amount: Math.round((Number(p.monto) || 0) * descFactor),
+      amount: r2((Number(p.monto) || 0) * descFactor),
       fecha: p.fecha ? new Date(`${p.fecha}T12:00:00`) : new Date(start),
       status: statusOf(i),
     }));
@@ -77,20 +80,22 @@ export const buildInstallments = (q) => {
     const stepDays = esquema === '6-msi' ? 30 : 15;
     const insts = [];
     for (let i = 0; i < n; i++) {
-      const amount = amounts[i] != null ? Math.round(amounts[i]) : Math.round(total / n);
+      const amount = amounts[i] != null ? r2(amounts[i]) : r2(total / n);
       const fecha = dates[i] || new Date(start.getTime() + i * stepDays * 24 * 60 * 60 * 1000);
       insts.push({ amount, fecha, status: statusOf(i) });
     }
-    // Cuadrar al total exacto ajustando el último pago (evita descuadres de redondeo,
-    // p.ej. 50-50 de $1,001 → $501 + $501 = $1,002). Así cobrado + por cobrar = total.
-    const sum = insts.reduce((s, x) => s + x.amount, 0);
-    if (insts.length && sum !== Math.round(total)) insts[insts.length - 1].amount += (Math.round(total) - sum);
+    // Cuadrar al total exacto ajustando el último pago: solo absorbe el remanente real
+    // cuando el texto trae montos redondeados; con montos exactos no cambia nada.
+    const sum = r2(insts.reduce((s, x) => s + x.amount, 0));
+    if (insts.length && Math.abs(sum - r2(total)) > 0.005) {
+      insts[insts.length - 1].amount = r2(insts[insts.length - 1].amount + (r2(total) - sum));
+    }
     return insts;
   }
 
   // ── Único / sin esquema: un solo pago en la fecha de cierre ──
   return [{
-    amount: Math.round(total),
+    amount: r2(total),
     fecha: new Date(start),
     // Único: cobrado salvo que se haya marcado explícitamente pendiente
     status: statuses['0'] === 'pending' ? 'pending' : 'paid',
