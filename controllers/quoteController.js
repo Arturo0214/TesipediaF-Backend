@@ -10,6 +10,7 @@ import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
+import { generarEsquemaPago } from '../utils/esquemaPago.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
 import { notifyQuoteSent, notifyNewClient } from '../utils/sendWhatsAppNotification.js';
 import Project from '../models/Project.js';
@@ -1171,6 +1172,16 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
       ...req.body,
       generatedBy: req.user ? req.user._id : null,
     };
+
+    // 🧠 Fuente ÚNICA de verdad: el backend siempre recalcula el texto del esquema de pago
+    // a partir de los datos estructurados (esquemaTipo, pagosCustom, fechas, descuento).
+    // Así NINGÚN flujo (SalesQuote, cotizadora de WhatsApp, IA) puede desincronizar el esquema:
+    // el mismo cálculo que produce el PDF produce lo que se guarda en la BD.
+    const totalEsquema = Number(quoteData.precioConDescuento)
+      || Number(quoteData.precioConRecargo)
+      || Number(quoteData.precioBase)
+      || 0;
+    quoteData.esquemaPago = generarEsquemaPago(totalEsquema, quoteData);
 
     console.log('Calculated quoteData to save:', quoteData);
 

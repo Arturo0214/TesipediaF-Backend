@@ -923,9 +923,12 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 });
 
   // Helper: generate installment schedule based on esquemaPago
-  const generateSchedule = (totalAmount, esquema, startDate, customPagos = null) => {
+  const generateSchedule = (totalAmount, esquema, startDate, customPagos = null, descuentoEfectivo = 0) => {
     const start = new Date(startDate);
     const installments = [];
+    // Los montos de pagosCustom se capturan pre-descuento; aplicamos el mismo descFactor
+    // que usa el PDF/esquema (utils/esquemaPago.js) para que el cobro mostrado coincida.
+    const descFactor = 1 - ((parseFloat(descuentoEfectivo) || 0) / 100);
 
     switch (esquema) {
       case 'personalizado':
@@ -933,7 +936,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
           // Reconstruye las parcialidades con los montos y fechas reales guardados
           customPagos.forEach((p, i) => installments.push({
             number: i + 1,
-            amount: Math.round(Number(p.monto) || 0),
+            amount: Math.round((Number(p.monto) || 0) * descFactor),
             // 'T12:00:00' evita el corrimiento de día por zona horaria (UTC vs MX)
             dueDate: p.fecha ? new Date(`${p.fecha}T12:00:00`) : new Date(start),
             label: `Pago ${i + 1}`,
@@ -1063,7 +1066,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       esquema,
       esquemaRaw: q.esquemaPago || '',
       schedule: (() => {
-        const sched = generateSchedule(amount, esquema, payDate, q.pagosCustom);
+        const sched = generateSchedule(amount, esquema, payDate, q.pagosCustom, q.descuentoEfectivo);
         // Aplicar estados guardados de parcialidades
         const statuses = q.installmentStatuses || {};
         sched.forEach((inst, idx) => {
