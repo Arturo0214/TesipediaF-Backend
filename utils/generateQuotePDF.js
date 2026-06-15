@@ -103,10 +103,7 @@ export const generateQuotePDF = async (data) => {
     };
 
     const generarEsquema = (total, d) => {
-        // Solo usar esquemaPago literal si ya es un texto largo con montos (>50 chars)
-        // Strings cortos como "33-33-34", "50-50", "6-quincenales" son esquemaTipo y deben expandirse
-        if (d.esquemaPago && d.esquemaPago.trim().length > 50) return d.esquemaPago;
-        // Si esquemaPago es un tipo corto, usarlo como esquemaTipo
+        // Si esquemaPago viene como tipo corto ("33-33-34", "personalizado", etc.) y no hay esquemaTipo, usarlo como tipo
         if (d.esquemaPago && !d.esquemaTipo) {
             const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico', 'personalizado'];
             const lower = d.esquemaPago.trim().toLowerCase();
@@ -114,6 +111,14 @@ export const generateQuotePDF = async (data) => {
                 d.esquemaTipo = d.esquemaPago.trim();
             }
         }
+        // Si hay un tipo estructurado explícito, SIEMPRE regenerar el texto desde el tipo.
+        // No confiar en un esquemaPago de texto que el frontend pudo armar mal
+        // (p.ej. personalizado/único → "50%...50%..." por defecto).
+        const structuredTypes = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico', 'personalizado'];
+        const tipoNorm = (d.esquemaTipo || '').trim();
+        const esEstructurado = structuredTypes.includes(tipoNorm) || /^\d+-msi$/.test(tipoNorm);
+        // Solo usar el esquemaPago literal (texto largo con montos) cuando NO hay un tipo estructurado
+        if (!esEstructurado && d.esquemaPago && d.esquemaPago.trim().length > 50) return d.esquemaPago;
         const fmt = (v) => '$' + new Intl.NumberFormat('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
         
         // Fechas default
@@ -157,6 +162,8 @@ export const generateQuotePDF = async (data) => {
                 return `Pago ${index + 1}: ${fmt(monto)} (${formatDateForDisplay(fecha)})`;
             }).join(', ');
             return texto + pagosTexto + '.';
+        } else if (d.esquemaTipo === 'unico') {
+            return `Pago único de ${fmt(total)} al iniciar el proyecto (${formatDateForDisplay(pago1)}).`;
         }
 
         const mitad = Math.round(total * 0.50 * 100) / 100;
