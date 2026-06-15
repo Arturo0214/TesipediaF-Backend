@@ -81,11 +81,10 @@ export const buildInstallments = (q) => {
       const fecha = dates[i] || new Date(start.getTime() + i * stepDays * 24 * 60 * 60 * 1000);
       insts.push({ amount, fecha, status: statusOf(i) });
     }
-    // Cuadrar centavos en el último si usamos el cálculo por partes iguales
-    if (amounts.length < n) {
-      const sum = insts.reduce((s, x) => s + x.amount, 0);
-      if (sum !== Math.round(total)) insts[n - 1].amount += (Math.round(total) - sum);
-    }
+    // Cuadrar al total exacto ajustando el último pago (evita descuadres de redondeo,
+    // p.ej. 50-50 de $1,001 → $501 + $501 = $1,002). Así cobrado + por cobrar = total.
+    const sum = insts.reduce((s, x) => s + x.amount, 0);
+    if (insts.length && sum !== Math.round(total)) insts[insts.length - 1].amount += (Math.round(total) - sum);
     return insts;
   }
 
