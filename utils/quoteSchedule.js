@@ -1,0 +1,99 @@
+// Reconstrucción de parcialidades de una cotización pagada, con FECHAS REALES.
+// Fuente única para el flujo de caja por mes del dashboard de Revenue.
+// - personalizado: usa pagosCustom (montos y fechas reales) con descFactor.
+// - 50-50 / 33-33-34 / quincenas / msi: extrae montos y fechas del texto esquemaPago
+//   (que contiene las fechas reales en español), con fallback a cálculo por offsets.
+// - único / sin esquema: un solo pago en la fecha de cierre.
+// El estado (paid/pending) sale de installmentStatuses (lo que el agente marcó como cobrado).
+
+const MESES = {
+  enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5,
+  julio: 6, agosto: 7, septiembre: 8, octubre: 9, noviembre: 10, diciembre: 11,
+};
+
+const parseAmountsFromText = (text) => {
+  if (!text) return [];
+  const matches = [...text.matchAll(/\$\s*([\d,]+(?:\.\d{1,2})?)/g)];
+  return matches.map((m) => parseFloat(m[1].replace(/,/g, '')));
+};
+
+const parseDatesFromText = (text) => {
+  if (!text) return [];
+  const dateRegex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})/g;
+  const dates = [];
+  let match;
+  while ((match = dateRegex.exec(text)) !== null) {
+    const day = parseInt(match[1]);
+    const month = MESES[match[2].toLowerCase()];
+    const year = parseInt(match[3]);
+    // 'T12:00:00' evita corrimiento de día por zona horaria
+    if (month !== undefined && !isNaN(day) && !isNaN(year)) {
+      dates.push(new Date(year, month, day, 12, 0, 0));
+    }
+  }
+  return dates;
+};
+
+// Normaliza el esquema a una clave. Revisa '33' antes de '50' porque montos como $3,085.50
+// contienen '50' en los centavos.
+export const normalizeEsquema = (raw) => {
+  if (!raw) return 'unico';
+  const lower = String(raw).toLowerCase();
+  if (lower.includes('personaliz')) return 'personalizado';
+  if (lower.includes('quincena')) return '6-quincenas';
+  if (lower.includes('mensual') || lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
+  if (lower.includes('33%') || lower.includes('33-33')) return '33-33-34';
+  if (lower.includes('50%') || lower.includes('50-50')) return '50-50';
+  if (lower.includes('unico') || lower.includes('único')) return 'unico';
+  return 'unico';
+};
+
+/**
+ * Devuelve las parcialidades de una cotización pagada: [{ amount, fecha: Date, status }].
+ * @param {object} q  GeneratedQuote (lean)
+ */
+export const buildInstallments = (q) => {
+  const total = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
+  const esquema = q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago);
+  const start = new Date(q.paidAt || q.updatedAt || q.createdAt || Date.now());
+  const statuses = q.installmentStatuses || {};
+  const descFactor = 1 - ((parseFloat(q.descuentoEfectivo) || 0) / 100);
+  const statusOf = (i) => (statuses[String(i)] === 'paid' ? 'paid' : 'pending');
+
+  // ── Personalizado: montos y fechas reales de pagosCustom ──
+  if (esquema === 'personalizado' && Array.isArray(q.pagosCustom) && q.pagosCustom.length > 0) {
+    return q.pagosCustom.map((p, i) => ({
+      amount: Math.round((Number(p.monto) || 0) * descFactor),
+      fecha: p.fecha ? new Date(`${p.fecha}T12:00:00`) : new Date(start),
+      status: statusOf(i),
+    }));
+  }
+
+  // ── 50-50 / 33-33-34 / quincenas / msi: extraer del texto, fallback a offsets ──
+  if (['50-50', '33-33-34', '6-quincenas', '6-msi'].includes(esquema)) {
+    const amounts = parseAmountsFromText(q.esquemaPago);
+    const dates = parseDatesFromText(q.esquemaPago);
+    const n = esquema === '50-50' ? 2 : esquema === '33-33-34' ? 3 : 6;
+    const stepDays = esquema === '6-msi' ? 30 : 15;
+    const insts = [];
+    for (let i = 0; i < n; i++) {
+      const amount = amounts[i] != null ? Math.round(amounts[i]) : Math.round(total / n);
+      const fecha = dates[i] || new Date(start.getTime() + i * stepDays * 24 * 60 * 60 * 1000);
+      insts.push({ amount, fecha, status: statusOf(i) });
+    }
+    // Cuadrar centavos en el último si usamos el cálculo por partes iguales
+    if (amounts.length < n) {
+      const sum = insts.reduce((s, x) => s + x.amount, 0);
+      if (sum !== Math.round(total)) insts[n - 1].amount += (Math.round(total) - sum);
+    }
+    return insts;
+  }
+
+  // ── Único / sin esquema: un solo pago en la fecha de cierre ──
+  return [{
+    amount: Math.round(total),
+    fecha: new Date(start),
+    // Único: cobrado salvo que se haya marcado explícitamente pendiente
+    status: statuses['0'] === 'pending' ? 'pending' : 'paid',
+  }];
+};

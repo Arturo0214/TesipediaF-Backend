@@ -1205,8 +1205,13 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   let pendiente = 0;
   for (const p of realPayments) {
     if (!p.schedule || p.schedule.length <= 1) {
-      // Pago único — cobrado si status es completed/paid
-      if (p.status === 'completed' || p.status === 'paid') {
+      // Pago único — respetar el toggle de la parcialidad si se marcó explícitamente
+      // (si no, usar el status del pago). Coincide con la lógica del frontend.
+      const single = p.schedule && p.schedule[0];
+      const isPaid = single && single.status
+        ? single.status === 'paid'
+        : (p.status === 'completed' || p.status === 'paid');
+      if (isPaid) {
         cobrado += p.amount;
       } else {
         pendiente += p.amount;

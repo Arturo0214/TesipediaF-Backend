@@ -6,10 +6,82 @@ import Payment from '../models/Payment.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import GuestPayment from '../models/guestPayment.js';
 import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
+import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
 
 const router = express.Router();
+
+// ═══════════════════════════════════════════════════
+// GET /revenue/cashflow — Flujo de caja real por mes
+//   Vendido  = valor de las ventas cerradas ese mes (por fecha de cierre/paidAt).
+//   Cobrado  = parcialidades marcadas pagadas, en el mes de SU fecha real.
+//   Por cobrar = parcialidades pendientes, en el mes de SU fecha real.
+//   + matriz por proyecto x mes (cada parcialidad en su mes).
+// ═══════════════════════════════════════════════════
+router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
+  const { year } = req.query;
+  const targetYear = parseInt(year) || new Date().getFullYear();
+
+  const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
+    .select('clientName tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
+    .lean();
+
+  const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const months = {};       // "YYYY-MM" -> { vendido, cobrado, porCobrar }
+  const touch = (k) => (months[k] = months[k] || { vendido: 0, cobrado: 0, porCobrar: 0 });
+
+  const projects = [];
+
+  for (const q of paidQuotes) {
+    const full = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
+    const closeDate = new Date(q.paidAt || q.updatedAt || q.createdAt);
+    // Vendido: valor total de la venta en el mes de cierre
+    touch(monthKey(closeDate)).vendido += full;
+
+    const insts = buildInstallments(q);
+    const projInst = [];
+    for (const it of insts) {
+      const k = monthKey(it.fecha);
+      const m = touch(k);
+      if (it.status === 'paid') m.cobrado += it.amount;
+      else m.porCobrar += it.amount;
+      projInst.push({ mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
+    }
+
+    projects.push({
+      id: String(q._id),
+      client: q.clientName || 'Cliente',
+      title: q.tituloTrabajo || q.tipoTrabajo || 'Proyecto',
+      vendedor: q.vendedor || '',
+      total: full,
+      esquema: q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago),
+      closeMonth: monthKey(closeDate),
+      installments: projInst,
+    });
+  }
+
+  // Serie ordenada de meses con actividad
+  const monthly = Object.keys(months).sort().map((key) => {
+    const [y, mo] = key.split('-').map(Number);
+    const label = new Date(y, mo - 1, 1).toLocaleDateString('es-MX', { month: 'short', year: 'numeric' });
+    return { key, label, ...months[key] };
+  });
+
+  // Totales del año objetivo
+  const yearMonths = monthly.filter((m) => m.key.startsWith(String(targetYear)));
+  const yearTotals = yearMonths.reduce(
+    (a, m) => ({ vendido: a.vendido + m.vendido, cobrado: a.cobrado + m.cobrado, porCobrar: a.porCobrar + m.porCobrar }),
+    { vendido: 0, cobrado: 0, porCobrar: 0 }
+  );
+
+  res.json({
+    year: targetYear,
+    monthly,                 // todos los meses con actividad (pasados y futuros)
+    yearTotals,              // totales del año seleccionado
+    projects,                // matriz: cada proyecto con sus parcialidades por mes
+  });
+}));
 
 // ═══════════════════════════════════════════════════
 // GET /revenue/dashboard — Dashboard principal de revenue
