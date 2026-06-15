@@ -17,7 +17,9 @@ import {
     updateRevisionStatus,
     getRevisions,
     addDeliverable,
-    removeDeliverable
+    removeDeliverable,
+    addInternalNote,
+    deleteInternalNote
 } from '../controllers/projectController.js';
 import { protect, admin, writer } from '../middleware/authMiddleware.js';
 import upload from '../middleware/uploadMiddleware.js';
@@ -56,6 +58,12 @@ router.route('/:id/progress')
 
 router.route('/:id/comments')
     .post(protect, addComment);
+
+// Notas internas (solo admin) — no visibles para el cliente
+router.route('/:id/notes')
+    .post(protect, admin, addInternalNote);
+router.route('/:id/notes/:noteId')
+    .delete(protect, admin, deleteInternalNote);
 
 // Revision / version routes
 router.route('/:id/revisions')

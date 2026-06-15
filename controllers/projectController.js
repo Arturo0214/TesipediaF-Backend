@@ -67,7 +67,8 @@ export const getAllProjects = asyncHandler(async (req, res) => {
         .populate('quote')
         .populate('generatedQuote')
         .populate('writer', 'name email')
-        .populate('client', 'name email');
+        .populate('client', 'name email')
+        .populate('internalNotes.createdBy', 'name');
     res.json(projects);
 });
 
@@ -84,6 +85,7 @@ export const getWriterProjects = asyncHandler(async (req, res) => {
 // Get client's projects
 export const getClientProjects = asyncHandler(async (req, res) => {
     const projects = await Project.find({ client: req.user._id })
+        .select('-internalNotes') // las notas internas nunca van al cliente
         .populate('writer', 'name')
         .populate('quote')
         .populate('generatedQuote')
@@ -94,6 +96,7 @@ export const getClientProjects = asyncHandler(async (req, res) => {
 // Get single project
 export const getProjectById = asyncHandler(async (req, res) => {
     const project = await Project.findById(req.params.id)
+        .select(req.user?.isAdmin ? undefined : '-internalNotes') // notas internas solo para admin
         .populate('quote')
         .populate('generatedQuote')
         .populate('writer', 'name email')
@@ -242,6 +245,46 @@ export const addComment = asyncHandler(async (req, res) => {
 
     await project.save();
     res.json(project);
+});
+
+// Agregar nota INTERNA (solo admin) — no visible para el cliente
+export const addInternalNote = asyncHandler(async (req, res) => {
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+        res.status(400);
+        throw new Error('La nota no puede estar vacía');
+    }
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+    if (!project.internalNotes) project.internalNotes = [];
+    project.internalNotes.push({ text: text.trim(), createdBy: req.user._id });
+    await project.save();
+
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('internalNotes.createdBy', 'name');
+    res.status(201).json(populated);
+});
+
+// Eliminar nota interna (solo admin)
+export const deleteInternalNote = asyncHandler(async (req, res) => {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+        res.status(404);
+        throw new Error('Proyecto no encontrado');
+    }
+    project.internalNotes = (project.internalNotes || []).filter(n => String(n._id) !== req.params.noteId);
+    await project.save();
+
+    const populated = await Project.findById(project._id)
+        .populate('writer', 'name email')
+        .populate('client', 'name email')
+        .populate('internalNotes.createdBy', 'name');
+    res.json(populated);
 });
 
 // Create a project manually (admin only, no quote required)

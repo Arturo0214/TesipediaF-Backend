@@ -144,6 +144,12 @@ const projectSchema = new mongoose.Schema(
                 default: Date.now
             }
         }],
+        // Notas INTERNAS del proyecto (solo admin) — NUNCA se exponen al cliente.
+        internalNotes: [{
+            text: { type: String, required: true },
+            createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            createdAt: { type: Date, default: Date.now }
+        }],
         googleCalendarEventId: {
             type: String,
             default: null
