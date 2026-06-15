@@ -5,6 +5,7 @@ import Expense from '../models/Expense.js';
 import Payment from '../models/Payment.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import GuestPayment from '../models/guestPayment.js';
+import Project from '../models/Project.js';
 import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 import Anthropic from '@anthropic-ai/sdk';
@@ -27,6 +28,23 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
     .select('clientName tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
     .lean();
 
+  // Estado del proyecto vinculado (para marcar "concluido" = status 'completed')
+  const quoteIds = paidQuotes.map((q) => q._id);
+  const linkedProjects = quoteIds.length
+    ? await Project.find({ generatedQuote: { $in: quoteIds } }).select('generatedQuote status').lean()
+    : [];
+  const projStatusByQuote = {};
+  for (const pr of linkedProjects) {
+    if (pr.generatedQuote) projStatusByQuote[String(pr.generatedQuote)] = pr.status;
+  }
+
+  // Gastos por mes (para la ganancia mensual)
+  const expenseAgg = await Expense.aggregate([
+    { $group: { _id: { y: { $year: '$date' }, m: { $month: '$date' } }, total: { $sum: '$amount' } } },
+  ]);
+  const gastosByMonth = {};
+  for (const e of expenseAgg) gastosByMonth[`${e._id.y}-${String(e._id.m).padStart(2, '0')}`] = e.total;
+
   const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const months = {};       // "YYYY-MM" -> { vendido, cobrado, porCobrar }
   const touch = (k) => (months[k] = months[k] || { vendido: 0, cobrado: 0, porCobrar: 0 });
@@ -41,45 +59,56 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
 
     const insts = buildInstallments(q);
     const projInst = [];
+    let cobrado = 0, porCobrar = 0;
     for (const it of insts) {
       const k = monthKey(it.fecha);
       const m = touch(k);
-      if (it.status === 'paid') m.cobrado += it.amount;
-      else m.porCobrar += it.amount;
+      if (it.status === 'paid') { m.cobrado += it.amount; cobrado += it.amount; }
+      else { m.porCobrar += it.amount; porCobrar += it.amount; }
       projInst.push({ mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
     }
 
+    const projStatus = projStatusByQuote[String(q._id)] || null;
     projects.push({
       id: String(q._id),
       client: q.clientName || 'Cliente',
       title: q.tituloTrabajo || q.tipoTrabajo || 'Proyecto',
       vendedor: q.vendedor || '',
       total: full,
+      cobrado,
+      porCobrar,
+      pagado: porCobrar < 0.5,             // saldo cubierto al 100%
+      projectStatus: projStatus,           // pending | in_progress | review | completed | cancelled | null
+      concluido: projStatus === 'completed',
       esquema: q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago),
       closeMonth: monthKey(closeDate),
       installments: projInst,
     });
   }
 
-  // Serie ordenada de meses con actividad
+  // Serie ordenada de meses con actividad — incluye gastos y ganancia (cobrado - gastos)
   const monthly = Object.keys(months).sort().map((key) => {
     const [y, mo] = key.split('-').map(Number);
     const label = new Date(y, mo - 1, 1).toLocaleDateString('es-MX', { month: 'short', year: 'numeric' });
-    return { key, label, ...months[key] };
+    const gastos = gastosByMonth[key] || 0;
+    return { key, label, ...months[key], gastos, ganancia: months[key].cobrado - gastos };
   });
 
   // Totales del año objetivo
   const yearMonths = monthly.filter((m) => m.key.startsWith(String(targetYear)));
   const yearTotals = yearMonths.reduce(
-    (a, m) => ({ vendido: a.vendido + m.vendido, cobrado: a.cobrado + m.cobrado, porCobrar: a.porCobrar + m.porCobrar }),
-    { vendido: 0, cobrado: 0, porCobrar: 0 }
+    (a, m) => ({
+      vendido: a.vendido + m.vendido, cobrado: a.cobrado + m.cobrado, porCobrar: a.porCobrar + m.porCobrar,
+      gastos: a.gastos + m.gastos, ganancia: a.ganancia + m.ganancia,
+    }),
+    { vendido: 0, cobrado: 0, porCobrar: 0, gastos: 0, ganancia: 0 }
   );
 
   res.json({
     year: targetYear,
-    monthly,                 // todos los meses con actividad (pasados y futuros)
-    yearTotals,              // totales del año seleccionado
-    projects,                // matriz: cada proyecto con sus parcialidades por mes
+    monthly,                 // meses con actividad: vendido/cobrado/porCobrar/gastos/ganancia
+    yearTotals,
+    projects,                // cada proyecto: total/cobrado/porCobrar/pagado/concluido + parcialidades por mes
   });
 }));
 
