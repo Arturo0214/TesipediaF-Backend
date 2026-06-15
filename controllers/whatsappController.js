@@ -207,6 +207,11 @@ export const getLeads = asyncHandler(async (req, res) => {
     } else {
       andConditions.push(`estado_sofia=eq.${encodeURIComponent(estado)}`);
     }
+  } else {
+    // Vista por defecto (sin filtro de estado): ocultar leads muertos (descartado / no_interesado).
+    // Evita que operaciones masivas (p.ej. un descarte masivo, que bumpea updated_at) entierren las
+    // conversaciones activas. Si el usuario filtra explícitamente por esos estados, sí se muestran.
+    andConditions.push('estado_sofia=not.in.(descartado,no_interesado)');
   }
   if (atendido && atendido !== 'all') {
     if (atendido === 'sin_atender') {
