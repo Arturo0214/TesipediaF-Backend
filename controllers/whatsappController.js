@@ -245,6 +245,80 @@ const supabaseHeaders = () => ({
   'Prefer': 'return=representation',
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+//  SCHEDULER PERSISTENTE — sobrevive reinicios/redeploys de Render.
+//
+//  Antes los jobs (auto-reminder, revival, quote-followup, calificacion) usaban
+//  un setInterval en MEMORIA: cada redeploy reiniciaba el reloj, así que los
+//  ciclos largos (revival 24h) podían no completarse NUNCA si el proceso se
+//  reiniciaba antes, y los cortos se re-ejecutaban en cada arranque.
+//
+//  Ahora el "último run" de cada job se persiste en la tabla `scheduler_state`
+//  y un heartbeat barato (cada 5 min) decide si ya toca correr comparando contra
+//  ese timestamp DURABLE. Un redeploy retrasa un job a lo sumo un heartbeat.
+// ──────────────────────────────────────────────────────────────────────────
+const SCHEDULER_HEARTBEAT_MS = 5 * 60 * 1000; // revisar cada 5 min
+
+async function getJobLastRun(job) {
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/scheduler_state?job=eq.${encodeURIComponent(job)}&select=last_run&limit=1`,
+      { headers: supabaseHeaders() }
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d[0]?.last_run ? new Date(d[0].last_run).getTime() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function setJobLastRun(job, ms = Date.now()) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/scheduler_state`, {
+      method: 'POST',
+      headers: { ...supabaseHeaders(), 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ job, last_run: new Date(ms).toISOString(), updated_at: new Date().toISOString() }),
+    });
+  } catch (e) {
+    console.error(`scheduler_state upsert (${job}):`, e.message);
+  }
+}
+
+/**
+ * Programa un job de forma resistente a reinicios. En vez de un setInterval
+ * largo, corre un heartbeat que cada SCHEDULER_HEARTBEAT_MS revisa si ya pasó
+ * `intervalMs` desde el último run PERSISTIDO en `scheduler_state`.
+ * Devuelve el handle del heartbeat (setInterval) para que stop*() lo limpie.
+ *
+ * @param {string}   job             clave en scheduler_state (ej. 'auto_revival')
+ * @param {number}   intervalMs      cada cuánto debe correr el job
+ * @param {Function} runFn           la función del ciclo
+ * @param {Object}   stateObj        estado en memoria (refleja lastRun y active)
+ * @param {number}   initialDelayMs  retraso del primer chequeo (escalona el arranque)
+ */
+function schedulePersistent(job, intervalMs, runFn, stateObj, initialDelayMs = 30000) {
+  let running = false;
+  const tick = async () => {
+    if (running) return;                                  // evita solapar ciclos largos
+    if (stateObj && stateObj.active === false) return;    // job detenido desde el panel
+    running = true;
+    try {
+      const last = await getJobLastRun(job);
+      if (last != null && (Date.now() - last) < intervalMs) return; // aún no toca
+      await runFn();
+      await setJobLastRun(job, Date.now());
+      if (stateObj) stateObj.lastRun = new Date().toISOString();
+    } catch (e) {
+      console.error(`Scheduler ${job} tick error:`, e.message);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, initialDelayMs);                       // primer chequeo escalonado
+  return setInterval(tick, SCHEDULER_HEARTBEAT_MS);       // heartbeat durable
+}
+
 /**
  * GET /api/v1/whatsapp/leads
  * Obtener todos los leads SIN historial_chat para reducir egress de Supabase.
@@ -1532,10 +1606,8 @@ async function runAutoReminder() {
 function startAutoReminder() {
   if (autoReminder._timer) clearInterval(autoReminder._timer);
   autoReminder.active = true;
-  autoReminder._timer = setInterval(runAutoReminder, autoReminder.intervalMinutes * 60 * 1000);
-  // Ejecutar inmediatamente la primera vez
-  runAutoReminder();
-  console.log(`🤖 Auto-reminder ACTIVADO — cada ${autoReminder.intervalMinutes} min, leads >  ${autoReminder.staleMinutes} min sin actividad`);
+  autoReminder._timer = schedulePersistent('auto_reminder', autoReminder.intervalMinutes * 60 * 1000, runAutoReminder, autoReminder, 30 * 1000);
+  console.log(`🤖 Auto-reminder ACTIVADO (persistente) — cada ${autoReminder.intervalMinutes} min, leads >  ${autoReminder.staleMinutes} min sin actividad`);
 }
 
 function stopAutoReminder() {
@@ -2104,10 +2176,8 @@ async function runAutoRevivalCycle() {
 function startAutoRevival() {
   if (autoRevival._timer) clearInterval(autoRevival._timer);
   autoRevival.active = true;
-  autoRevival._timer = setInterval(runAutoRevivalCycle, autoRevival.intervalHours * 60 * 60 * 1000);
-  // Ejecutar la primera vez después de 5 minutos (para no saturar al arrancar)
-  setTimeout(runAutoRevivalCycle, 5 * 60 * 1000);
-  console.log(`🔄 Auto-revival ACTIVADO — cada ${autoRevival.intervalHours}h, max ${autoRevival.maxPerRun} leads por ciclo`);
+  autoRevival._timer = schedulePersistent('auto_revival', autoRevival.intervalHours * 60 * 60 * 1000, runAutoRevivalCycle, autoRevival, 90 * 1000);
+  console.log(`🔄 Auto-revival ACTIVADO (persistente) — cada ${autoRevival.intervalHours}h, max ${autoRevival.maxPerRun} leads por ciclo`);
 }
 
 function stopAutoRevival() {
@@ -2838,9 +2908,8 @@ async function runAutoQuoteFollowUpCycle() {
 function startQuoteFollowUp() {
   if (autoQuoteFollowUp._timer) clearInterval(autoQuoteFollowUp._timer);
   autoQuoteFollowUp.active = true;
-  autoQuoteFollowUp._timer = setInterval(runAutoQuoteFollowUpCycle, autoQuoteFollowUp.intervalHours * 60 * 60 * 1000);
-  setTimeout(runAutoQuoteFollowUpCycle, 10 * 60 * 1000); // Primera ejecución a los 10 min
-  console.log(`📩 Auto quote follow-up ACTIVADO — cada ${autoQuoteFollowUp.intervalHours}h, max ${autoQuoteFollowUp.maxPerRun} leads`);
+  autoQuoteFollowUp._timer = schedulePersistent('quote_followup', autoQuoteFollowUp.intervalHours * 60 * 60 * 1000, runAutoQuoteFollowUpCycle, autoQuoteFollowUp, 150 * 1000);
+  console.log(`📩 Auto quote follow-up ACTIVADO (persistente) — cada ${autoQuoteFollowUp.intervalHours}h, max ${autoQuoteFollowUp.maxPerRun} leads`);
 }
 
 function stopQuoteFollowUp() {
@@ -3799,8 +3868,8 @@ async function runCalificacionFollowUp() {
 function startCalificacionFollowUp() {
   if (calificacionFollowUp._timer) clearInterval(calificacionFollowUp._timer);
   calificacionFollowUp.active = true;
-  calificacionFollowUp._timer = setInterval(runCalificacionFollowUp, calificacionFollowUp.intervalMinutes * 60 * 1000);
-  console.log(`📋 Calificación Follow-Up ACTIVADO — cada ${calificacionFollowUp.intervalMinutes} min`);
+  calificacionFollowUp._timer = schedulePersistent('calificacion_followup', calificacionFollowUp.intervalMinutes * 60 * 1000, runCalificacionFollowUp, calificacionFollowUp, 210 * 1000);
+  console.log(`📋 Calificación Follow-Up ACTIVADO (persistente) — cada ${calificacionFollowUp.intervalMinutes} min`);
 }
 
 function stopCalificacionFollowUp() {
