@@ -116,6 +116,90 @@ function isWindowExpired(historial, updatedAt) {
   return true;
 }
 
+/**
+ * Helper compartido: enviar un seguimiento automatico RESPETANDO la ventana de 24h.
+ *
+ *  - Ventana ABIERTA  → envia el texto contextual de Sofia (type: 'text').
+ *  - Ventana EXPIRADA → envia la plantilla aprobada `seguimiento_tesipedia`
+ *    (type: 'template'), la UNICA forma que permite WhatsApp fuera de las 24h.
+ *
+ * Antes, los jobs automaticos (auto-reminder, reengagement, calificacion-followup)
+ * mandaban SIEMPRE texto plano; para leads inactivos >24h WhatsApp lo rechazaba
+ * en silencio (error 131047) y nunca caia a la plantilla, asi que el lead se quedaba
+ * sin seguimiento. Este helper centraliza la decision texto-vs-plantilla.
+ *
+ * Si el envio es exitoso, agrega la entrada al `historial` (mutado por referencia)
+ * y persiste historial_chat + updated_at en Supabase.
+ *
+ * @param {Object}  p
+ * @param {Object}  p.lead         Lead con al menos { wa_id, nombre, updated_at }
+ * @param {Array}   p.historial    Historial ya parseado (se muta al hacer push)
+ * @param {string}  p.textMessage  Texto a enviar SI la ventana sigue abierta
+ * @param {string}  p.historyFlag  Flag para etiquetar la entrada (ej. 'isReengagement')
+ * @returns {Promise<{ok:boolean, error:string|null, mode:'template'|'text'}>}
+ */
+async function sendAutoFollowUp({ lead, historial, textMessage, historyFlag }) {
+  const cleanNumber = lead.wa_id.replace(/\D/g, '');
+  const firstName = (lead.nombre || '').split(' ')[0] || 'cliente';
+  const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
+  const windowExpired = isWindowExpired(historial, lead.updated_at);
+
+  let body;
+  let historyEntry;
+
+  if (windowExpired) {
+    // Fuera de la ventana de 24h: solo plantillas aprobadas.
+    body = {
+      messaging_product: 'whatsapp',
+      to: cleanNumber,
+      type: 'template',
+      template: {
+        name: WA_TEMPLATE_NAME,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }],
+      },
+    };
+    historyEntry = {
+      role: 'assistant',
+      content: `[TEMPLATE:seguimiento] Hola ${firstName}, somos el equipo de Tesipedia. Queremos darte seguimiento sobre tu proyecto academico. Si sigues interesado o tienes alguna duda, respondenos a este mensaje y con gusto te ayudamos.`,
+      timestamp: new Date().toISOString(),
+      isTemplate: true,
+      [historyFlag]: true,
+    };
+  } else {
+    // Ventana abierta: texto contextual normal.
+    body = { messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: textMessage } };
+    historyEntry = { role: 'assistant', content: textMessage, timestamp: new Date().toISOString(), [historyFlag]: true };
+  }
+
+  const mode = windowExpired ? 'template' : 'text';
+  let waData;
+  try {
+    const waResp = await fetch(waUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    waData = await waResp.json().catch(() => ({}));
+  } catch (e) {
+    return { ok: false, error: e.message, mode };
+  }
+
+  if (!waData || !waData.messages) {
+    const errMsg = waData?.error?.message || (waData?.error ? JSON.stringify(waData.error) : 'WhatsApp no acepto el mensaje');
+    console.error(`Seguimiento WA fallido (${lead.wa_id}, ${mode}):`, errMsg);
+    return { ok: false, error: errMsg, mode };
+  }
+
+  historial.push(historyEntry);
+  await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
+  });
+  return { ok: true, error: null, mode };
+}
+
 // Helper: generar preview del último mensaje (estilo WhatsApp)
 // Siempre muestra el ÚLTIMO mensaje real con prefijo claro de quién envió:
 // 👤 NombreCliente: texto  |  Tú: texto  |  Sofia: texto  |  📋 Plantilla: texto
@@ -1314,37 +1398,15 @@ export const sendReengagement = asyncHandler(async (req, res) => {
       continue;
     }
 
-    const cleanNumber = lead.wa_id.replace(/\D/g, '');
-    const msg = buildSofiaContextualMessage(lead);
-
+    // Respetar la ventana de 24h: fuera de ella WhatsApp solo acepta plantillas.
     try {
-      const waResp = await fetch(waUrl, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+      const r = await sendAutoFollowUp({
+        lead,
+        historial,
+        textMessage: buildSofiaContextualMessage(lead),
+        historyFlag: 'isReengagement',
       });
-      const waData = await waResp.json();
-      const success = !!waData.messages;
-
-      if (success) {
-        historial.push({
-          role: 'assistant',
-          content: msg,
-          timestamp: new Date().toISOString(),
-          isReengagement: true,
-        });
-
-        await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
-          method: 'PATCH',
-          headers: supabaseHeaders(),
-          body: JSON.stringify({
-            historial_chat: JSON.stringify(historial),
-            updated_at: new Date().toISOString(),
-          }),
-        });
-      }
-
-      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success, error: waData.error?.message || null });
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success: r.ok, error: r.error });
     } catch (e) {
       results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success: false, error: e.message });
     }
@@ -1444,31 +1506,15 @@ async function runAutoReminder() {
         continue;
       }
 
-      const cleanNumber = lead.wa_id.replace(/\D/g, '');
-      const msg = buildSofiaContextualMessage(lead);
-
+      // Respetar la ventana de 24h: fuera de ella WhatsApp solo acepta plantillas.
       try {
-        const waResp = await fetch(waUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+        const r = await sendAutoFollowUp({
+          lead,
+          historial,
+          textMessage: buildSofiaContextualMessage(lead),
+          historyFlag: 'isReengagement',
         });
-        const waData = await waResp.json();
-
-        if (waData.messages) {
-          sent++;
-
-          // Reusar el historial ya obtenido arriba (antes del check de 2 intentos)
-          historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isReengagement: true });
-
-          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
-            method: 'PATCH',
-            headers: supabaseHeaders(),
-            body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
-          });
-        } else {
-          failed++;
-        }
+        if (r.ok) sent++; else failed++;
       } catch {
         failed++;
       }
@@ -3729,28 +3775,15 @@ async function runCalificacionFollowUp() {
         continue;
       }
 
-      const msg = buildCalificacionFollowUpMessage(lead);
-      const cleanNumber = lead.wa_id.replace(/\D/g, '');
-
+      // Respetar la ventana de 24h: fuera de ella WhatsApp solo acepta plantillas.
       try {
-        const waResp = await fetch(waUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanNumber, type: 'text', text: { body: msg } }),
+        const r = await sendAutoFollowUp({
+          lead,
+          historial,
+          textMessage: buildCalificacionFollowUpMessage(lead),
+          historyFlag: 'isCalificacionFollowUp',
         });
-        const waData = await waResp.json();
-
-        if (waData.messages) {
-          sent++;
-          historial.push({ role: 'assistant', content: msg, timestamp: new Date().toISOString(), isCalificacionFollowUp: true });
-          await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${lead.wa_id}`, {
-            method: 'PATCH',
-            headers: supabaseHeaders(),
-            body: JSON.stringify({ historial_chat: JSON.stringify(historial), updated_at: new Date().toISOString() }),
-          });
-        } else {
-          failed++;
-        }
+        if (r.ok) sent++; else failed++;
       } catch { failed++; }
     }
 
@@ -4121,3 +4154,6 @@ startAutoRevival();
 
 // Quote follow-up inicia al arrancar (cada 12h por defecto)
 startQuoteFollowUp();
+
+// Calificación follow-up inicia al arrancar (cada 8h por defecto)
+startCalificacionFollowUp();
