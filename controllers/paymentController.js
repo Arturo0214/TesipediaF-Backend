@@ -488,7 +488,9 @@ export const createManualPayment = asyncHandler(async (req, res) => {
   const normalizeEsquemaKey = (raw) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
-    if (lower.includes('quincena')) return '6-quincenas';
+    const _qKey = lower.match(/^\s*(\d+)\s*-\s*quincen(?:al(?:es|as)?|as)\s*$/);
+    const _qTxt = lower.match(/(\d+)\s+pagos?\s+quincenal/);
+    if (_qKey) return `${_qKey[1]}-quincenas`; if (_qTxt) return `${_qTxt[1]}-quincenas`; if (lower.includes('quincena')) return '6-quincenas';
     if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
     if (lower.includes('33%') || lower.includes('33-33') || lower.includes('33')) return '33-33-34';
     if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50')) return '50-50';
@@ -540,10 +542,28 @@ export const createManualPayment = asyncHandler(async (req, res) => {
         const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
         if (sumM !== total) installments[5].amount += (total - sumM);
         break;
-      default:
-        installments.push(
-          { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
-        );
+      default: {
+        const quinMatch = esquema.match(/^(\d+)-quincenas$/);
+        if (quinMatch) {
+          const count = parseInt(quinMatch[1]);
+          for (let i = 0; i < count; i++) {
+            installments.push({
+              number: i + 1,
+              amount: Math.round(total / count),
+              dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+              label: `Quincena ${i + 1}`,
+              status: 'pending',
+            });
+          }
+          const sumQn = installments.reduce((s, inst) => s + inst.amount, 0);
+          if (sumQn !== total) installments[count - 1].amount += (total - sumQn);
+        } else {
+          installments.push(
+            { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
+          );
+        }
+        break;
+      }
     }
     return installments;
   };
@@ -984,11 +1004,29 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
         const sumM = installments.reduce((s, inst) => s + inst.amount, 0);
         if (sumM !== totalAmount) installments[5].amount += (totalAmount - sumM);
         break;
-      default:
-        // Single payment
-        installments.push(
-          { number: 1, amount: totalAmount, dueDate: new Date(start), label: 'Pago único' }
-        );
+      default: {
+        const quinMatch = esquema.match(/^(\d+)-quincenas$/);
+        if (quinMatch) {
+          const count = parseInt(quinMatch[1]);
+          for (let i = 0; i < count; i++) {
+            installments.push({
+              number: i + 1,
+              amount: Math.round(totalAmount / count),
+              dueDate: new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+              label: `Quincena ${i + 1}`
+            });
+          }
+          // Adjust last installment for rounding
+          const sumQn = installments.reduce((s, inst) => s + inst.amount, 0);
+          if (sumQn !== totalAmount) installments[count - 1].amount += (totalAmount - sumQn);
+        } else {
+          // Single payment
+          installments.push(
+            { number: 1, amount: totalAmount, dueDate: new Date(start), label: 'Pago único' }
+          );
+        }
+        break;
+      }
     }
     return installments;
   };
@@ -999,7 +1037,9 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     if (!raw) return 'unico';
     const lower = raw.toLowerCase();
     if (lower.includes('personaliz')) return 'personalizado';
-    if (lower.includes('quincena') || lower.includes('6 quincena')) return '6-quincenas';
+    const _qKey = lower.match(/^\s*(\d+)\s*-\s*quincen(?:al(?:es|as)?|as)\s*$/);
+    const _qTxt = lower.match(/(\d+)\s+pagos?\s+quincenal/);
+    if (_qKey) return `${_qKey[1]}-quincenas`; if (_qTxt) return `${_qTxt[1]}-quincenas`; if (lower.includes('quincena') || lower.includes('6 quincena')) return '6-quincenas';
     if (lower.includes('mensual')) return '6-msi';
     if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
     if (lower.includes('33%') || lower.includes('33-33')) return '33-33-34';

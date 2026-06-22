@@ -68,7 +68,9 @@ const handleQuotePaid = async ({
     const lower = raw.toLowerCase();
     // Priorizar esquemas más específicos primero
     if (lower.includes('33%') || lower.includes('33-33-34') || lower.includes('33 33 34')) return '33-33-34';
-    if (lower.includes('quincena')) return '6-quincenas';
+    const _qKey = lower.match(/^\s*(\d+)\s*-\s*quincen(?:al(?:es|as)?|as)\s*$/);
+    const _qTxt = lower.match(/(\d+)\s+pagos?\s+quincenal/);
+    if (_qKey) return `${_qKey[1]}-quincenas`; if (_qTxt) return `${_qTxt[1]}-quincenas`; if (lower.includes('quincena')) return '6-quincenas';
     const msiMatch = lower.match(/(\d+)\s*(?:msi|meses sin intereses)/);
     if (msiMatch) return `${msiMatch[1]}-msi`;
     if (lower.includes('6 pagos mensuales')) return '6-msi';
@@ -155,9 +157,24 @@ const handleQuotePaid = async ({
         if (sumQ !== total && !parsedAmounts.length) installments[5].amount += (total - sumQ);
         break;
       default: {
+        // Check for N-quincenas pattern
+        const quinMatch = esquema.match(/^(\d+)-quincenas$/);
         // Check for N-msi pattern
         const msiMatch = esquema.match(/^(\d+)-msi$/);
-        if (msiMatch) {
+        if (quinMatch) {
+          const count = parseInt(quinMatch[1]);
+          for (let i = 0; i < count; i++) {
+            installments.push({
+              number: i + 1,
+              amount: parsedAmounts[i] ? Math.round(parsedAmounts[i]) : Math.round(total / count),
+              dueDate: parsedDates[i] || new Date(start.getTime() + (i * 15) * 24 * 60 * 60 * 1000),
+              label: `Quincena ${i + 1}`,
+              status: i === 0 ? 'paid' : 'pending',
+            });
+          }
+          const sumQn = installments.reduce((s, inst) => s + inst.amount, 0);
+          if (sumQn !== total && !parsedAmounts.length) installments[count - 1].amount += (total - sumQn);
+        } else if (msiMatch) {
           const count = parseInt(msiMatch[1]);
           for (let i = 0; i < count; i++) {
             installments.push({

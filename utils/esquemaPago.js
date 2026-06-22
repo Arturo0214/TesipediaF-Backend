@@ -26,7 +26,7 @@ export const generarEsquemaPago = (total, d = {}) => {
     if (d.esquemaPago && !d.esquemaTipo) {
         const shortKeys = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico', 'personalizado'];
         const lower = d.esquemaPago.trim().toLowerCase();
-        if (shortKeys.some(k => lower.includes(k)) || /^\d+-msi$/.test(lower)) {
+        if (shortKeys.some(k => lower.includes(k)) || /^\d+-quincenales$/.test(lower) || /^\d+-msi$/.test(lower)) {
             d.esquemaTipo = d.esquemaPago.trim();
         }
     }
@@ -35,7 +35,7 @@ export const generarEsquemaPago = (total, d = {}) => {
     // (p.ej. personalizado/único → "50%...50%..." por defecto).
     const structuredTypes = ['33-33-34', '50-50', '6-quincenales', '6-mensuales', 'unico', 'personalizado'];
     const tipoNorm = (d.esquemaTipo || '').trim();
-    const esEstructurado = structuredTypes.includes(tipoNorm) || /^\d+-msi$/.test(tipoNorm);
+    const esEstructurado = structuredTypes.includes(tipoNorm) || /^\d+-quincenales$/.test(tipoNorm) || /^\d+-msi$/.test(tipoNorm);
     // Solo usar el esquemaPago literal (texto largo con montos) cuando NO hay un tipo estructurado
     // (p.ej. acuerdos especiales redactados a mano por la IA o un agente).
     if (!esEstructurado && d.esquemaPago && d.esquemaPago.trim().length > 50) return d.esquemaPago;
@@ -63,10 +63,11 @@ export const generarEsquemaPago = (total, d = {}) => {
             return `Pago ${i + 1}: ${fmt(monto)} (${formatDateForDisplay(p.fecha)})`;
         }).join(', ');
         return texto + pagosTexto + '.';
-    } else if (d.esquemaTipo === '6-quincenales' || d.esquemaTipo === '6-mensuales' || /^\d+-msi$/.test(d.esquemaTipo)) {
+    } else if (/^\d+-quincenales$/.test(d.esquemaTipo) || d.esquemaTipo === '6-mensuales' || /^\d+-msi$/.test(d.esquemaTipo)) {
+        const quinMatch = d.esquemaTipo.match(/^(\d+)-quincenales$/);
         const msiMatch = d.esquemaTipo.match(/^(\d+)-msi$/);
-        const numPagos = msiMatch ? parseInt(msiMatch[1]) : 6;
-        const isQuincenal = d.esquemaTipo === '6-quincenales';
+        const numPagos = quinMatch ? parseInt(quinMatch[1]) : msiMatch ? parseInt(msiMatch[1]) : 6;
+        const isQuincenal = !!quinMatch;
         const montoPago = Math.round((total / numPagos) * 100) / 100;
         const ultimoPago = Math.round((total - (montoPago * (numPagos - 1))) * 100) / 100;
         const tipoTexto = isQuincenal ? 'quincenales' : msiMatch ? 'mensuales sin intereses' : 'mensuales';
