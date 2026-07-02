@@ -17,7 +17,7 @@ const parseAmountsFromText = (text) => {
   return matches.map((m) => parseFloat(m[1].replace(/,/g, '')));
 };
 
-const parseDatesFromText = (text) => {
+export const parseDatesFromText = (text) => {
   if (!text) return [];
   const dateRegex = /(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})/g;
   const dates = [];

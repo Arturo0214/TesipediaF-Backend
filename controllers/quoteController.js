@@ -8,6 +8,7 @@ import cloudinary from '../config/cloudinary.js';
 import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
+import { parseDatesFromText } from '../utils/quoteSchedule.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
 import { generarEsquemaPago } from '../utils/esquemaPago.js';
@@ -1279,9 +1280,12 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   // Update status if provided
   if (newStatus) {
     quote.status = newStatus;
-    // Registrar la fecha exacta en que se marcó como pagada (no depender de updatedAt)
+    // Registrar la fecha del PRIMER PAGO real (del texto de la cotización) para
+    // que Revenue no atribuya ventas históricas re-registradas al mes actual.
+    // Si el texto no trae fechas, cae a la fecha de hoy.
     if (newStatus === 'paid' && previousStatus !== 'paid') {
-      quote.paidAt = new Date();
+      const fechasTexto = parseDatesFromText(quote.esquemaPago);
+      quote.paidAt = fechasTexto[0] || new Date();
     }
   }
 
