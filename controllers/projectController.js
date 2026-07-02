@@ -347,6 +347,10 @@ export const createManualProject = asyncHandler(async (req, res) => {
             const _qKey = lower.match(/^\s*(\d+)\s*-\s*quincen(?:al(?:es|as)?|as)\s*$/);
             const _qTxt = lower.match(/(\d+)\s+pagos?\s+quincenal/);
             if (_qKey) return `${_qKey[1]}-quincenas`; if (_qTxt) return `${_qTxt[1]}-quincenas`; if (lower.includes('quincena')) return '6-quincenas';
+            // MSI: preservar el número de meses (12 MSI, 12 meses sin intereses, 12-msi, "a 12 meses")
+            const _mKey = lower.match(/^\s*(\d+)\s*-\s*msi\s*$/);
+            const _mTxt = lower.match(/(\d+)\s*(?:msi|meses(?:\s+sin\s+intereses)?)/);
+            if (_mKey) return `${_mKey[1]}-msi`; if (_mTxt) return `${_mTxt[1]}-msi`;
             if (lower.includes('msi') || lower.includes('meses sin intereses')) return '6-msi';
             if (lower.includes('33%') || lower.includes('33-33') || lower.includes('33')) return '33-33-34';
             if (lower.includes('50%') || lower.includes('50-50') || lower.includes('50')) return '50-50';
@@ -413,6 +417,19 @@ export const createManualProject = asyncHandler(async (req, res) => {
                         }
                         const sumQn = installments.reduce((s, inst) => s + inst.amount, 0);
                         if (sumQn !== total) installments[count - 1].amount += (total - sumQn);
+                    } else if (esquema.match(/^(\d+)-msi$/)) {
+                        const count = parseInt(esquema.match(/^(\d+)-msi$/)[1]);
+                        for (let i = 0; i < count; i++) {
+                            installments.push({
+                                number: i + 1,
+                                amount: Math.round(total / count),
+                                dueDate: new Date(start.getFullYear(), start.getMonth() + i, start.getDate()),
+                                label: `Mes ${i + 1} (MSI)`,
+                                status: 'pending',
+                            });
+                        }
+                        const sumMi = installments.reduce((s, inst) => s + inst.amount, 0);
+                        if (sumMi !== total) installments[count - 1].amount += (total - sumMi);
                     } else {
                         installments.push(
                             { number: 1, amount: total, dueDate: new Date(start), label: 'Pago único', status: 'paid' }
