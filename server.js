@@ -40,6 +40,7 @@ import leadNoteRoutes from './routes/leadNoteRoutes.js';
 import socialRoutes from './routes/socialRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
+import { startN8nWatchdogCron } from './cron/n8nWatchdogCron.js';
 
 // Middlewares
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
@@ -169,6 +170,7 @@ notificationSocket(io);
 // Start cron jobs
 startRevenueSyncCron();
 startPaymentReminderCron();
+startN8nWatchdogCron();
 
 // Start server
 server.listen(PORT, () => {
