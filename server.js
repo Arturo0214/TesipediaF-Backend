@@ -38,6 +38,7 @@ import cotizarLeadRoutes from './routes/cotizarLeadRoutes.js';
 import revenueRoutes from './routes/revenueRoutes.js';
 import leadNoteRoutes from './routes/leadNoteRoutes.js';
 import socialRoutes from './routes/socialRoutes.js';
+import statusRoutes from './routes/statusRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 import { startN8nWatchdogCron } from './cron/n8nWatchdogCron.js';
@@ -143,6 +144,7 @@ app.use('/cotizar-leads', cotizarLeadRoutes);
 app.use('/revenue', revenueRoutes);
 app.use('/api/v1/lead-notes', leadNoteRoutes);
 app.use('/social', socialRoutes);
+app.use('/status', statusRoutes);
 
 // Middlewares de error
 app.use(notFound);
