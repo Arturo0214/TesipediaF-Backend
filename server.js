@@ -41,6 +41,7 @@ import socialRoutes from './routes/socialRoutes.js';
 import statusRoutes from './routes/statusRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
+import { startResolveCampaignsCron } from './cron/resolveCampaignsCron.js';
 import { startN8nWatchdogCron } from './cron/n8nWatchdogCron.js';
 
 // Middlewares
@@ -172,6 +173,7 @@ notificationSocket(io);
 // Start cron jobs
 startRevenueSyncCron();
 startPaymentReminderCron();
+startResolveCampaignsCron();
 startN8nWatchdogCron();
 
 // Start server
