@@ -1173,6 +1173,49 @@ router.get('/campaigns/meta/detail', protect, adminOnly, asyncHandler(async (req
       currency: 'MXN',
     }));
 
+    // 3b. Cruce con CRM (Supabase): leads/clientes/ingreso atribuidos por campaña -> CAC/ROAS reales
+    const crmByName = {};
+    try {
+      const supaUrl = process.env.SUPABASE_URL;
+      const supaKey = process.env.SUPABASE_SERVICE_KEY;
+      if (supaUrl && supaKey) {
+        const leadsRes = await axios.get(`${supaUrl}/rest/v1/leads`, {
+          params: {
+            select: 'ad_campaign_name,estado_sofia,precio',
+            and: `(ad_campaign_name.neq.,created_at.gte.${startStr}T00:00:00,created_at.lte.${endStr}T23:59:59)`,
+            limit: 10000,
+          },
+          headers: { apikey: supaKey, Authorization: `Bearer ${supaKey}` },
+        });
+        for (const l of (leadsRes.data || [])) {
+          const name = l.ad_campaign_name;
+          if (!name) continue;
+          const agg = crmByName[name] || (crmByName[name] = { leads: 0, customers: 0, revenue: 0 });
+          agg.leads++;
+          if (l.estado_sofia === 'pagado') {
+            agg.customers++;
+            agg.revenue += parseFloat(String(l.precio || '').replace(/[^0-9.]/g, '')) || 0;
+          }
+        }
+      }
+    } catch (crmErr) {
+      console.warn('[MetaCampaigns] CRM cross-ref error:', crmErr.message);
+    }
+
+    // Adjuntar CAC/ROAS por campaña (atribución propia via ctwa_clid/ad_id)
+    enriched.forEach(c => {
+      const agg = crmByName[c.name] || { leads: 0, customers: 0, revenue: 0 };
+      const spend = c.insights?.spend || 0;
+      c.crm = {
+        leads: agg.leads,
+        customers: agg.customers,
+        revenue: Math.round(agg.revenue),
+        cac: agg.customers > 0 ? Math.round(spend / agg.customers) : null,
+        roas: spend > 0 ? +(agg.revenue / spend).toFixed(2) : null,
+        cpl: agg.leads > 0 ? +(spend / agg.leads).toFixed(2) : null,
+      };
+    });
+
     // Totales del período
     const totals = enriched.reduce((acc, c) => {
       if (c.insights) {
@@ -1184,9 +1227,16 @@ router.get('/campaigns/meta/detail', protect, adminOnly, asyncHandler(async (req
       return acc;
     }, { spend: 0, impressions: 0, clicks: 0, conversions: 0 });
 
+    const crmTotals = enriched.reduce((a, c) => {
+      a.leads += c.crm.leads; a.customers += c.crm.customers; a.revenue += c.crm.revenue; return a;
+    }, { leads: 0, customers: 0, revenue: 0 });
+    crmTotals.cac = crmTotals.customers > 0 ? Math.round(totals.spend / crmTotals.customers) : null;
+    crmTotals.roas = totals.spend > 0 ? +(crmTotals.revenue / totals.spend).toFixed(2) : null;
+
     res.json({
       campaigns: enriched,
       totals,
+      crmTotals,
       period: { from: startStr, to: endStr },
       adAccountId,
     });
