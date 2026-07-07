@@ -11,6 +11,7 @@ import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import ffmpegPath from 'ffmpeg-static';
+import { sendCtwaEvent } from '../utils/metaCapi.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -652,6 +653,23 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
     res.status(response.status);
     throw new Error(`Error actualizando estado: ${err}`);
   }
+
+  // CAPI CTWA: si se marca como pagado y el lead vino de un anuncio click-to-WhatsApp,
+  // atribuir la venta a Meta usando el ctwa_clid guardado en la misma fila. Fire-and-forget.
+  if (estado_sofia === 'pagado') {
+    (async () => {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=ctwa_clid,precio&limit=1`, { headers: supabaseHeaders() });
+        const rows = await r.json();
+        const lead = Array.isArray(rows) ? rows[0] : null;
+        if (lead?.ctwa_clid) {
+          const value = parseFloat(String(lead.precio || '').replace(/[^0-9.]/g, '')) || undefined;
+          await sendCtwaEvent({ eventName: 'Purchase', ctwaClid: lead.ctwa_clid, phone: waId, value, currency: 'MXN', eventId: `wa_pagado_${waId}` });
+        }
+      } catch (e) { console.warn('[CAPI] updateLeadEstado:', e.message); }
+    })();
+  }
+
   res.json({ success: true, estado_sofia });
 });
 

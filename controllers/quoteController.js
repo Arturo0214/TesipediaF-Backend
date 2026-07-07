@@ -8,6 +8,7 @@ import cloudinary from '../config/cloudinary.js';
 import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
+import { fireCtwaEventByPhone } from '../utils/metaCapi.js';
 import { parseDatesFromText } from '../utils/quoteSchedule.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
@@ -46,6 +47,16 @@ const handleQuotePaid = async ({
       return { project: existingProject, payment: null, clientCreated: false, clientUser: null, projectError: null, skipped: true };
     }
   }
+
+  // CAPI CTWA: si el cliente vino de un anuncio click-to-WhatsApp, atribuir la venta a Meta.
+  // fire-and-forget: nunca bloquea ni afecta la auto-creación de proyecto/pago.
+  fireCtwaEventByPhone({
+    eventName: 'Purchase',
+    phone: clientPhone,
+    value: amount || 0,
+    currency: 'MXN',
+    eventId: `quote_${quoteType || 'x'}_${quoteId || ''}`,
+  }).catch(() => {});
 
   // 1. Auto-crear usuario cliente si hay email o teléfono
   let clientUser = null;
