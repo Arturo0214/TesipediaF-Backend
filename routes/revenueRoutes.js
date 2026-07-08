@@ -1173,15 +1173,40 @@ router.get('/campaigns/meta/detail', protect, adminOnly, asyncHandler(async (req
       currency: 'MXN',
     }));
 
-    // 3b. Cruce con CRM (Supabase): leads/clientes/ingreso atribuidos por campaña -> CAC/ROAS reales
+    // 3b. CRM -> CAC/ROAS reales por campaña.
+    //     Cuenta como cliente al lead atribuido que pagó, ya sea marcado 'pagado' en el panel (Supabase)
+    //     O con un pago real en cotizaciones/pagos (Mongo). Usa el monto real de Mongo cuando existe.
     const crmByName = {};
     try {
+      const last10 = (x) => String(x || '').replace(/\D/g, '').slice(-10);
+
+      // Mapa de pagos reales (Mongo) por últimos 10 dígitos del teléfono
+      const paidByPhone = new Map();
+      const addPaid = (phone, amount) => {
+        const k = last10(phone); if (!k) return;
+        const a = Number(amount) || 0;
+        const cur = paidByPhone.get(k);
+        if (cur == null || a > cur) paidByPhone.set(k, a);
+      };
+      try {
+        const [pays, gqs, gps] = await Promise.all([
+          Payment.find({ status: 'completed' }).select('clientPhone amount').lean(),
+          GeneratedQuote.find({ status: 'paid' }).select('clientPhone precioConDescuento precioConRecargo precioBase').lean(),
+          GuestPayment.find({ paymentStatus: 'completed' }).select('telefonoContacto amount').lean(),
+        ]);
+        pays.forEach(x => addPaid(x.clientPhone, x.amount));
+        gqs.forEach(x => addPaid(x.clientPhone, x.precioConDescuento || x.precioConRecargo || x.precioBase));
+        gps.forEach(x => addPaid(x.telefonoContacto, x.amount));
+      } catch (mErr) {
+        console.warn('[MetaCampaigns] Mongo paid map error:', mErr.message);
+      }
+
       const supaUrl = process.env.SUPABASE_URL;
       const supaKey = process.env.SUPABASE_SERVICE_KEY;
       if (supaUrl && supaKey) {
         const leadsRes = await axios.get(`${supaUrl}/rest/v1/leads`, {
           params: {
-            select: 'ad_campaign_name,estado_sofia,precio',
+            select: 'wa_id,ad_campaign_name,estado_sofia,precio',
             and: `(ad_campaign_name.neq.,created_at.gte.${startStr}T00:00:00,created_at.lte.${endStr}T23:59:59)`,
             limit: 10000,
           },
@@ -1192,9 +1217,13 @@ router.get('/campaigns/meta/detail', protect, adminOnly, asyncHandler(async (req
           if (!name) continue;
           const agg = crmByName[name] || (crmByName[name] = { leads: 0, customers: 0, revenue: 0 });
           agg.leads++;
-          if (l.estado_sofia === 'pagado') {
+          const mongoAmount = paidByPhone.get(last10(l.wa_id));
+          const paidPanel = l.estado_sofia === 'pagado';
+          if (paidPanel || mongoAmount != null) {
             agg.customers++;
-            agg.revenue += parseFloat(String(l.precio || '').replace(/[^0-9.]/g, '')) || 0;
+            agg.revenue += mongoAmount != null
+              ? mongoAmount
+              : (parseFloat(String(l.precio || '').replace(/[^0-9.]/g, '')) || 0);
           }
         }
       }
