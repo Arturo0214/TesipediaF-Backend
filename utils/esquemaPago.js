@@ -74,10 +74,20 @@ export const generarEsquemaPago = (total, d = {}) => {
         let texto = `Esquema de ${numPagos} pagos ${tipoTexto}: `;
 
         const fechas = Array.isArray(d.fechasPagos) && d.fechasPagos.length === numPagos ? d.fechasPagos : Array(numPagos).fill(0).map((_, i) => {
-            const nd = new Date(pago1);
-            if (isQuincenal) nd.setDate(nd.getDate() + (i * 15));
-            else nd.setMonth(nd.getMonth() + i);
-            return nd.toISOString().split('T')[0];
+            // Matemática de fechas pura (sin new Date(str), que mezcla UTC/local y corrompe el día).
+            const [py, pm, pd] = String(pago1).slice(0, 10).split('-').map(Number);
+            if (isQuincenal) {
+                const dt = new Date(Date.UTC(py, pm - 1, pd + i * 15));
+                return dt.toISOString().split('T')[0];
+            }
+            // Mensual/MSI: avanzar i meses de calendario clampando el día al último válido del
+            // mes destino, para no desbordar (p.ej. "31 de septiembre" -> 1 de octubre, saltándose meses).
+            const totalM = (pm - 1) + i;
+            const ty = py + Math.floor(totalM / 12);
+            const tm = ((totalM % 12) + 12) % 12; // mes destino 0-based
+            const lastDay = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+            const td = Math.min(pd, lastDay);
+            return `${ty}-${String(tm + 1).padStart(2, '0')}-${String(td).padStart(2, '0')}`;
         });
         const pagosTexto = fechas.map((fecha, index) => {
             const monto = index === numPagos - 1 ? ultimoPago : montoPago;
