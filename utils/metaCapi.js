@@ -17,7 +17,7 @@
 import crypto from 'crypto';
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
-const PIXEL_ID = process.env.META_PIXEL_ID || '1427949458689006'; // "Arturo Suárez Pixel"
+const PIXEL_ID = process.env.META_PIXEL_ID; // Meta Pixel de CTWA (configurado en Railway)
 const TOKEN = process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN;
 const WABA_ID = process.env.META_WABA_ID || '';
 
@@ -38,6 +38,7 @@ export function normalizeWaId(phone) {
  */
 export async function sendCtwaEvent({ eventName, ctwaClid, phone, value, currency = 'MXN', eventId, testEventCode } = {}) {
   if (!TOKEN) return { ok: false, skipped: 'no_token' };
+  if (!PIXEL_ID) return { ok: false, skipped: 'no_pixel_id' };
   if (!eventName) return { ok: false, skipped: 'no_event_name' };
   if (!ctwaClid) return { ok: false, skipped: 'no_ctwa_clid' };
 
