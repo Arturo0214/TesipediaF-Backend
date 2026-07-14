@@ -708,11 +708,15 @@ export const deleteDashboardPayment = asyncHandler(async (req, res) => {
 export const updateInstallmentStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { source } = req.query;
-  const { installmentIndex, status } = req.body; // status: 'paid' | 'pending'
+  const { installmentIndex, status } = req.body; // status: 'paid' | 'pending' | 'lost'
 
   if (installmentIndex === undefined || !status) {
     res.status(400);
     throw new Error('installmentIndex y status son requeridos');
+  }
+  if (!['paid', 'pending', 'lost'].includes(status)) {
+    res.status(400);
+    throw new Error("status debe ser 'paid', 'pending' o 'lost'");
   }
 
   if (source === 'manual' || source === 'stripe') {

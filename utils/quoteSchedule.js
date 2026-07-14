@@ -63,7 +63,11 @@ export const buildInstallments = (q) => {
   const start = new Date(q.paidAt || q.updatedAt || q.createdAt || Date.now());
   const statuses = q.installmentStatuses || {};
   const descFactor = 1 - ((parseFloat(q.descuentoEfectivo) || 0) / 100);
-  const statusOf = (i) => (statuses[String(i)] === 'paid' ? 'paid' : 'pending');
+  // Estados: 'paid' (cobrado) · 'lost' (cartera perdida, ya no se cobrará) · 'pending' (por cobrar).
+  const statusOf = (i) => {
+    const s = statuses[String(i)];
+    return s === 'paid' ? 'paid' : s === 'lost' ? 'lost' : 'pending';
+  };
 
   // Redondea a 2 decimales sin perder centavos reales (evita 500.49999 por flotantes).
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -105,7 +109,7 @@ export const buildInstallments = (q) => {
   return [{
     amount: r2(total),
     fecha: new Date(start),
-    // Único: cobrado salvo que se haya marcado explícitamente pendiente
-    status: statuses['0'] === 'pending' ? 'pending' : 'paid',
+    // Único: cobrado salvo que se haya marcado explícitamente pendiente o perdido
+    status: statuses['0'] === 'pending' ? 'pending' : statuses['0'] === 'lost' ? 'lost' : 'paid',
   }];
 };

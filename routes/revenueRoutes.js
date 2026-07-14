@@ -59,8 +59,8 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   for (const e of expenseAgg) gastosByMonth[`${e._id.y}-${String(e._id.m).padStart(2, '0')}`] = e.total;
 
   const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const months = {};       // "YYYY-MM" -> { vendido, cobrado, porCobrar }
-  const touch = (k) => (months[k] = months[k] || { vendido: 0, cobrado: 0, porCobrar: 0 });
+  const months = {};       // "YYYY-MM" -> { vendido, cobrado, porCobrar, perdido }
+  const touch = (k) => (months[k] = months[k] || { vendido: 0, cobrado: 0, porCobrar: 0, perdido: 0 });
 
   const projects = [];
 
@@ -72,13 +72,14 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
 
     const insts = buildInstallments(q);
     const projInst = [];
-    let cobrado = 0, porCobrar = 0;
+    let cobrado = 0, porCobrar = 0, perdido = 0;
     insts.forEach((it, i) => {
       const k = monthKey(it.fecha);
       const m = touch(k);
       if (it.status === 'paid') { m.cobrado += it.amount; cobrado += it.amount; }
+      else if (it.status === 'lost') { m.perdido += it.amount; perdido += it.amount; } // cartera perdida: no cuenta como por cobrar
       else { m.porCobrar += it.amount; porCobrar += it.amount; }
-      // idx = índice real en installmentStatuses (para marcar pagado desde la matriz)
+      // idx = índice real en installmentStatuses (para marcar pagado/perdido desde la matriz)
       projInst.push({ idx: i, mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
     });
 
@@ -95,6 +96,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
       total: full,
       cobrado,
       porCobrar,
+      perdido,                             // cartera perdida del proyecto
       pagado: porCobrar < 0.5,             // saldo cubierto al 100%
       projectStatus: projStatus,           // pending | in_progress | review | completed | cancelled | null
       concluido: projStatus === 'completed',
@@ -120,9 +122,10 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   const yearTotals = yearMonths.reduce(
     (a, m) => ({
       vendido: a.vendido + m.vendido, cobrado: a.cobrado + m.cobrado, porCobrar: a.porCobrar + m.porCobrar,
+      perdido: a.perdido + (m.perdido || 0),
       gastos: a.gastos + m.gastos, ganancia: a.ganancia + m.ganancia,
     }),
-    { vendido: 0, cobrado: 0, porCobrar: 0, gastos: 0, ganancia: 0 }
+    { vendido: 0, cobrado: 0, porCobrar: 0, perdido: 0, gastos: 0, ganancia: 0 }
   );
 
   res.json({
