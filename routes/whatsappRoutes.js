@@ -38,6 +38,7 @@ import {
   sendDiscountPromo,
   getRevivalPipeline,
   updateLeadRevival,
+  getLeadAssignmentStatus,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -69,6 +70,9 @@ router.patch('/leads/:waId/notes', updateLeadNotes);
 
 // Reclamar un lead (asignar dueño, solo si no tiene)
 router.patch('/leads/:waId/claim', claimLead);
+
+// Estado del sistema de asignación automática (Sandy/Hugo + auto-liberación 90 min)
+router.get('/lead-assignment/status', getLeadAssignmentStatus);
 
 // Bloquear / desbloquear un contacto
 router.patch('/leads/:waId/block', toggleBlockLead);

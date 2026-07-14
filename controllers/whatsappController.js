@@ -339,6 +339,7 @@ export const getLeads = asyncHandler(async (req, res) => {
     'tiene_tema', 'tiene_avance', 'boton_actual', 'control_humano',
     'motivo_intervencion', 'cotizacion_aprobada', 'cotizacion_enviada',
     'tema', 'pdf_url', 'modo_humano', 'auto_paused', 'atendido_por',
+    'asignado_at', 'atendido_at', 'asignacion_liberada',
     'mensaje_pendiente', 'ultimo_mensaje_at', 'bloqueado', 'origen', 'manychat_segment',
     'ultimo_mensaje_preview', 'notas_admin', 'etiquetas', 'mensajes_sin_leer',
     'ad_source', 'ad_id', 'ad_source_url', 'ad_body', 'ad_campaign_name', 'ad_name', 'ad_adset_name',
@@ -652,6 +653,23 @@ export const updateLeadEstado = asyncHandler(async (req, res) => {
     const err = await response.text();
     res.status(response.status);
     throw new Error(`Error actualizando estado: ${err}`);
+  }
+
+  // Auto-asignación: al pasar a "esperando_aprobacion" se reparte el lead entre Sandy y Hugo
+  // (round-robin balanceado) si no tiene dueño y no fue liberado previamente. Fire-and-forget.
+  if (estado_sofia === 'esperando_aprobacion') {
+    (async () => {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=atendido_por,asignacion_liberada&limit=1`, { headers: supabaseHeaders() });
+        const rows = await r.json();
+        const lead = Array.isArray(rows) ? rows[0] : null;
+        const owner = (lead?.atendido_por || '').trim();
+        if (lead && !owner && lead.asignacion_liberada !== true) {
+          const agent = await assignLeadToAgent(waId);
+          if (agent) console.log(`👥 Lead ${waId} auto-asignado a ${agent} (estado→esperando_aprobacion)`);
+        }
+      } catch (e) { console.warn('[lead-assign] inline:', e.message); }
+    })();
   }
 
   // CAPI CTWA: si se marca como pagado y el lead vino de un anuncio click-to-WhatsApp,
@@ -1072,6 +1090,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       updated_at: new Date().toISOString(),
       ultimo_mensaje_preview: buildLastMessagePreview(historial, leadNombre),
       mensajes_sin_leer: 0,
+      atendido_at: new Date().toISOString(), // el agente respondió → detiene el SLA de asignación
     };
     // Solo asignar dueño si el lead no tiene uno
     if (!leadAtendidoPor) {
@@ -1206,6 +1225,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     updated_at: new Date().toISOString(),
     ultimo_mensaje_preview: buildLastMessagePreview(historial, leadNombre),
     mensajes_sin_leer: 0,
+    atendido_at: new Date().toISOString(), // el agente respondió → detiene el SLA de asignación
   };
   if (!leadAtendidoPor) {
     patchBody.atendido_por = adminName.toLowerCase();
@@ -1403,13 +1423,23 @@ export const claimLead = asyncHandler(async (req, res) => {
   // 2. Asignar dueño (SuperAdmin puede reasignar o desasignar)
   const newOwner = (atendido_por || '').toLowerCase().trim();
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const claimPatch = {
+    atendido_por: newOwner,
+    updated_at: new Date().toISOString(),
+    // Toda (re)asignación reinicia el SLA de 90 min y quita la marca de "liberado".
+    asignacion_liberada: false,
+  };
+  if (newOwner) {
+    claimPatch.asignado_at = new Date().toISOString();
+    claimPatch.atendido_at = null;
+  } else {
+    // Desasignación manual: limpia el SLA; vuelve al pool auto-asignable.
+    claimPatch.asignado_at = null;
+  }
   const patchResp = await fetch(patchUrl, {
     method: 'PATCH',
     headers: supabaseHeaders(),
-    body: JSON.stringify({
-      atendido_por: newOwner,
-      updated_at: new Date().toISOString(),
-    }),
+    body: JSON.stringify(claimPatch),
   });
   if (!patchResp.ok) {
     res.status(500);
@@ -2214,8 +2244,20 @@ function stopAutoRevival() {
  * Body: { wa_id, nombre, mensaje, is_new_lead?, media_id?, media_type?, mimetype?, filename?, caption? }
  */
 export const incomingMessageWebhook = asyncHandler(async (req, res) => {
-  const { wa_id, nombre, mensaje, is_new_lead, media_id, media_type, mimetype, filename, caption } = req.body;
-  if (!wa_id) return res.status(400).json({ error: 'wa_id requerido' });
+  // 🔒 Auth: si WHATSAPP_WEBHOOK_SECRET está configurado, exigir el header.
+  //    Falla ABIERTO si no está configurado (para no romper prod hasta coordinar n8n + Railway).
+  const webhookSecret = process.env.WHATSAPP_WEBHOOK_SECRET;
+  if (webhookSecret && req.headers['x-webhook-secret'] !== webhookSecret) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+
+  const { nombre, mensaje, is_new_lead, media_id, media_type, mimetype, filename, caption } = req.body;
+  // 🔒 Sanitizar wa_id a solo dígitos: evita inyección de filtros PostgREST en las queries a Supabase
+  //    (endpoint público; el wa_id es controlado por el cliente).
+  const wa_id = String(req.body.wa_id || '').replace(/\D/g, '');
+  if (!wa_id || wa_id.length < 8 || wa_id.length > 15) {
+    return res.status(400).json({ error: 'wa_id inválido' });
+  }
 
   const displayName = nombre || `+${wa_id}`;
   const hasMedia = !!media_id;
@@ -4233,8 +4275,165 @@ export const sendDiscountPromo = asyncHandler(async (req, res) => {
   });
 });
 
+/* ═══════════════════════════════════════════════════════════════════
+ *  ASIGNACIÓN DE LEADS — Sandy / Hugo
+ *  Al pasar un lead a "esperando_aprobacion" se reparte automáticamente
+ *  entre Sandy y Hugo (round-robin balanceado). Si el agente asignado no
+ *  responde por WhatsApp en 90 min, el lead se LIBERA y queda sin asignar
+ *  (no se reasigna solo). Reutiliza el scheduler persistente + scheduler_state.
+ * ═══════════════════════════════════════════════════════════════════ */
+const LEAD_ASSIGN_AGENTS = ['sandy', 'hugo'];
+const LEAD_ASSIGN_SLA_MS = 90 * 60 * 1000; // 90 minutos sin atención → liberar
+
+const leadAssignment = {
+  active: false,
+  slaMinutes: 90,
+  lastRun: null,
+  lastResult: null,
+  _timer: null,
+};
+
+/**
+ * Asigna un lead al agente con menor carga (Sandy/Hugo). En empate, desempate
+ * determinista por el wa_id. `loadRef` es un contador { sandy, hugo } opcional
+ * que se mutará para repartir bien varios leads en el mismo ciclo.
+ * Devuelve el nombre del agente asignado, o null si falló.
+ */
+async function assignLeadToAgent(waId, loadRef) {
+  let load = loadRef;
+  if (!load) {
+    load = { sandy: 0, hugo: 0 };
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/leads?estado_sofia=eq.esperando_aprobacion&select=atendido_por&limit=300`, { headers: supabaseHeaders() });
+      const rows = await r.json();
+      if (Array.isArray(rows)) for (const row of rows) {
+        const o = (row.atendido_por || '').toLowerCase().trim();
+        if (o in load) load[o]++;
+      }
+    } catch (e) { console.warn('[lead-assign] cálculo de carga:', e.message); }
+  }
+  let agent;
+  if (load.sandy < load.hugo) agent = 'sandy';
+  else if (load.hugo < load.sandy) agent = 'hugo';
+  else {
+    const digit = parseInt(String(waId).slice(-1), 10);
+    agent = (Number.isFinite(digit) && digit % 2 === 0) ? 'sandy' : 'hugo';
+  }
+  const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      atendido_por: agent,
+      asignado_at: new Date().toISOString(),
+      atendido_at: null,
+      asignacion_liberada: false,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!resp.ok) { console.error('[lead-assign] PATCH asignar', waId, await resp.text()); return null; }
+  load[agent]++;
+  return agent;
+}
+
+/**
+ * Ciclo de asignación: (1) libera los leads asignados a Sandy/Hugo que llevan
+ * >90 min sin ser atendidos, (2) reparte los que están sin dueño.
+ */
+async function runLeadAssignmentCycle() {
+  try {
+    const cutoff = Date.now() - LEAD_ASSIGN_SLA_MS;
+    const url = `${SUPABASE_URL}/rest/v1/leads?estado_sofia=eq.esperando_aprobacion&select=wa_id,nombre,atendido_por,asignado_at,atendido_at,asignacion_liberada,bloqueado&limit=300`;
+    const r = await fetch(url, { headers: supabaseHeaders() });
+    if (!r.ok) { console.error('[lead-assign] fetch pool:', await r.text()); return; }
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+
+    let released = 0, assigned = 0;
+    const releasedNames = [];
+
+    // 1. LIBERAR — asignado a Sandy/Hugo, sin atender, con >90 min desde la asignación
+    for (const row of rows) {
+      const owner = (row.atendido_por || '').toLowerCase().trim();
+      if (LEAD_ASSIGN_AGENTS.includes(owner) && !row.atendido_at && row.asignado_at && new Date(row.asignado_at).getTime() < cutoff) {
+        const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${row.wa_id}`, {
+          method: 'PATCH', headers: supabaseHeaders(),
+          body: JSON.stringify({ atendido_por: null, asignado_at: null, asignacion_liberada: true, updated_at: new Date().toISOString() }),
+        });
+        if (resp.ok) { released++; releasedNames.push(row.nombre || row.wa_id); row.atendido_por = null; }
+      }
+    }
+
+    // 2. Carga actual por agente (después de liberar)
+    const load = { sandy: 0, hugo: 0 };
+    for (const row of rows) { const o = (row.atendido_por || '').toLowerCase().trim(); if (o in load) load[o]++; }
+
+    // 3. ASIGNAR — sin dueño, no liberados por inactividad, no bloqueados
+    for (const row of rows) {
+      const owner = (row.atendido_por || '').toLowerCase().trim();
+      if (owner) continue;
+      if (row.asignacion_liberada === true) continue; // liberado → queda sin asignar (pickup manual)
+      if (row.bloqueado === true) continue;
+      const agent = await assignLeadToAgent(row.wa_id, load);
+      if (agent) assigned++;
+    }
+
+    leadAssignment.lastRun = new Date().toISOString();
+    leadAssignment.lastResult = { assigned, released, pool: rows.length, time: new Date().toISOString() };
+    if (assigned || released) console.log(`👥 Lead assignment: ${assigned} asignados, ${released} liberados (pool ${rows.length})`);
+
+    // Aviso en el panel (notificación al owner) cuando se liberan leads por inactividad
+    if (released > 0 && SUPER_ADMIN_ID) {
+      try {
+        const app = global.__tesipediaApp;
+        if (app) await createNotification(app, {
+          user: SUPER_ADMIN_ID,
+          type: 'whatsapp',
+          message: `⏰ ${released} lead(s) liberado(s) por falta de atención (90 min): ${releasedNames.slice(0, 5).join(', ')}`,
+          data: { released, leads: releasedNames.slice(0, 10) },
+          link: '/admin/whatsapp',
+        });
+      } catch { /* non-critical */ }
+    }
+  } catch (e) {
+    console.error('[lead-assign] error de ciclo:', e.message);
+    leadAssignment.lastResult = { error: e.message, time: new Date().toISOString() };
+  }
+}
+
+function startLeadAssignment() {
+  if (leadAssignment._timer) clearInterval(leadAssignment._timer);
+  leadAssignment.active = true;
+  // intervalo objetivo 3 min; el heartbeat del scheduler (5 min) marca la granularidad real
+  leadAssignment._timer = schedulePersistent('lead_assignment', 3 * 60 * 1000, runLeadAssignmentCycle, leadAssignment, 45 * 1000);
+  console.log('👥 Asignación de leads (Sandy/Hugo) ACTIVADA — SLA 90 min, revisión ~cada 5 min');
+}
+
+function stopLeadAssignment() {
+  if (leadAssignment._timer) clearInterval(leadAssignment._timer);
+  leadAssignment._timer = null;
+  leadAssignment.active = false;
+  console.log('👥 Asignación de leads DESACTIVADA');
+}
+
+/**
+ * GET /api/v1/whatsapp/lead-assignment/status
+ * Estado del sistema de asignación (para el panel).
+ */
+export const getLeadAssignmentStatus = asyncHandler(async (req, res) => {
+  res.json({
+    active: leadAssignment.active,
+    slaMinutes: leadAssignment.slaMinutes,
+    agents: LEAD_ASSIGN_AGENTS,
+    lastRun: leadAssignment.lastRun,
+    lastResult: leadAssignment.lastResult,
+  });
+});
+
 // Auto-iniciar al cargar el modulo — Sofia corre cada 6h desde el arranque del server
 startAutoReminder();
+
+// Asignación de leads Sandy/Hugo + auto-liberación a los 90 min
+startLeadAssignment();
 
 // Auto-revival inicia también al arrancar (cada 24h por defecto)
 startAutoRevival();
