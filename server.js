@@ -172,7 +172,15 @@ notificationSocket(io);
 
 // Start cron jobs
 startRevenueSyncCron();
-startPaymentReminderCron();
+// Recordatorios de pago automáticos: DESACTIVADOS por defecto.
+// Este cron envía WhatsApp de cobro DIRECTO a los clientes (sin quedar registrado en el
+// panel) para parcialidades que vencen hoy o vencieron ayer. No debe correr sin
+// autorización explícita. Para reactivarlo: definir PAYMENT_REMINDERS_ENABLED=true.
+if (process.env.PAYMENT_REMINDERS_ENABLED === 'true') {
+  startPaymentReminderCron();
+} else {
+  console.log('[PaymentReminder] Cron DESACTIVADO (PAYMENT_REMINDERS_ENABLED != "true")');
+}
 startResolveCampaignsCron();
 startN8nWatchdogCron();
 
