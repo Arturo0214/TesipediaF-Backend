@@ -4285,6 +4285,13 @@ export const sendDiscountPromo = asyncHandler(async (req, res) => {
 const LEAD_ASSIGN_AGENTS = ['sandy', 'hugo'];
 const LEAD_ASSIGN_SLA_MS = 90 * 60 * 1000; // 90 minutos sin atención → liberar
 
+// Normaliza atendido_por a 'sandy' | 'hugo' | null. Tolera nombres completos
+// ('sandy alvarado', 'hugo serrano') que usa el auto-claim al enviar mensajes.
+const agentKey = (name) => {
+  const s = (name || '').toLowerCase();
+  return s.includes('sandy') ? 'sandy' : s.includes('hugo') ? 'hugo' : null;
+};
+
 const leadAssignment = {
   active: false,
   slaMinutes: 90,
@@ -4307,8 +4314,8 @@ async function assignLeadToAgent(waId, loadRef) {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/leads?estado_sofia=eq.esperando_aprobacion&select=atendido_por&limit=300`, { headers: supabaseHeaders() });
       const rows = await r.json();
       if (Array.isArray(rows)) for (const row of rows) {
-        const o = (row.atendido_por || '').toLowerCase().trim();
-        if (o in load) load[o]++;
+        const k = agentKey(row.atendido_por);
+        if (k) load[k]++;
       }
     } catch (e) { console.warn('[lead-assign] cálculo de carga:', e.message); }
   }
@@ -4353,8 +4360,7 @@ async function runLeadAssignmentCycle() {
 
     // 1. LIBERAR — asignado a Sandy/Hugo, sin atender, con >90 min desde la asignación
     for (const row of rows) {
-      const owner = (row.atendido_por || '').toLowerCase().trim();
-      if (LEAD_ASSIGN_AGENTS.includes(owner) && !row.atendido_at && row.asignado_at && new Date(row.asignado_at).getTime() < cutoff) {
+      if (agentKey(row.atendido_por) && !row.atendido_at && row.asignado_at && new Date(row.asignado_at).getTime() < cutoff) {
         const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${row.wa_id}`, {
           method: 'PATCH', headers: supabaseHeaders(),
           body: JSON.stringify({ atendido_por: null, asignado_at: null, asignacion_liberada: true, updated_at: new Date().toISOString() }),
@@ -4365,7 +4371,7 @@ async function runLeadAssignmentCycle() {
 
     // 2. Carga actual por agente (después de liberar)
     const load = { sandy: 0, hugo: 0 };
-    for (const row of rows) { const o = (row.atendido_por || '').toLowerCase().trim(); if (o in load) load[o]++; }
+    for (const row of rows) { const k = agentKey(row.atendido_por); if (k) load[k]++; }
 
     // 3. ASIGNAR — sin dueño, no liberados por inactividad, no bloqueados
     for (const row of rows) {
