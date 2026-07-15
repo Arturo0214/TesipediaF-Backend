@@ -39,6 +39,7 @@ import revenueRoutes from './routes/revenueRoutes.js';
 import leadNoteRoutes from './routes/leadNoteRoutes.js';
 import socialRoutes from './routes/socialRoutes.js';
 import statusRoutes from './routes/statusRoutes.js';
+import seguimientoRoutes from './routes/seguimientoRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 import { startResolveCampaignsCron } from './cron/resolveCampaignsCron.js';
@@ -146,6 +147,7 @@ app.use('/revenue', revenueRoutes);
 app.use('/api/v1/lead-notes', leadNoteRoutes);
 app.use('/social', socialRoutes);
 app.use('/status', statusRoutes);
+app.use('/api/seguimientos', seguimientoRoutes);
 
 // Middlewares de error
 app.use(notFound);
