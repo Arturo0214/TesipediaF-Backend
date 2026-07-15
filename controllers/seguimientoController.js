@@ -1,169 +1,119 @@
 import asyncHandler from 'express-async-handler';
 import mongoose from 'mongoose';
-import Payment from '../models/Payment.js';
+import GeneratedQuote from '../models/GeneratedQuote.js';
 import Project from '../models/Project.js';
 import Seguimiento from '../models/Seguimiento.js';
 import cloudinary from '../config/cloudinary.js';
+import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 
 /* ─────────────── helpers ─────────────── */
+const VALID_TYPES = ['quote', 'payment', 'project'];
 
-// Concilia el schedule de parcialidades contra su estado real de pago.
-function reconcile(payment) {
-  const schedule = Array.isArray(payment.schedule) ? payment.schedule : [];
+// Concilia las parcialidades de una cotización pagada — MISMA lógica que Revenue/Pagos.
+function reconcile(q) {
+  const total = q.precioConDescuento || q.precioConRecargo || q.precioBase || 0;
+  const insts = buildInstallments(q);
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
 
-  if (schedule.length === 0) {
-    // Pago sin parcialidades (único / online): pagado si status completed.
-    const pagado = payment.status === 'completed';
-    return {
-      montoTotal: payment.amount || 0,
-      pagado: pagado ? (payment.amount || 0) : 0,
-      pendiente: pagado ? 0 : (payment.amount || 0),
-      nParcialidades: 0, nPagadas: 0, nVencidas: pagado ? 0 : (payment.amount ? 1 : 0),
-      proximoVencimiento: null,
-      liquidado: pagado,
-    };
-  }
-
-  let pagado = 0, pendiente = 0, nPagadas = 0, nVencidas = 0;
+  let cobrado = 0, porCobrar = 0, perdido = 0, nPagadas = 0, nVencidas = 0;
   let proximoVencimiento = null;
-  for (const inst of schedule) {
-    const monto = Number(inst.amount) || 0;
-    if (inst.status === 'paid') { pagado += monto; nPagadas++; continue; }
-    pendiente += monto;
-    if (inst.dueDate) {
-      const d = new Date(inst.dueDate); d.setHours(0, 0, 0, 0);
-      if (d < hoy) nVencidas++;
-      if (!proximoVencimiento || d < proximoVencimiento) proximoVencimiento = d;
+  const schedule = insts.map((it, i) => {
+    if (it.status === 'paid') { cobrado += it.amount; nPagadas++; }
+    else if (it.status === 'lost') { perdido += it.amount; }
+    else {
+      porCobrar += it.amount;
+      if (it.fecha) {
+        const d = new Date(it.fecha); d.setHours(0, 0, 0, 0);
+        if (d < hoy) nVencidas++;
+        if (!proximoVencimiento || d < proximoVencimiento) proximoVencimiento = d;
+      }
     }
-  }
-  const montoTotal = pagado + pendiente;
+    return { number: i + 1, label: `Pago ${i + 1}`, amount: it.amount, dueDate: it.fecha || null, status: it.status };
+  });
+
   return {
-    montoTotal,
-    pagado,
-    pendiente,
+    montoTotal: total,
+    pagado: cobrado,
+    // "Por cobrar" al estilo Pagos = todo lo no cobrado (incluye cartera perdida).
+    pendiente: porCobrar + perdido,
+    porCobrarActivo: porCobrar,
+    perdido,
     nParcialidades: schedule.length,
     nPagadas,
     nVencidas,
     proximoVencimiento,
-    liquidado: pendiente === 0,
+    liquidado: porCobrar < 0.5,
+    schedule,
   };
 }
 
-function scheduleView(payment) {
-  return (payment.schedule || []).map((s) => ({
-    number: s.number,
-    label: s.label || (s.number ? `Pago ${s.number}` : ''),
-    amount: Number(s.amount) || 0,
-    dueDate: s.dueDate || null,
-    status: s.status || 'pending',
-  }));
-}
-
-// Busca (o crea) el doc de seguimiento manual para una fila.
 async function resolveDoc(type, id) {
-  if (!mongoose.Types.ObjectId.isValid(id)) return null;
-  const query = type === 'project' ? { project: id } : { payment: id };
+  if (!VALID_TYPES.includes(type) || !mongoose.Types.ObjectId.isValid(id)) return null;
+  const query = { [type]: id };
   let doc = await Seguimiento.findOne(query);
   if (!doc) doc = await Seguimiento.create(query);
   return doc;
 }
 
-/* ─────────────── GET /api/seguimientos ─────────────── */
-// Devuelve una fila por CADA cliente (todos los pagos + proyectos sin pago),
-// con los datos financieros en vivo (conciliados) y la capa manual (notas/archivos).
+/* ─────────────── GET /seguimientos ─────────────── */
+// Fila por cada cotización pagada (mismos clientes/números que Pagos y Revenue),
+// conciliada en vivo, + capa manual (notas/archivos/estado).
 export const getSeguimientos = asyncHandler(async (req, res) => {
-  const [payments, projects, seguimientos] = await Promise.all([
-    Payment.find({}).lean(),
-    Project.find({}).select('clientName clientEmail clientPhone payment status taskTitle dueDate vendedor').lean(),
+  const [quotes, seguimientos] = await Promise.all([
+    GeneratedQuote.find({ status: 'paid' })
+      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
+      .lean(),
     Seguimiento.find({}).lean(),
   ]);
 
-  const projByPayment = new Map();      // paymentId -> project
-  const projectsWithPayment = new Set(); // projectIds vinculados a un pago
-  for (const p of projects) {
-    if (p.payment) { projByPayment.set(String(p.payment), p); projectsWithPayment.add(String(p._id)); }
-  }
-  const segByPayment = new Map();
-  const segByProject = new Map();
-  for (const s of seguimientos) {
-    if (s.payment) segByPayment.set(String(s.payment), s);
-    if (s.project) segByProject.set(String(s.project), s);
-  }
+  const quoteIds = quotes.map((q) => q._id);
+  const projects = quoteIds.length
+    ? await Project.find({ generatedQuote: { $in: quoteIds } }).select('generatedQuote status dueDate clientPhone clientEmail').lean()
+    : [];
+  const projByQuote = new Map();
+  for (const p of projects) if (p.generatedQuote) projByQuote.set(String(p.generatedQuote), p);
+  const segByQuote = new Map();
+  for (const s of seguimientos) if (s.quote) segByQuote.set(String(s.quote), s);
 
-  const rows = [];
-
-  // 1) Una fila por pago (universo financiero: incluye pagados, únicos y pendientes)
-  for (const pay of payments) {
-    const proj = projByPayment.get(String(pay._id));
-    // Omitir pagos anónimos de pasarela (PayPal/Stripe sin nombre ni proyecto): no son cobranza.
-    const clienteNombre = pay.clientName || proj?.clientName;
-    if (!clienteNombre || !String(clienteNombre).trim()) continue;
-    const seg = segByPayment.get(String(pay._id));
-    const rec = reconcile(pay);
-    rows.push({
-      type: 'payment',
-      id: String(pay._id),
-      cliente: clienteNombre,
-      celular: pay.clientPhone || proj?.clientPhone || '',
-      email: pay.clientEmail || proj?.clientEmail || '',
-      vendedor: seg?.vendedor || pay.vendedor || proj?.vendedor || '',
-      modalidad: pay.esquemaPago || '',
-      title: pay.title || proj?.taskTitle || '',
+  const rows = quotes.map((q) => {
+    const proj = projByQuote.get(String(q._id));
+    const seg = segByQuote.get(String(q._id));
+    const rec = reconcile(q);
+    return {
+      type: 'quote',
+      id: String(q._id),
+      cliente: q.clientName || 'Cliente',
+      celular: proj?.clientPhone || q.clientPhone || '',
+      email: proj?.clientEmail || q.clientEmail || '',
+      vendedor: seg?.vendedor || q.vendedor || '',
+      modalidad: q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago),
+      title: q.tituloTrabajo || q.tipoTrabajo || '',
       fechaEntrega: seg?.fechaEntrega || proj?.dueDate || null,
-      metodo: pay.method || '',
-      paymentStatus: pay.status || '',
+      metodo: '',
+      paymentStatus: '',
       projectStatus: proj?.status || '',
-      schedule: scheduleView(pay),
       ...rec,
       estado: seg?.estado || (rec.liquidado ? 'liquidado' : 'sin_gestion'),
       notas: seg?.notas || [],
       archivos: seg?.archivos || [],
-    });
-  }
+    };
+  });
 
-  // 2) Proyectos SIN pago vinculado → también se listan (cliente sin registro financiero)
-  for (const proj of projects) {
-    if (proj.payment) continue; // ya cubierto arriba
-    const seg = segByProject.get(String(proj._id));
-    rows.push({
-      type: 'project',
-      id: String(proj._id),
-      cliente: proj.clientName || '(sin nombre)',
-      celular: proj.clientPhone || '',
-      email: proj.clientEmail || '',
-      vendedor: seg?.vendedor || proj.vendedor || '',
-      modalidad: '',
-      title: proj.taskTitle || '',
-      fechaEntrega: seg?.fechaEntrega || proj.dueDate || null,
-      metodo: '',
-      paymentStatus: '',
-      projectStatus: proj.status || '',
-      schedule: [],
-      montoTotal: 0, pagado: 0, pendiente: 0, nParcialidades: 0, nPagadas: 0, nVencidas: 0,
-      proximoVencimiento: null, liquidado: false,
-      estado: seg?.estado || 'sin_gestion',
-      notas: seg?.notas || [],
-      archivos: seg?.archivos || [],
-    });
-  }
-
-  // Orden: primero con saldo pendiente/vencidas, luego por nombre
   rows.sort((a, b) => {
     if ((b.nVencidas > 0) !== (a.nVencidas > 0)) return (b.nVencidas > 0) - (a.nVencidas > 0);
     if ((b.pendiente > 0) !== (a.pendiente > 0)) return (b.pendiente > 0) - (a.pendiente > 0);
     return (a.cliente || '').localeCompare(b.cliente || '');
   });
 
-  // Totales de conciliación
   const totales = rows.reduce((t, r) => {
     t.clientes++;
     t.montoTotal += r.montoTotal || 0;
     t.pagado += r.pagado || 0;
     t.pendiente += r.pendiente || 0;
+    t.perdido += r.perdido || 0;
     if (r.nVencidas > 0) t.conVencidas++;
     return t;
-  }, { clientes: 0, montoTotal: 0, pagado: 0, pendiente: 0, conVencidas: 0 });
+  }, { clientes: 0, montoTotal: 0, pagado: 0, pendiente: 0, perdido: 0, conVencidas: 0 });
 
   res.json({ rows, totales });
 });
@@ -172,7 +122,7 @@ export const getSeguimientos = asyncHandler(async (req, res) => {
 export const addNota = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
   const { texto } = req.body;
-  if (!['payment', 'project'].includes(type)) { res.status(400); throw new Error('type inválido'); }
+  if (!VALID_TYPES.includes(type)) { res.status(400); throw new Error('type inválido'); }
   if (!texto || !texto.trim()) { res.status(400); throw new Error('La nota no puede estar vacía'); }
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
@@ -220,7 +170,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     stream.end(req.file.buffer);
   });
 
-  const archivo = {
+  doc.archivos.push({
     url: result.secure_url,
     publicId: result.public_id,
     nombre: req.file.originalname,
@@ -228,8 +178,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     tipo: req.file.mimetype,
     subidoPor: req.user?.name || req.user?.nombre || 'admin',
     subidoEn: new Date(),
-  };
-  doc.archivos.push(archivo);
+  });
   await doc.save();
   res.status(201).json({ archivos: doc.archivos });
 });

@@ -24,6 +24,8 @@ const archivoSchema = new mongoose.Schema({
 }, { _id: true });
 
 const seguimientoSchema = new mongoose.Schema({
+  // Clave principal del tablero: la cotización pagada (misma fuente que Revenue/Pagos).
+  quote: { type: mongoose.Schema.Types.ObjectId, ref: 'GeneratedQuote', default: null, index: true },
   payment: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment', default: null, index: true },
   project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null, index: true },
   // Overrides manuales (opcionales; si están vacíos se usa el dato en vivo del pago/proyecto)
@@ -38,7 +40,8 @@ const seguimientoSchema = new mongoose.Schema({
   archivos: [archivoSchema],
 }, { timestamps: true });
 
-// Un seguimiento por pago y uno por proyecto (parciales para permitir null)
+// Un seguimiento por cotización / pago / proyecto (parciales para permitir null)
+seguimientoSchema.index({ quote: 1 }, { unique: true, partialFilterExpression: { quote: { $type: 'objectId' } } });
 seguimientoSchema.index({ payment: 1 }, { unique: true, partialFilterExpression: { payment: { $type: 'objectId' } } });
 seguimientoSchema.index({ project: 1 }, { unique: true, partialFilterExpression: { project: { $type: 'objectId' } } });
 
