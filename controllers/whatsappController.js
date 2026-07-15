@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import ffmpegPath from 'ffmpeg-static';
 import { sendCtwaEvent } from '../utils/metaCapi.js';
+import { leadYaPago } from '../utils/leadPagadoGuard.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -140,6 +141,12 @@ function isWindowExpired(historial, updatedAt) {
  * @returns {Promise<{ok:boolean, error:string|null, mode:'template'|'text'}>}
  */
 async function sendAutoFollowUp({ lead, historial, textMessage, historyFlag }) {
+  // Nunca dar seguimiento a quien ya tiene un pago registrado en Mongo,
+  // aunque su estado_sofia esté desactualizado (el guard lo auto-corrige).
+  if (await leadYaPago(lead.wa_id)) {
+    console.log(`⛔ Follow-up cancelado: ${lead.nombre || lead.wa_id} ya tiene pago registrado → estado 'pagado'`);
+    return { ok: false, error: 'lead con pago registrado', mode: 'skipped' };
+  }
   const cleanNumber = lead.wa_id.replace(/\D/g, '');
   const firstName = (lead.nombre || '').split(' ')[0] || 'cliente';
   const waUrl = `https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`;
@@ -1940,6 +1947,13 @@ async function runRevivalCore(options = {}) {
       }
     } catch { /* continuar sin historial */ }
 
+    // ── No revivir a quien ya pagó (aunque su estado_sofia esté desactualizado) ──
+    if (await leadYaPago(lead.wa_id)) {
+      skipped++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, estado: lead.estado_sofia, success: false, reason: 'Ya tiene pago registrado — marcado como pagado' });
+      continue;
+    }
+
     // ── Verificar: no enviar si ya le mandamos un revival en este mismo tier ──
     // Buscar si el último mensaje de revival tiene el mismo tier
     const lastRevival = [...historial].reverse().find(m => m.isRevival);
@@ -2704,6 +2718,13 @@ async function runQuoteFollowUpCore(options = {}) {
         }
       }
     } catch { /* continuar sin historial */ }
+
+    // ── No dar seguimiento de cotización a quien ya pagó ──
+    if (await leadYaPago(lead.wa_id)) {
+      skipped++;
+      results.push({ wa_id: lead.wa_id, nombre: lead.nombre, tier, success: false, reason: 'Ya tiene pago registrado — marcado como pagado' });
+      continue;
+    }
 
     // ── No enviar si ya mandamos follow-up en este tier ──
     const lastFollowUp = [...historial].reverse().find(m => m.isQuoteFollowUp);

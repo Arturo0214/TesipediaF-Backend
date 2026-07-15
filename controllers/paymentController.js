@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import Payment from '../models/Payment.js';
 import Project from '../models/Project.js';
 import Notification from '../models/Notification.js';
+import { marcarLeadPagado } from '../utils/leadPagadoGuard.js';
 import emailSender from '../utils/emailSender.js';
 import GuestPayment from '../models/guestPayment.js';
 import { generateTrackingToken } from '../utils/tokenGenerator.js';
@@ -653,6 +654,10 @@ export const createManualPayment = asyncHandler(async (req, res) => {
 
   // Auto-sync parcialidades al calendario (fire-and-forget)
   autoSyncPaymentSchedule({ ...payment.toObject(), clientName, clientPhone, title }).catch(err => console.warn('[ManualPayment] AutoSync payment error:', err.message));
+
+  // Marcar el lead de WhatsApp como 'pagado' para que ningún job de
+  // seguimiento le vuelva a mandar plantillas (fire-and-forget)
+  if (clientPhone) marcarLeadPagado(clientPhone).catch(err => console.warn('[ManualPayment] marcarLeadPagado:', err.message));
 
   res.status(201).json({
     payment,
