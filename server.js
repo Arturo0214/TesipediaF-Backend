@@ -147,6 +147,7 @@ app.use('/revenue', revenueRoutes);
 app.use('/api/v1/lead-notes', leadNoteRoutes);
 app.use('/social', socialRoutes);
 app.use('/status', statusRoutes);
+app.use('/seguimientos', seguimientoRoutes);
 app.use('/api/seguimientos', seguimientoRoutes);
 
 // Middlewares de error
