@@ -897,6 +897,20 @@ export const sendMessage = asyncHandler(async (req, res) => {
 
     let finalUrl = result.secure_url;
 
+    // Comprimir imágenes salientes: WhatsApp rechaza imágenes > 5MB (causa #1 de
+    // "no llega la foto"). Servimos una versión optimizada vía Cloudinary — misma
+    // calidad visual, mucho menos peso — sin re-procesar el buffer.
+    const isImage = !isDoc && !isAudio;
+    if (isImage) {
+      try {
+        finalUrl = cloudinary.url(result.public_id, {
+          resource_type: 'image',
+          secure: true,
+          transformation: [{ width: 1600, crop: 'limit', quality: 'auto:good' }],
+        });
+      } catch (_) { finalUrl = result.secure_url; }
+    }
+
     mediaUrl = finalUrl;
     mimetype = isAudio ? 'audio/ogg' : file.mimetype;
     filename = isAudio ? file.originalname.replace(/\.[^.]+$/, '.ogg') : file.originalname;
@@ -2327,6 +2341,18 @@ export const incomingMessageWebhook = asyncHandler(async (req, res) => {
       const b64 = `data:${isAudio ? 'audio/ogg' : effectiveMimetype};base64,${uploadBuffer.toString('base64')}`;
       const cloudResult = await cloudinary.uploader.upload(b64, cloudinaryOptions);
       mediaUrl = cloudResult.secure_url;
+
+      // Imágenes entrantes: servir versión optimizada (carga más rápida en el
+      // admin y menos storage). El original ya se subió a Cloudinary.
+      if (isImage) {
+        try {
+          mediaUrl = cloudinary.url(cloudResult.public_id, {
+            resource_type: 'image',
+            secure: true,
+            transformation: [{ width: 1600, crop: 'limit', quality: 'auto:good' }],
+          });
+        } catch (_) { mediaUrl = cloudResult.secure_url; }
+      }
 
       mediaMetadata = {
         mediaUrl,
