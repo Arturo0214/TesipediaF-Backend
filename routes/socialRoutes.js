@@ -4,6 +4,7 @@ import { getSocialMetrics, getSocialPosts, getSocialInsights, publishPost, gener
 import {
     listContent, createContent, importContent, updateContent, deleteContent,
     listCompetitors, addCompetitor, removeCompetitor, scanCompetitors,
+    publishContentNow, scheduleContent,
 } from '../controllers/socialContentController.js';
 
 const router = express.Router();
@@ -21,6 +22,8 @@ router.post('/content', protect, adminOnly, createContent);
 router.post('/content/import', protect, adminOnly, importContent);
 router.put('/content/:id', protect, adminOnly, updateContent);
 router.delete('/content/:id', protect, adminOnly, deleteContent);
+router.post('/content/:id/publish', protect, adminOnly, publishContentNow);
+router.patch('/content/:id/schedule', protect, adminOnly, scheduleContent);
 
 // Radar de competencia
 router.get('/competitors', protect, adminOnly, listCompetitors);

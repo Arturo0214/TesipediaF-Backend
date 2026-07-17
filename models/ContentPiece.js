@@ -38,6 +38,17 @@ const contentPieceSchema = new mongoose.Schema({
         likes: Number,
         comments: Number,
     },
+    // ── Auto-publicación programada ──
+    scheduledFor: { type: Date, default: null, index: true }, // cuándo publicar (fecha real)
+    autoPublish: { type: Boolean, default: false },            // el scheduler la debe publicar
+    publishedAt: { type: Date, default: null },
+    publishResult: {                                            // resultado del último intento
+        ok: Boolean,
+        postId: String,
+        permalink: String,
+        error: String,
+        at: Date,
+    },
 }, { timestamps: true });
 
 const ContentPiece = mongoose.model('ContentPiece', contentPieceSchema);

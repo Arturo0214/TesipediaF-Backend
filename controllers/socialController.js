@@ -13,7 +13,7 @@ function cached(key, ttl = CACHE_TTL) {
 }
 function setCache(key, data) { CACHE[key] = { data, ts: Date.now() }; }
 
-async function getPageToken() {
+export async function getPageToken() {
     const c = cached('pageToken', 3600000);
     if (c) return c;
     const userToken = process.env.META_ACCESS_TOKEN;
@@ -25,6 +25,49 @@ async function getPageToken() {
         if (token) setCache('pageToken', token);
         return token;
     } catch { return null; }
+}
+
+// Publica a Meta (IG/FB). Reutilizable por el endpoint y el scheduler.
+// Devuelve { ok, postId, permalink, error }.
+export async function publishToMeta({ platform, message, imageUrl }) {
+    const pageToken = await getPageToken();
+    if (!pageToken) return { ok: false, error: 'No hay page token de Meta' };
+    try {
+        if (platform === 'facebook') {
+            const body = { access_token: pageToken };
+            if (message) body.message = message;
+            if (imageUrl) body.url = imageUrl;
+            const endpoint = imageUrl
+                ? `https://graph.facebook.com/v21.0/${PAGE_ID}/photos`
+                : `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
+            const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const j = await r.json();
+            if (j.error) return { ok: false, error: j.error.message };
+            const postId = j.post_id || j.id;
+            return { ok: true, postId, permalink: postId ? `https://facebook.com/${postId}` : '' };
+        }
+        if (platform === 'instagram') {
+            if (!imageUrl) return { ok: false, error: 'Instagram requiere una imagen' };
+            const containerBody = { image_url: imageUrl, access_token: pageToken };
+            if (message) containerBody.caption = message;
+            const cRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(containerBody) });
+            const container = await cRes.json();
+            if (container.error) return { ok: false, error: container.error.message };
+            const pRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creation_id: container.id, access_token: pageToken }) });
+            const pub = await pRes.json();
+            if (pub.error) return { ok: false, error: pub.error.message };
+            // permalink real
+            let permalink = '';
+            try {
+                const pl = await (await fetch(`https://graph.facebook.com/v21.0/${pub.id}?fields=permalink&access_token=${pageToken}`)).json();
+                permalink = pl.permalink || '';
+            } catch { /* noop */ }
+            return { ok: true, postId: pub.id, permalink };
+        }
+        return { ok: false, error: `Plataforma no soportada para auto-publicar: ${platform} (TikTok requiere aprobación de su API)` };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
 }
 
 function daysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
@@ -157,29 +200,8 @@ export const publishPost = asyncHandler(async (req, res) => {
     if (!platform || (!message && !imageUrl)) {
         res.status(400); throw new Error('platform and (message or imageUrl) required');
     }
-    const pageToken = await getPageToken();
-    if (!pageToken) { res.status(500); throw new Error('No Meta page token'); }
-
-    let result;
-    if (platform === 'facebook') {
-        const body = { access_token: pageToken };
-        if (message) body.message = message;
-        if (imageUrl) body.url = imageUrl;
-        const endpoint = imageUrl ? `https://graph.facebook.com/v21.0/${PAGE_ID}/photos` : `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
-        const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        result = await r.json();
-        if (result.error) throw new Error(result.error.message);
-    } else if (platform === 'instagram') {
-        if (!imageUrl) { res.status(400); throw new Error('Instagram requires an image URL'); }
-        const containerBody = { image_url: imageUrl, access_token: pageToken };
-        if (message) containerBody.caption = message;
-        const cRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(containerBody) });
-        const container = await cRes.json();
-        if (container.error) throw new Error(container.error.message);
-        const pRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creation_id: container.id, access_token: pageToken }) });
-        result = await pRes.json();
-        if (result.error) throw new Error(result.error.message);
-    }
+    const result = await publishToMeta({ platform, message, imageUrl });
+    if (!result.ok) { res.status(500); throw new Error(result.error || 'Error al publicar'); }
 
     delete CACHE[`posts_${platform}`]; delete CACHE['metrics'];
     res.json({ success: true, data: result, message: `Published to ${platform}` });

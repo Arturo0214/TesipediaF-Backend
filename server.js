@@ -69,6 +69,16 @@ connectDB().then(async () => {
   } catch (err) {
     console.error('Error verificando superadmin:', err.message);
   }
+
+  // Scheduler de auto-publicación en redes (IG/FB): revisa cada minuto las
+  // piezas del board con autoPublish + fecha vencida y las publica.
+  try {
+    const { runScheduledPublishing } = await import('./controllers/socialContentController.js');
+    setInterval(() => { runScheduledPublishing(); }, 60 * 1000);
+    console.log('📅 Scheduler de auto-publicación en redes activo (cada 60s)');
+  } catch (err) {
+    console.error('Error iniciando scheduler de redes:', err.message);
+  }
 });
 
 // Inicializar la app

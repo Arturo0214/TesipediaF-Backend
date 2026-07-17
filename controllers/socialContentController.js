@@ -1,6 +1,7 @@
 import asyncHandler from 'express-async-handler';
 import ContentPiece from '../models/ContentPiece.js';
 import Competitor from '../models/Competitor.js';
+import { publishToMeta } from './socialController.js';
 
 const IG_ID = '17841477846360365';
 const PAGE_ID = '855962324262046';
@@ -65,6 +66,84 @@ export const deleteContent = asyncHandler(async (req, res) => {
     if (!item) { res.status(404); throw new Error('Pieza no encontrada'); }
     res.json({ success: true });
 });
+
+// ════════════════════════════════════════
+// Auto-publicación (IG/FB) — publicar ahora, agendar, y scheduler
+// ════════════════════════════════════════
+
+// Publica una pieza del board a su plataforma. Actualiza estado/resultado.
+async function publishPiece(piece) {
+    // Mensaje = caption + hashtags
+    const parts = [piece.caption, piece.hashtags].map((s) => (s || '').trim()).filter(Boolean);
+    const message = parts.join('\n\n');
+    const result = await publishToMeta({ platform: piece.platform, message, imageUrl: piece.imageUrl });
+
+    piece.publishResult = {
+        ok: result.ok,
+        postId: result.postId || '',
+        permalink: result.permalink || '',
+        error: result.error || '',
+        at: new Date(),
+    };
+    if (result.ok) {
+        piece.status = 'published';
+        piece.publishedAt = new Date();
+        piece.autoPublish = false; // ya se publicó, no repetir
+    }
+    await piece.save();
+    return result;
+}
+
+// POST /social/content/:id/publish — publicar una pieza ahora
+export const publishContentNow = asyncHandler(async (req, res) => {
+    const piece = await ContentPiece.findById(req.params.id);
+    if (!piece) { res.status(404); throw new Error('Pieza no encontrada'); }
+    if (!piece.imageUrl && piece.platform === 'instagram') {
+        res.status(400); throw new Error('Instagram requiere una imagen en la pieza');
+    }
+    const result = await publishPiece(piece);
+    if (!result.ok) { res.status(502); throw new Error(result.error || 'Error al publicar'); }
+    res.json({ success: true, data: piece });
+});
+
+// PATCH /social/content/:id/schedule — agendar (o cancelar) auto-publicación
+export const scheduleContent = asyncHandler(async (req, res) => {
+    const { scheduledFor, autoPublish } = req.body;
+    const piece = await ContentPiece.findById(req.params.id);
+    if (!piece) { res.status(404); throw new Error('Pieza no encontrada'); }
+    if (scheduledFor !== undefined) piece.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
+    if (autoPublish !== undefined) piece.autoPublish = !!autoPublish;
+    if (piece.autoPublish && piece.status === 'published') piece.status = 'ready'; // re-agendar
+    await piece.save();
+    res.json({ success: true, data: piece });
+});
+
+// Scheduler: publica las piezas vencidas. Lo llama un intervalo en server.js.
+let publishingRunning = false;
+export async function runScheduledPublishing() {
+    if (publishingRunning) return { skipped: true };
+    publishingRunning = true;
+    const summary = { intentadas: 0, publicadas: 0, fallidas: 0 };
+    try {
+        const due = await ContentPiece.find({
+            autoPublish: true,
+            status: { $ne: 'published' },
+            scheduledFor: { $ne: null, $lte: new Date() },
+        }).limit(10);
+        for (const piece of due) {
+            summary.intentadas++;
+            const r = await publishPiece(piece);
+            if (r.ok) summary.publicadas++;
+            else summary.fallidas++;
+        }
+        if (summary.intentadas) console.log(`[SocialPublisher] ${JSON.stringify(summary)}`);
+    } catch (e) {
+        console.error('[SocialPublisher] error:', e.message);
+    } finally {
+        publishingRunning = false;
+    }
+    return summary;
+}
 
 // ════════════════════════════════════════
 // Competidores — CRUD
