@@ -175,7 +175,8 @@ export const generateQuotePDF = async (data) => {
     const doc = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
-        format: 'letter'
+        format: 'letter',
+        compress: true
     });
 
     // Colores del diseño (azul oscuro y naranja/dorado)
@@ -186,8 +187,8 @@ export const generateQuotePDF = async (data) => {
     const lightGray = [245, 245, 248];
     const successGreen = [34, 139, 34];
 
-    // URL del logo
-    const logoUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/v1743713944/Tesipedia-logo_n1liaw.png';
+    // URL del logo — c_limit,w_400 reduce el PNG de 1.5MB a ~42KB (a 32mm de ancho no se nota)
+    const logoUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/c_limit,w_400,q_auto/v1743713944/Tesipedia-logo_n1liaw.png';
 
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -229,7 +230,7 @@ export const generateQuotePDF = async (data) => {
         const logoData = await loadImage(logoUrl);
         if (logoData) {
             // Logo más cuadrado: 32x28 para mejor proporción vertical
-            doc.addImage(logoData, 'PNG', margin, 4, 32, 28);
+            doc.addImage(logoData, 'PNG', margin, 4, 32, 28, undefined, 'FAST');
         }
     } catch (error) {
         doc.setFontSize(16);
@@ -944,11 +945,12 @@ export const generateQuotePDF = async (data) => {
     let currentLogoX = margin + 10;
 
     // URLs de los logos (convertidos a PNG vía Cloudinary si son SVG)
-    const visaUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/f_png/v1770330843/Visa_Inc.-Logo.wine_tzmjsa.svg';
-    const mastercardUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/f_png/v1743714158/mc_symbol_zpes4d.svg';
-    const amexUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/f_png/v1743714158/amex-svgrepo-com_m3vtdk.svg';
-    const paypalUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/f_png/v1770330985/PayPal-Logo.wine_rb7k4b.svg';
-    const mpUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/v1770325904/Mercado_Pago.svg_ngrqk4.png';
+    // c_limit,w_300: se renderizan a 28mm, no necesitan más resolución
+    const visaUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/f_png,c_limit,w_300/v1770330843/Visa_Inc.-Logo.wine_tzmjsa.svg';
+    const mastercardUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/f_png,c_limit,w_300/v1743714158/mc_symbol_zpes4d.svg';
+    const amexUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/f_png,c_limit,w_300/v1743714158/amex-svgrepo-com_m3vtdk.svg';
+    const paypalUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/f_png,c_limit,w_300/v1770330985/PayPal-Logo.wine_rb7k4b.svg';
+    const mpUrl = 'https://res.cloudinary.com/dgxkixm5f/image/upload/c_limit,w_300,q_auto/v1770325904/Mercado_Pago.svg_ngrqk4.png';
 
     try {
         const [visaImg, mastercardImg, amexImg, paypalImg, mpImg] = await Promise.all([
