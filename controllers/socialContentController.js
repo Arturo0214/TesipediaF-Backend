@@ -81,6 +81,7 @@ async function publishPiece(piece) {
         message,
         imageUrl: piece.imageUrl,
         mediaUrls: piece.mediaUrls,
+        videoUrl: piece.videoUrl,
     });
 
     piece.publishResult = {
@@ -127,10 +128,10 @@ export const scheduleContent = asyncHandler(async (req, res) => {
 // POST /social/content/suggest — Claude propone piezas de contenido
 // para que siempre haya cola (flujo constante). source='agent', status='idea'.
 // ════════════════════════════════════════
-export const suggestContent = asyncHandler(async (req, res) => {
+// Núcleo reutilizable: genera N piezas con Claude y las inserta como 'idea'/'agent'.
+async function generateSuggestions(count) {
     const TOKEN = process.env.ANTHROPIC_API_KEY;
-    if (!TOKEN) { res.status(500); throw new Error('ANTHROPIC_API_KEY no configurada'); }
-    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 6, 1), 12);
+    if (!TOKEN) throw new Error('ANTHROPIC_API_KEY no configurada');
 
     // Contexto de competencia: watchlist + top posts cacheados si existen
     let competencia = DEFAULT_COMPETITORS.slice(0, 8);
@@ -165,14 +166,12 @@ Devuelve el JSON array.`;
         body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 6000, system, messages: [{ role: 'user', content: userMsg }] }),
     });
     const j = await r.json();
-    if (!r.ok) { res.status(502); throw new Error('Claude: ' + (j.error?.message || 'error')); }
+    if (!r.ok) throw new Error('Claude: ' + (j.error?.message || 'error'));
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 
     let ideas;
-    try {
-        const m = text.match(/\[[\s\S]*\]/);
-        ideas = JSON.parse(m ? m[0] : text);
-    } catch { res.status(502); throw new Error('No se pudo parsear la propuesta de Claude'); }
+    const mm = text.match(/\[[\s\S]*\]/);
+    ideas = JSON.parse(mm ? mm[0] : text);
     if (!Array.isArray(ideas)) ideas = [ideas];
 
     const docs = ideas.slice(0, count).map(x => ({
@@ -187,8 +186,41 @@ Devuelve el JSON array.`;
         source: 'agent',
     }));
     const created = await ContentPiece.insertMany(docs);
-    res.json({ success: true, creadas: created.length, data: created, usage: j.usage });
+    return { created, usage: j.usage };
+}
+
+export const suggestContent = asyncHandler(async (req, res) => {
+    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 6, 1), 12);
+    const { created, usage } = await generateSuggestions(count);
+    res.json({ success: true, creadas: created.length, data: created, usage });
 });
+
+// ── Cadencia automática: mantiene la cola llena sin que toques nada ──
+// Genera una tanda semanal si el backlog de piezas no publicadas es bajo.
+const CADENCE_DAYS = 7;
+const CADENCE_BACKLOG_MIN = 6; // si hay menos de esto sin publicar, rellena
+let cadenceRunning = false;
+export async function runContentCadence() {
+    if (cadenceRunning || !process.env.ANTHROPIC_API_KEY) return { skipped: true };
+    cadenceRunning = true;
+    try {
+        const backlog = await ContentPiece.countDocuments({ status: { $in: ['idea', 'draft', 'ready'] } });
+        const lastAgent = await ContentPiece.findOne({ source: 'agent' }).sort({ createdAt: -1 }).select('createdAt');
+        const daysSince = lastAgent ? (Date.now() - new Date(lastAgent.createdAt).getTime()) / 86400000 : Infinity;
+        // Nunca más de una tanda por día (evita spam por reinicios del server)
+        if (daysSince < 1) return { skipped: true, reason: 'generado hoy' };
+        // Rellena si pasó la semana O si el backlog está bajo
+        if (daysSince < CADENCE_DAYS && backlog >= CADENCE_BACKLOG_MIN) return { skipped: true, backlog, daysSince: Math.round(daysSince) };
+        const { created } = await generateSuggestions(6);
+        console.log(`[ContentCadence] +${created.length} ideas (backlog previo ${backlog}, ${Math.round(daysSince)}d desde la última)`);
+        return { generated: created.length };
+    } catch (e) {
+        console.error('[ContentCadence] error:', e.message);
+        return { error: e.message };
+    } finally {
+        cadenceRunning = false;
+    }
+}
 
 // Scheduler: publica las piezas vencidas. Lo llama un intervalo en server.js.
 let publishingRunning = false;

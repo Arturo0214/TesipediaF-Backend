@@ -73,9 +73,12 @@ connectDB().then(async () => {
   // Scheduler de auto-publicación en redes (IG/FB): revisa cada minuto las
   // piezas del board con autoPublish + fecha vencida y las publica.
   try {
-    const { runScheduledPublishing } = await import('./controllers/socialContentController.js');
+    const { runScheduledPublishing, runContentCadence } = await import('./controllers/socialContentController.js');
     setInterval(() => { runScheduledPublishing(); }, 60 * 1000);
-    console.log('📅 Scheduler de auto-publicación en redes activo (cada 60s)');
+    // Cadencia de contenido: revisa cada 6h y rellena la cola (gate de 7 días/backlog dentro)
+    setInterval(() => { runContentCadence(); }, 6 * 60 * 60 * 1000);
+    setTimeout(() => { runContentCadence(); }, 30 * 1000); // un chequeo al arrancar
+    console.log('📅 Schedulers de redes activos (auto-publicar 60s + cadencia de contenido 6h)');
   } catch (err) {
     console.error('Error iniciando scheduler de redes:', err.message);
   }

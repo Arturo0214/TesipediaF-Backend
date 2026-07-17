@@ -29,11 +29,42 @@ export async function getPageToken() {
 
 // Publica a Meta (IG/FB). Reutilizable por el endpoint y el scheduler.
 // Devuelve { ok, postId, permalink, error }.
-export async function publishToMeta({ platform, message, imageUrl, mediaUrls }) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export async function publishToMeta({ platform, message, imageUrl, mediaUrls, videoUrl }) {
     const pageToken = await getPageToken();
     if (!pageToken) return { ok: false, error: 'No hay page token de Meta' };
     const images = (Array.isArray(mediaUrls) && mediaUrls.length ? mediaUrls : (imageUrl ? [imageUrl] : [])).filter(Boolean);
     try {
+        // ── Reel de Instagram (video) — requiere procesamiento asíncrono ──
+        if (platform === 'instagram' && videoUrl) {
+            const body = { media_type: 'REELS', video_url: videoUrl, access_token: pageToken };
+            if (message) body.caption = message;
+            const cr = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+            });
+            const c = await cr.json();
+            if (c.error) return { ok: false, error: `Reel: ${c.error.message}` };
+            // Poll hasta que el video termine de procesar (máx ~60s)
+            let status = 'IN_PROGRESS';
+            for (let i = 0; i < 15; i++) {
+                await sleep(4000);
+                const st = await (await fetch(`https://graph.facebook.com/v21.0/${c.id}?fields=status_code&access_token=${pageToken}`)).json();
+                status = st.status_code;
+                if (status === 'FINISHED') break;
+                if (status === 'ERROR') return { ok: false, error: 'El video falló al procesar en Instagram' };
+            }
+            if (status !== 'FINISHED') return { ok: false, error: 'El video sigue procesando; reintenta en un minuto' };
+            const pubr = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ creation_id: c.id, access_token: pageToken }),
+            });
+            const pub = await pubr.json();
+            if (pub.error) return { ok: false, error: pub.error.message };
+            let permalink = '';
+            try { permalink = (await (await fetch(`https://graph.facebook.com/v21.0/${pub.id}?fields=permalink&access_token=${pageToken}`)).json()).permalink || ''; } catch { /* noop */ }
+            return { ok: true, postId: pub.id, permalink };
+        }
         // ── Carrusel de Instagram (2-10 imágenes) ──
         if (platform === 'instagram' && images.length > 1) {
             const children = [];
