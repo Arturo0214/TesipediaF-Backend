@@ -40,6 +40,7 @@ import revenueRoutes from './routes/revenueRoutes.js';
 import leadNoteRoutes from './routes/leadNoteRoutes.js';
 import socialRoutes from './routes/socialRoutes.js';
 import statusRoutes from './routes/statusRoutes.js';
+import loopsRoutes from './routes/loopsRoutes.js';
 import seguimientoRoutes from './routes/seguimientoRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
@@ -149,6 +150,7 @@ app.use('/revenue', revenueRoutes);
 app.use('/api/v1/lead-notes', leadNoteRoutes);
 app.use('/social', socialRoutes);
 app.use('/status', statusRoutes);
+app.use('/loops', loopsRoutes);
 app.use('/seguimientos', seguimientoRoutes);
 app.use('/api/seguimientos', seguimientoRoutes);
 
