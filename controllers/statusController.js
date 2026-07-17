@@ -12,6 +12,13 @@ const SOFIA_WF_ID = process.env.N8N_SOFIA_WORKFLOW_ID || 'IwahEKyHDB76nPLk';
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
+// Medianoche de hoy en CDMX expresada en UTC (México ya no tiene DST: UTC-6 fijo).
+// Railway corre en UTC — usar new Date().setHours(0,...) cortaría el día 6h antes.
+const cdmxMidnightUTC = () => {
+  const cdmxDate = new Date(Date.now() - 6 * 3600 * 1000).toISOString().slice(0, 10);
+  return new Date(`${cdmxDate}T06:00:00Z`);
+};
+
 // Estados de la conexión de Mongoose
 const DB_STATES = {
   0: 'disconnected',
@@ -167,8 +174,7 @@ async function getMongoStats() {
   if (mongoose.connection?.readyState !== 1) return null;
   try {
     const db = mongoose.connection.db;
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDay = cdmxMidnightUTC();
 
     const [stats, users, quotes, quotesToday, projects] = await Promise.all([
       db.stats(),
@@ -210,15 +216,20 @@ async function getSupabaseStats() {
     return Number.isNaN(total) ? null : total;
   };
   try {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const iso = startOfDay.toISOString();
-    const [total, hoy, esperando] = await Promise.all([
+    // created_at/updated_at son timestamp sin tz guardados en UTC
+    const iso = cdmxMidnightUTC().toISOString().slice(0, 19);
+    const [total, nuevosHoy, actividadHoy, esperando] = await Promise.all([
       count(),
-      count(`&ultimo_mensaje_at=gte.${iso}`),
+      count(`&created_at=gte.${iso}`),
+      count(`&updated_at=gte.${iso}`),
       count('&estado_sofia=eq.esperando_aprobacion'),
     ]);
-    return { leadsTotal: total, leadsActivosHoy: hoy, esperandoAprobacion: esperando };
+    return {
+      leadsTotal: total,
+      leadsNuevosHoy: nuevosHoy,
+      actividadHoy,
+      esperandoAprobacion: esperando,
+    };
   } catch {
     return null;
   }
