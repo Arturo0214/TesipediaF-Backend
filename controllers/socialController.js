@@ -31,6 +31,21 @@ export async function getPageToken() {
 // Devuelve { ok, postId, permalink, error }.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Genera una imagen gratis vía Pollinations (sin key) y la sube a Cloudinary.
+// Fallback cuando Gemini no tiene billing. Devuelve la URL o null.
+export async function pollinationsImage(prompt, { width = 1080, height = 1350 } = {}) {
+    if (!prompt) return null;
+    try {
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&nologo=true&model=flux`;
+        const r = await fetch(url, { signal: AbortSignal.timeout(90000) });
+        if (!r.ok) return null;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length < 2000) return null; // respuesta inválida
+        const up = await cloudinary.uploader.upload(`data:image/jpeg;base64,${buf.toString('base64')}`, { folder: 'tesipedia-social' });
+        return up.secure_url;
+    } catch { return null; }
+}
+
 export async function publishToMeta({ platform, message, imageUrl, mediaUrls, videoUrl }) {
     const pageToken = await getPageToken();
     if (!pageToken) return { ok: false, error: 'No hay page token de Meta' };

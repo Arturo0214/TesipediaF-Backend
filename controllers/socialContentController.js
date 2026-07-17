@@ -76,11 +76,14 @@ async function publishPiece(piece) {
     // Mensaje = caption + hashtags
     const parts = [piece.caption, piece.hashtags].map((s) => (s || '').trim()).filter(Boolean);
     const message = parts.join('\n\n');
+    // Carrusel: si hay slides con URL, esas son las imágenes (en orden)
+    const slideUrls = (piece.slides || []).map((s) => s.imageUrl).filter(Boolean);
+    const mediaUrls = slideUrls.length ? slideUrls : piece.mediaUrls;
     const result = await publishToMeta({
         platform: piece.platform,
         message,
         imageUrl: piece.imageUrl,
-        mediaUrls: piece.mediaUrls,
+        mediaUrls,
         videoUrl: piece.videoUrl,
     });
 
@@ -128,12 +131,29 @@ export const scheduleContent = asyncHandler(async (req, res) => {
 // POST /social/content/suggest — Claude propone piezas de contenido
 // para que siempre haya cola (flujo constante). source='agent', status='idea'.
 // ════════════════════════════════════════
-// Núcleo reutilizable: genera N piezas con Claude y las inserta como 'idea'/'agent'.
-async function generateSuggestions(count) {
+// Fechas programadas: distribuye `count` piezas ~perWeek por semana, desde
+// mañana, a las 16:00 UTC (~10am CDMX). Empieza tras `afterDate` si se da.
+function scheduleDates(count, perWeek, afterDate) {
+    const gap = Math.max(1, Math.round(7 / Math.max(1, perWeek)));
+    const base = afterDate ? new Date(afterDate) : new Date();
+    base.setUTCHours(16, 0, 0, 0);
+    base.setUTCDate(base.getUTCDate() + 1);
+    const dates = [];
+    for (let i = 0; i < count; i++) {
+        const d = new Date(base);
+        d.setUTCDate(base.getUTCDate() + i * gap);
+        dates.push(d);
+    }
+    return dates;
+}
+
+// Núcleo: Claude genera un CALENDARIO de contenido listo (copy + hashtags +
+// prompts para Google Flow + slides de carrusel + guion de reel) y lo agenda.
+async function generateCalendar({ count = 6, perWeek = 3 } = {}) {
     const TOKEN = process.env.ANTHROPIC_API_KEY;
     if (!TOKEN) throw new Error('ANTHROPIC_API_KEY no configurada');
+    count = Math.min(Math.max(count, 1), 20);
 
-    // Contexto de competencia: watchlist + top posts cacheados si existen
     let competencia = DEFAULT_COMPETITORS.slice(0, 8);
     try {
         const comps = await Competitor.find().limit(15);
@@ -146,59 +166,85 @@ async function generateSuggestions(count) {
         }
     }
 
-    const system = `Eres el estratega de contenido de redes de Tesipedia, servicio mexicano de elaboración y asesoría de tesis (Instagram @tesipediaoficial, Facebook y a futuro TikTok). Tu público: estudiantes de licenciatura, maestría y doctorado en México que necesitan hacer/terminar su tesis, con objeciones típicas de precio, presupuesto, desconfianza y tiempo.
+    const system = `Eres el estratega de contenido de redes de Tesipedia, servicio mexicano de elaboración y asesoría de tesis (Instagram @tesipediaoficial + Facebook). Público: estudiantes de licenciatura, maestría y doctorado en México que necesitan hacer/terminar su tesis; objeciones típicas: precio, presupuesto, desconfianza, tiempo.
 
-Propones contenido que EDUCA y GENERA CONFIANZA (no venta agresiva): tips de metodología, estructura de tesis, errores comunes, mitos, testimonios, detrás de cámaras, y CTAs suaves a cotizar por WhatsApp. Tono cálido, cercano, mexicano, con emojis moderados. Nada de markdown.
+Creas contenido que EDUCA y GENERA CONFIANZA (no venta agresiva): tips de metodología, estructura de tesis, errores comunes, mitos, motivación, testimonios, detrás de cámaras, CTAs suaves a cotizar por WhatsApp. Tono cálido, cercano, mexicano, emojis moderados. Nada de markdown ni negritas.
 
-Formatos: 'reel' (video corto con hook), 'carousel' (varias imágenes educativas), 'post' (imagen única), 'story'. Balancea los tipos.
+El equipo generará las imágenes/videos en Google Flow (Veo/ImageFX), así que tus PROMPTS deben ser detallados, cinematográficos y en INGLÉS (Flow entiende mejor inglés): describe escena, sujeto, estilo fotográfico, iluminación, mood, encuadre vertical 4:5, y termina con "no text, no letters". Nunca incluyas texto dentro de la imagen.
 
-Devuelve SOLO un JSON array de ${count} piezas, cada una:
-{"platform":"instagram|facebook","type":"reel|carousel|post|story","caption":"copy listo para publicar con CTA suave","hashtags":"8-12 hashtags relevantes de nicho (tesis, titulación, carreras, México)","imagePrompt":"descripción para generar la imagen/portada","reelIdea":"si es reel: guion/hook de 2-3 líneas; si no, vacío","notes":"por qué funciona / a qué objeción o etapa apunta"}`;
+Devuelve SOLO un JSON array de ${count} piezas. Balancea tipos (post, carousel, reel). Cada pieza:
+{
+ "platform":"instagram",
+ "type":"post|carousel|reel",
+ "caption":"copy listo con CTA suave",
+ "hashtags":"10-12 hashtags de nicho (tesis, titulación, carreras, México)",
+ "imagePrompt":"[solo post] prompt detallado en inglés para Flow",
+ "slides":[{"text":"texto corto que va EN la diapositiva","imagePrompt":"prompt en inglés para Flow de esa slide"}],  // solo carousel: 4-6 slides (slide 1 = portada con hook)
+ "reelIdea":"[solo reel] guion en español: hook + 3-5 beats + cierre con CTA",
+ "videoPrompt":"[solo reel] prompt de video en inglés para Flow/Veo (escena, movimiento de cámara, duración ~8-15s, vertical 9:16)",
+ "notes":"a qué objeción/etapa apunta y por qué funciona"
+}`;
 
-    const userMsg = `Genera ${count} piezas variadas de contenido para las próximas semanas (flujo constante).
+    const userMsg = `Genera un calendario de ${count} piezas variadas de contenido (post/carrusel/reel) para las próximas semanas.
 Competencia que lo hace bien: ${competencia.join(', ')}.
-${topPosts.length ? 'Posts ganadores recientes de la competencia:\n' + topPosts.join('\n') : ''}
-Devuelve el JSON array.`;
+${topPosts.length ? 'Posts ganadores recientes de competencia:\n' + topPosts.join('\n') : ''}
+Devuelve solo el JSON array.`;
 
     const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': TOKEN, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 6000, system, messages: [{ role: 'user', content: userMsg }] }),
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system, messages: [{ role: 'user', content: userMsg }] }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error('Claude: ' + (j.error?.message || 'error'));
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-
-    let ideas;
     const mm = text.match(/\[[\s\S]*\]/);
-    ideas = JSON.parse(mm ? mm[0] : text);
+    let ideas = JSON.parse(mm ? mm[0] : text);
     if (!Array.isArray(ideas)) ideas = [ideas];
+    ideas = ideas.slice(0, count);
 
-    const docs = ideas.slice(0, count).map(x => ({
+    // Continúa el calendario después de la última pieza ya agendada
+    const lastScheduled = await ContentPiece.findOne({ scheduledFor: { $ne: null } }).sort({ scheduledFor: -1 }).select('scheduledFor');
+    const dates = scheduleDates(ideas.length, perWeek, lastScheduled?.scheduledFor);
+
+    const docs = ideas.map((x, i) => ({
         platform: ['instagram', 'facebook', 'tiktok'].includes(x.platform) ? x.platform : 'instagram',
         type: ['reel', 'carousel', 'post', 'story', 'text'].includes(x.type) ? x.type : 'post',
         caption: x.caption || '',
         hashtags: x.hashtags || '',
         imagePrompt: x.imagePrompt || '',
+        slides: Array.isArray(x.slides) ? x.slides.slice(0, 10).map(s => ({ text: s.text || '', imagePrompt: s.imagePrompt || '', imageUrl: '' })) : [],
         reelIdea: x.reelIdea || '',
+        videoPrompt: x.videoPrompt || '',
         notes: x.notes || '',
-        status: 'idea',
+        status: 'draft',        // falta el visual; el usuario lo genera en Flow y pega la URL
         source: 'agent',
+        scheduledFor: dates[i],  // ya agendado; autoPublish se activa al pegar el visual
+        autoPublish: false,
     }));
     const created = await ContentPiece.insertMany(docs);
     return { created, usage: j.usage };
 }
 
+// POST /social/content/suggest — genera una tanda del calendario
 export const suggestContent = asyncHandler(async (req, res) => {
-    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 6, 1), 12);
-    const { created, usage } = await generateSuggestions(count);
+    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 6, 1), 20);
+    const perWeek = Math.min(Math.max(parseInt(req.body.perWeek, 10) || 3, 1), 7);
+    const { created, usage } = await generateCalendar({ count, perWeek });
     res.json({ success: true, creadas: created.length, data: created, usage });
 });
 
-// ── Cadencia automática: mantiene la cola llena sin que toques nada ──
-// Genera una tanda semanal si el backlog de piezas no publicadas es bajo.
+// POST /social/content/calendar — calendario por semanas (weeks × perWeek piezas)
+export const generateContentCalendar = asyncHandler(async (req, res) => {
+    const weeks = Math.min(Math.max(parseInt(req.body.weeks, 10) || 4, 1), 8);
+    const perWeek = Math.min(Math.max(parseInt(req.body.perWeek, 10) || 3, 1), 7);
+    const { created, usage } = await generateCalendar({ count: weeks * perWeek, perWeek });
+    res.json({ success: true, creadas: created.length, semanas: weeks, porSemana: perWeek, data: created, usage });
+});
+
+// ── Cadencia automática: mantiene el calendario lleno sin que toques nada ──
 const CADENCE_DAYS = 7;
-const CADENCE_BACKLOG_MIN = 6; // si hay menos de esto sin publicar, rellena
+const CADENCE_BACKLOG_MIN = 6;
 let cadenceRunning = false;
 export async function runContentCadence() {
     if (cadenceRunning || !process.env.ANTHROPIC_API_KEY) return { skipped: true };
@@ -207,12 +253,10 @@ export async function runContentCadence() {
         const backlog = await ContentPiece.countDocuments({ status: { $in: ['idea', 'draft', 'ready'] } });
         const lastAgent = await ContentPiece.findOne({ source: 'agent' }).sort({ createdAt: -1 }).select('createdAt');
         const daysSince = lastAgent ? (Date.now() - new Date(lastAgent.createdAt).getTime()) / 86400000 : Infinity;
-        // Nunca más de una tanda por día (evita spam por reinicios del server)
         if (daysSince < 1) return { skipped: true, reason: 'generado hoy' };
-        // Rellena si pasó la semana O si el backlog está bajo
         if (daysSince < CADENCE_DAYS && backlog >= CADENCE_BACKLOG_MIN) return { skipped: true, backlog, daysSince: Math.round(daysSince) };
-        const { created } = await generateSuggestions(6);
-        console.log(`[ContentCadence] +${created.length} ideas (backlog previo ${backlog}, ${Math.round(daysSince)}d desde la última)`);
+        const { created } = await generateCalendar({ count: 6, perWeek: 3 });
+        console.log(`[ContentCadence] +${created.length} piezas al calendario (backlog ${backlog}, ${Math.round(daysSince)}d)`);
         return { generated: created.length };
     } catch (e) {
         console.error('[ContentCadence] error:', e.message);

@@ -23,8 +23,14 @@ const contentPieceSchema = new mongoose.Schema({
     imagePrompt: { type: String, default: '' },
     reelIdea: { type: String, default: '' },
     imageUrl: { type: String, default: '' },
-    mediaUrls: { type: [String], default: [] }, // carrusel: varias imágenes (2-10)
+    mediaUrls: { type: [String], default: [] }, // carrusel: URLs finales de imágenes (2-10)
     videoUrl: { type: String, default: '' },    // reel: URL del video (mp4)
+    videoPrompt: { type: String, default: '' }, // reel: prompt para Google Flow / Veo
+    // Carrusel: cada slide con su texto, prompt para Flow y (al pegar) su URL
+    slides: {
+        type: [{ text: String, imagePrompt: String, imageUrl: String }],
+        default: [],
+    },
     notes: { type: String, default: '' },
     scheduledDate: { type: String, default: '' },
     // Origen de la pieza: manual (admin), radar (competencia) o agente
