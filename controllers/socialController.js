@@ -29,15 +29,47 @@ export async function getPageToken() {
 
 // Publica a Meta (IG/FB). Reutilizable por el endpoint y el scheduler.
 // Devuelve { ok, postId, permalink, error }.
-export async function publishToMeta({ platform, message, imageUrl }) {
+export async function publishToMeta({ platform, message, imageUrl, mediaUrls }) {
     const pageToken = await getPageToken();
     if (!pageToken) return { ok: false, error: 'No hay page token de Meta' };
+    const images = (Array.isArray(mediaUrls) && mediaUrls.length ? mediaUrls : (imageUrl ? [imageUrl] : [])).filter(Boolean);
     try {
+        // ── Carrusel de Instagram (2-10 imágenes) ──
+        if (platform === 'instagram' && images.length > 1) {
+            const children = [];
+            for (const url of images.slice(0, 10)) {
+                const cr = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_url: url, is_carousel_item: true, access_token: pageToken }),
+                });
+                const cj = await cr.json();
+                if (cj.error) return { ok: false, error: `Carrusel (imagen): ${cj.error.message}` };
+                children.push(cj.id);
+            }
+            const parentBody = { media_type: 'CAROUSEL', children: children.join(','), access_token: pageToken };
+            if (message) parentBody.caption = message;
+            const pr = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parentBody),
+            });
+            const parent = await pr.json();
+            if (parent.error) return { ok: false, error: `Carrusel (contenedor): ${parent.error.message}` };
+            const pubr = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media_publish`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ creation_id: parent.id, access_token: pageToken }),
+            });
+            const pub = await pubr.json();
+            if (pub.error) return { ok: false, error: pub.error.message };
+            let permalink = '';
+            try { permalink = (await (await fetch(`https://graph.facebook.com/v21.0/${pub.id}?fields=permalink&access_token=${pageToken}`)).json()).permalink || ''; } catch { /* noop */ }
+            return { ok: true, postId: pub.id, permalink };
+        }
+
         if (platform === 'facebook') {
+            const fbImg = images[0] || '';
             const body = { access_token: pageToken };
             if (message) body.message = message;
-            if (imageUrl) body.url = imageUrl;
-            const endpoint = imageUrl
+            if (fbImg) body.url = fbImg;
+            const endpoint = fbImg
                 ? `https://graph.facebook.com/v21.0/${PAGE_ID}/photos`
                 : `https://graph.facebook.com/v21.0/${PAGE_ID}/feed`;
             const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -47,8 +79,8 @@ export async function publishToMeta({ platform, message, imageUrl }) {
             return { ok: true, postId, permalink: postId ? `https://facebook.com/${postId}` : '' };
         }
         if (platform === 'instagram') {
-            if (!imageUrl) return { ok: false, error: 'Instagram requiere una imagen' };
-            const containerBody = { image_url: imageUrl, access_token: pageToken };
+            if (!images.length) return { ok: false, error: 'Instagram requiere una imagen' };
+            const containerBody = { image_url: images[0], access_token: pageToken };
             if (message) containerBody.caption = message;
             const cRes = await fetch(`https://graph.facebook.com/v21.0/${IG_ID}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(containerBody) });
             const container = await cRes.json();

@@ -76,7 +76,12 @@ async function publishPiece(piece) {
     // Mensaje = caption + hashtags
     const parts = [piece.caption, piece.hashtags].map((s) => (s || '').trim()).filter(Boolean);
     const message = parts.join('\n\n');
-    const result = await publishToMeta({ platform: piece.platform, message, imageUrl: piece.imageUrl });
+    const result = await publishToMeta({
+        platform: piece.platform,
+        message,
+        imageUrl: piece.imageUrl,
+        mediaUrls: piece.mediaUrls,
+    });
 
     piece.publishResult = {
         ok: result.ok,
@@ -116,6 +121,73 @@ export const scheduleContent = asyncHandler(async (req, res) => {
     if (piece.autoPublish && piece.status === 'published') piece.status = 'ready'; // re-agendar
     await piece.save();
     res.json({ success: true, data: piece });
+});
+
+// ════════════════════════════════════════
+// POST /social/content/suggest — Claude propone piezas de contenido
+// para que siempre haya cola (flujo constante). source='agent', status='idea'.
+// ════════════════════════════════════════
+export const suggestContent = asyncHandler(async (req, res) => {
+    const TOKEN = process.env.ANTHROPIC_API_KEY;
+    if (!TOKEN) { res.status(500); throw new Error('ANTHROPIC_API_KEY no configurada'); }
+    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 6, 1), 12);
+
+    // Contexto de competencia: watchlist + top posts cacheados si existen
+    let competencia = DEFAULT_COMPETITORS.slice(0, 8);
+    try {
+        const comps = await Competitor.find().limit(15);
+        if (comps.length) competencia = comps.map(c => c.username).slice(0, 10);
+    } catch { /* noop */ }
+    let topPosts = [];
+    if (SCAN_CACHE?.data) {
+        for (const c of SCAN_CACHE.data.slice(0, 6)) {
+            if (c.topPost?.caption) topPosts.push(`@${c.username} (${c.topPost.likes || 0} likes): ${String(c.topPost.caption).slice(0, 120)}`);
+        }
+    }
+
+    const system = `Eres el estratega de contenido de redes de Tesipedia, servicio mexicano de elaboración y asesoría de tesis (Instagram @tesipediaoficial, Facebook y a futuro TikTok). Tu público: estudiantes de licenciatura, maestría y doctorado en México que necesitan hacer/terminar su tesis, con objeciones típicas de precio, presupuesto, desconfianza y tiempo.
+
+Propones contenido que EDUCA y GENERA CONFIANZA (no venta agresiva): tips de metodología, estructura de tesis, errores comunes, mitos, testimonios, detrás de cámaras, y CTAs suaves a cotizar por WhatsApp. Tono cálido, cercano, mexicano, con emojis moderados. Nada de markdown.
+
+Formatos: 'reel' (video corto con hook), 'carousel' (varias imágenes educativas), 'post' (imagen única), 'story'. Balancea los tipos.
+
+Devuelve SOLO un JSON array de ${count} piezas, cada una:
+{"platform":"instagram|facebook","type":"reel|carousel|post|story","caption":"copy listo para publicar con CTA suave","hashtags":"8-12 hashtags relevantes de nicho (tesis, titulación, carreras, México)","imagePrompt":"descripción para generar la imagen/portada","reelIdea":"si es reel: guion/hook de 2-3 líneas; si no, vacío","notes":"por qué funciona / a qué objeción o etapa apunta"}`;
+
+    const userMsg = `Genera ${count} piezas variadas de contenido para las próximas semanas (flujo constante).
+Competencia que lo hace bien: ${competencia.join(', ')}.
+${topPosts.length ? 'Posts ganadores recientes de la competencia:\n' + topPosts.join('\n') : ''}
+Devuelve el JSON array.`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': TOKEN, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 6000, system, messages: [{ role: 'user', content: userMsg }] }),
+    });
+    const j = await r.json();
+    if (!r.ok) { res.status(502); throw new Error('Claude: ' + (j.error?.message || 'error')); }
+    const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+
+    let ideas;
+    try {
+        const m = text.match(/\[[\s\S]*\]/);
+        ideas = JSON.parse(m ? m[0] : text);
+    } catch { res.status(502); throw new Error('No se pudo parsear la propuesta de Claude'); }
+    if (!Array.isArray(ideas)) ideas = [ideas];
+
+    const docs = ideas.slice(0, count).map(x => ({
+        platform: ['instagram', 'facebook', 'tiktok'].includes(x.platform) ? x.platform : 'instagram',
+        type: ['reel', 'carousel', 'post', 'story', 'text'].includes(x.type) ? x.type : 'post',
+        caption: x.caption || '',
+        hashtags: x.hashtags || '',
+        imagePrompt: x.imagePrompt || '',
+        reelIdea: x.reelIdea || '',
+        notes: x.notes || '',
+        status: 'idea',
+        source: 'agent',
+    }));
+    const created = await ContentPiece.insertMany(docs);
+    res.json({ success: true, creadas: created.length, data: created, usage: j.usage });
 });
 
 // Scheduler: publica las piezas vencidas. Lo llama un intervalo en server.js.

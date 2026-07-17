@@ -23,6 +23,7 @@ const contentPieceSchema = new mongoose.Schema({
     imagePrompt: { type: String, default: '' },
     reelIdea: { type: String, default: '' },
     imageUrl: { type: String, default: '' },
+    mediaUrls: { type: [String], default: [] }, // carrusel: varias imágenes (2-10)
     notes: { type: String, default: '' },
     scheduledDate: { type: String, default: '' },
     // Origen de la pieza: manual (admin), radar (competencia) o agente
