@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 const FAILED_LOGIN_WINDOW_MS = 10 * 60 * 1000;  // ventana para contar logins fallidos
 const FAILED_LOGIN_MAX = 8;                     // fallos en ventana → bloqueo
 const RATE_WINDOW_MS = 60 * 1000;               // ventana de ráfaga
-const RATE_MAX = 250;                           // req/min por IP → bloqueo (generalLimiter ya corta a 100 por ruta)
+const RATE_MAX = 600;                            // req/min por IP ANÓNIMA → bloqueo (backstop anti-DDoS; el tráfico autenticado queda exento)
 const BLOCK_MS = 15 * 60 * 1000;                // duración del bloqueo
 const EVENT_BUFFER_MAX = 300;                   // eventos recientes en memoria
 
@@ -77,15 +77,22 @@ export const securityMonitor = (req, res, next) => {
     blocked.delete(ip);
   }
 
-  // 1) Ráfaga anómala por IP
-  const rate = ipRate.get(ip);
-  if (!rate || now - rate.windowStart > RATE_WINDOW_MS) {
-    ipRate.set(ip, { count: 1, windowStart: now });
-  } else {
-    rate.count++;
-    if (rate.count === RATE_MAX) {
-      blockIp(ip, 'rate_spike', req.path);
-      return res.status(429).json({ message: 'Demasiadas peticiones. Intenta más tarde.' });
+  // El tráfico autenticado (panel admin, usuarios logueados) NO cuenta como
+  // ráfaga: el panel hace polling intenso y es legítimo. Solo aplicamos el
+  // backstop de ráfaga a peticiones anónimas.
+  const isAuthenticated = !!req.headers.authorization;
+
+  // 1) Ráfaga anómala por IP anónima (backstop grueso anti-DDoS)
+  if (!isAuthenticated) {
+    const rate = ipRate.get(ip);
+    if (!rate || now - rate.windowStart > RATE_WINDOW_MS) {
+      ipRate.set(ip, { count: 1, windowStart: now });
+    } else {
+      rate.count++;
+      if (rate.count === RATE_MAX) {
+        blockIp(ip, 'rate_spike', req.path);
+        return res.status(429).json({ message: 'Demasiadas peticiones. Intenta más tarde.' });
+      }
     }
   }
 
@@ -103,11 +110,18 @@ export const securityMonitor = (req, res, next) => {
     return res.status(400).json({ message: 'Petición inválida' });
   }
 
-  // 4) Fuerza bruta en login: observar 401 de POST /users/login y /auth/*
-  const isAuthRoute = req.method === 'POST' && (/^\/(users\/login|auth\/login|users\/reset-password)/.test(req.path));
+  // 4) Fuerza bruta en login: contar solo credenciales rechazadas (401) de
+  // POST /users/login y /auth/login. Un 400 es error de validación (campo
+  // faltante), no un intento de credencial — no cuenta. Un login exitoso
+  // limpia el contador de esa IP.
+  const isAuthRoute = req.method === 'POST' && (/^\/(users\/login|auth\/login)/.test(req.path));
   if (isAuthRoute) {
     res.on('finish', () => {
-      if (res.statusCode !== 401 && res.statusCode !== 400) return;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        failedLogins.delete(ip); // login exitoso → resetear
+        return;
+      }
+      if (res.statusCode !== 401 && res.statusCode !== 403) return;
       const arr = failedLogins.get(ip) || [];
       const fresh = arr.filter((t) => now - t < FAILED_LOGIN_WINDOW_MS);
       fresh.push(now);
