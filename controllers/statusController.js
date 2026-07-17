@@ -1,12 +1,16 @@
 // controllers/statusController.js
-// Estado de salud del sistema: servidor (Railway) + Sofia (n8n).
+// Estado de salud del sistema: servidor (Railway) + Sofia (n8n) + Mongo + Supabase + Cloudinary.
 import asyncHandler from 'express-async-handler';
 import mongoose from 'mongoose';
+import cloudinary from '../config/cloudinary.js';
 
 const N8N_URL = (process.env.N8N_BASE_URL || 'https://primary-production-73558.up.railway.app').replace(/\/$/, '');
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
 // ID del workflow "Tesipedia - Sofia Agent" en n8n (configurable por env)
 const SOFIA_WF_ID = process.env.N8N_SOFIA_WORKFLOW_ID || 'IwahEKyHDB76nPLk';
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
 // Estados de la conexión de Mongoose
 const DB_STATES = {
@@ -19,12 +23,22 @@ const DB_STATES = {
 // ─────────────────────────────────────────────────────────────
 // Salud del servidor (el propio backend en Railway)
 // ─────────────────────────────────────────────────────────────
-function getServerHealth() {
+async function getServerHealth() {
   const uptimeSec = Math.round(process.uptime());
   const startedAt = new Date(Date.now() - uptimeSec * 1000).toISOString();
   const mem = process.memoryUsage();
   const readyState = mongoose.connection?.readyState ?? 0;
   const dbConnected = readyState === 1;
+
+  // Latencia real de Mongo (ping admin)
+  let dbPingMs = null;
+  if (dbConnected) {
+    try {
+      const t0 = Date.now();
+      await mongoose.connection.db.admin().command({ ping: 1 });
+      dbPingMs = Date.now() - t0;
+    } catch { /* noop */ }
+  }
 
   return {
     status: dbConnected ? 'up' : 'degraded',
@@ -36,6 +50,7 @@ function getServerHealth() {
       connected: dbConnected,
       host: mongoose.connection?.host || null,
       name: mongoose.connection?.name || null,
+      pingMs: dbPingMs,
     },
     memory: {
       rssMB: Math.round(mem.rss / 1024 / 1024),
@@ -54,12 +69,15 @@ async function getSofiaHealth() {
     reachable: false,
     instanceUrl: N8N_URL,
     apiConfigured: !!N8N_API_KEY,
+    latencyMs: null,
     sofia: null,
   };
 
   // 1) ¿Responde la instancia de n8n? (endpoint público /healthz)
   try {
+    const t0 = Date.now();
     const r = await fetch(`${N8N_URL}/healthz`, { signal: AbortSignal.timeout(5000) });
+    out.latencyMs = Date.now() - t0;
     out.reachable = r.ok;
   } catch {
     out.reachable = false;
@@ -87,7 +105,7 @@ async function getSofiaHealth() {
     }
   } catch { /* noop */ }
 
-  // 3) Ejecuciones recientes (éxitos / errores / última)
+  // 3) Ejecuciones recientes (éxitos / errores / última / log)
   try {
     const er = await fetch(
       `${N8N_URL}/api/v1/executions?workflowId=${SOFIA_WF_ID}&limit=20&includeData=false`,
@@ -114,6 +132,17 @@ async function getSofiaHealth() {
             stoppedAt: last.stoppedAt,
           }
         : null;
+      // Log completo para la vista expandible del panel
+      sofia.executions = data.map((e) => ({
+        id: e.id,
+        status: e.status,
+        mode: e.mode,
+        startedAt: e.startedAt,
+        durationMs:
+          e.startedAt && e.stoppedAt
+            ? new Date(e.stoppedAt).getTime() - new Date(e.startedAt).getTime()
+            : null,
+      }));
     }
   } catch { /* noop */ }
 
@@ -131,12 +160,110 @@ async function getSofiaHealth() {
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Datos de negocio en MongoDB (conteos + tamaño)
+// ─────────────────────────────────────────────────────────────
+async function getMongoStats() {
+  if (mongoose.connection?.readyState !== 1) return null;
+  try {
+    const db = mongoose.connection.db;
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const [stats, users, quotes, quotesToday, projects] = await Promise.all([
+      db.stats(),
+      db.collection('users').estimatedDocumentCount(),
+      db.collection('generatedquotes').estimatedDocumentCount(),
+      db.collection('generatedquotes').countDocuments({ createdAt: { $gte: startOfDay } }),
+      db.collection('projects').estimatedDocumentCount(),
+    ]);
+
+    return {
+      dataSizeMB: Math.round((stats.dataSize || 0) / 1024 / 1024),
+      storageSizeMB: Math.round((stats.storageSize || 0) / 1024 / 1024),
+      collections: stats.collections || null,
+      counts: { users, quotes, quotesToday, projects },
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Leads de WhatsApp en Supabase (actividad de Sofia)
+// ─────────────────────────────────────────────────────────────
+async function getSupabaseStats() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    Prefer: 'count=exact',
+  };
+  const count = async (filter = '') => {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/leads?select=wa_id${filter}&limit=1`,
+      { headers, signal: AbortSignal.timeout(5000) }
+    );
+    if (!r.ok) return null;
+    const range = r.headers.get('content-range') || '';
+    const total = parseInt(range.split('/')[1], 10);
+    return Number.isNaN(total) ? null : total;
+  };
+  try {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const iso = startOfDay.toISOString();
+    const [total, hoy, esperando] = await Promise.all([
+      count(),
+      count(`&ultimo_mensaje_at=gte.${iso}`),
+      count('&estado_sofia=eq.esperando_aprobacion'),
+    ]);
+    return { leadsTotal: total, leadsActivosHoy: hoy, esperandoAprobacion: esperando };
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Uso de Cloudinary (créditos / storage / bandwidth) — cache 5 min
+// para no quemar el rate limit del Admin API (500 req/h)
+// ─────────────────────────────────────────────────────────────
+let cloudinaryCache = { at: 0, data: null };
+async function getCloudinaryUsage() {
+  if (Date.now() - cloudinaryCache.at < 5 * 60 * 1000) return cloudinaryCache.data;
+  try {
+    const u = await cloudinary.api.usage();
+    const data = {
+      plan: u.plan || null,
+      credits: u.credits
+        ? {
+            usage: Math.round(u.credits.usage * 100) / 100,
+            limit: u.credits.limit,
+            usedPercent: Math.round(u.credits.used_percent * 10) / 10,
+          }
+        : null,
+      storageGB: u.storage?.usage ? Math.round((u.storage.usage / 1073741824) * 100) / 100 : null,
+      bandwidthGB: u.bandwidth?.usage ? Math.round((u.bandwidth.usage / 1073741824) * 100) / 100 : null,
+      transformations: u.transformations?.usage ?? null,
+    };
+    cloudinaryCache = { at: Date.now(), data };
+    return data;
+  } catch {
+    return cloudinaryCache.data; // si falla, devolver lo último conocido
+  }
+}
+
 // @desc    Estado de salud agregado del sistema
 // @route   GET /status
 // @access  Admin
 export const getSystemStatus = asyncHandler(async (req, res) => {
-  const server = getServerHealth();
-  const n8n = await getSofiaHealth();
+  const [server, n8n, mongo, supabase, cloudinaryUsage] = await Promise.all([
+    getServerHealth(),
+    getSofiaHealth(),
+    getMongoStats(),
+    getSupabaseStats(),
+    getCloudinaryUsage(),
+  ]);
 
   const overall =
     server.status === 'up' && n8n.status === 'up'
@@ -150,5 +277,8 @@ export const getSystemStatus = asyncHandler(async (req, res) => {
     timestamp: new Date().toISOString(),
     server,
     n8n,
+    mongo,
+    supabase,
+    cloudinary: cloudinaryUsage,
   });
 });
