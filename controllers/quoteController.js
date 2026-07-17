@@ -1386,16 +1386,9 @@ export const uploadQuotePDF = asyncHandler(async (req, res) => {
 
     const pdfPublicIdResult = uploadResult.public_id;
 
-    // Generar URL de descarga privada (bypass de restricciones PDF en Cloudinary)
-    const pdfUrl = cloudinary.utils.private_download_url(
-      pdfPublicIdResult,
-      'pdf',
-      {
-        resource_type: 'raw',
-        type: 'upload',
-        expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 días
-      }
-    );
+    // URL permanente (secure_url) — la private_download_url expira a los 7 días
+    // y dejaba las cotizaciones guardadas con links muertos (error 401 de Cloudinary)
+    const pdfUrl = uploadResult.secure_url;
 
     // Si se proporcionó un quoteId, actualizar el documento en BD
     if (quoteId) {
@@ -1500,28 +1493,12 @@ export const generateAndUploadQuotePDF = async (req, res) => {
 
     console.log('[QuotePDF] Upload exitoso, public_id:', uploadResult.public_id);
 
-    // 3. Generar URL de descarga — intentar private_download_url, si falla usar secure_url
+    // 3. Devolver la URL permanente (secure_url) — la private_download_url expira
+    // a los 7 días y dejaba las cotizaciones guardadas con links muertos
     step = 'generar_url';
-    let downloadUrl;
-    try {
-      downloadUrl = cloudinary.utils.private_download_url(
-        uploadResult.public_id,
-        'pdf',
-        {
-          resource_type: 'raw',
-          type: 'upload',
-          expires_at: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
-        }
-      );
-    } catch (urlErr) {
-      console.warn('[QuotePDF] private_download_url falló, usando secure_url:', urlErr.message);
-      downloadUrl = uploadResult.secure_url;
-    }
-
-    // 4. Devolver la URL de descarga
     return res.status(200).json({
       success: true,
-      pdfUrl: downloadUrl,
+      pdfUrl: uploadResult.secure_url,
       fallbackUrl: uploadResult.secure_url,
       publicId: uploadResult.public_id,
     });
