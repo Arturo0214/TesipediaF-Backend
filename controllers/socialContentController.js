@@ -185,23 +185,44 @@ Devuelve SOLO un JSON array de ${count} piezas. Balancea tipos (post, carousel, 
  "notes":"a qué objeción/etapa apunta y por qué funciona"
 }`;
 
-    const userMsg = `Genera un calendario de ${count} piezas variadas de contenido (post/carrusel/reel) para las próximas semanas.
-Competencia que lo hace bien: ${competencia.join(', ')}.
-${topPosts.length ? 'Posts ganadores recientes de competencia:\n' + topPosts.join('\n') : ''}
-Devuelve solo el JSON array.`;
+    const compCtx = `Competencia que lo hace bien: ${competencia.join(', ')}.
+${topPosts.length ? 'Posts ganadores recientes de competencia:\n' + topPosts.join('\n') : ''}`;
 
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': TOKEN, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system, messages: [{ role: 'user', content: userMsg }] }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error('Claude: ' + (j.error?.message || 'error'));
-    const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-    const mm = text.match(/\[[\s\S]*\]/);
-    let ideas = JSON.parse(mm ? mm[0] : text);
-    if (!Array.isArray(ideas)) ideas = [ideas];
-    ideas = ideas.slice(0, count);
+    // Genera por LOTES chicos EN PARALELO (evita cortar el JSON por límite de
+    // tokens y reduce el tiempo total, para no dar timeout).
+    const BATCH = 4;
+    const angulos = [
+        'metodología y estructura de tesis', 'errores comunes y correcciones',
+        'mitos y objeciones (precio, confianza, tiempo)', 'motivación y testimonios',
+        'tips prácticos y productividad', 'detrás de cámaras y proceso',
+    ];
+    const callBatch = async (n, angulo) => {
+        const userMsg = `Genera ${n} piezas variadas (mezcla post/carrusel/reel) para el calendario de Tesipedia, con enfoque en: ${angulo}.
+${compCtx}
+Devuelve solo el JSON array de ${n} piezas.`;
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': TOKEN, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+            body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 6000, system, messages: [{ role: 'user', content: userMsg }] }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error('Claude: ' + (j.error?.message || 'error'));
+        const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+        const mm = text.match(/\[[\s\S]*\]/);
+        const arr = JSON.parse(mm ? mm[0] : text);
+        return Array.isArray(arr) ? arr : [arr];
+    };
+
+    const nBatches = Math.ceil(count / BATCH);
+    const jobs = [];
+    for (let i = 0; i < nBatches; i++) {
+        const n = Math.min(BATCH, count - i * BATCH);
+        jobs.push(callBatch(n, angulos[i % angulos.length]).catch(() => []));
+    }
+    const results = await Promise.all(jobs);
+    let ideas = results.flat().slice(0, count);
+    if (!ideas.length) throw new Error('Claude no devolvió piezas');
+    const j = { usage: null };
 
     // Continúa el calendario después de la última pieza ya agendada
     const lastScheduled = await ContentPiece.findOne({ scheduledFor: { $ne: null } }).sort({ scheduledFor: -1 }).select('scheduledFor');
