@@ -196,7 +196,7 @@ async function getMongoStats() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Leads de WhatsApp en Supabase (actividad de Sofia)
+// Leads de WhatsApp en Supabase (salud + actividad de Sofia)
 // ─────────────────────────────────────────────────────────────
 async function getSupabaseStats() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return null;
@@ -205,6 +205,19 @@ async function getSupabaseStats() {
     Authorization: `Bearer ${SUPABASE_KEY}`,
     Prefer: 'count=exact',
   };
+
+  // Salud del proyecto: ping al REST API con latencia
+  let reachable = false;
+  let latencyMs = null;
+  try {
+    const t0 = Date.now();
+    const ping = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      headers: { apikey: SUPABASE_KEY },
+      signal: AbortSignal.timeout(5000),
+    });
+    latencyMs = Date.now() - t0;
+    reachable = ping.ok;
+  } catch { /* noop */ }
   const count = async (filter = '') => {
     const r = await fetch(
       `${SUPABASE_URL}/rest/v1/leads?select=wa_id${filter}&limit=1`,
@@ -225,14 +238,73 @@ async function getSupabaseStats() {
       count('&estado_sofia=eq.esperando_aprobacion'),
     ]);
     return {
+      status: reachable ? 'up' : 'down',
+      reachable,
+      latencyMs,
       leadsTotal: total,
       leadsNuevosHoy: nuevosHoy,
       actividadHoy,
       esperandoAprobacion: esperando,
     };
   } catch {
-    return null;
+    return { status: reachable ? 'degraded' : 'down', reachable, latencyMs };
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Salud de Anthropic (API de Claude que usa Sofia) — cache 3 min
+// ─────────────────────────────────────────────────────────────
+let anthropicCache = { at: 0, data: null };
+async function getAnthropicHealth() {
+  if (Date.now() - anthropicCache.at < 3 * 60 * 1000) return anthropicCache.data;
+
+  const out = {
+    status: 'unknown',
+    indicator: null,       // none | minor | major | critical
+    description: null,
+    incidents: null,
+    keyValid: null,
+    latencyMs: null,
+  };
+
+  // 1) Status público de Anthropic (statuspage.io, sin auth)
+  try {
+    const r = await fetch('https://status.anthropic.com/api/v2/status.json', {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.ok) {
+      const s = await r.json();
+      out.indicator = s.status?.indicator ?? null;
+      out.description = s.status?.description ?? null;
+    }
+  } catch { /* noop */ }
+
+  // 2) Validar la API key sin gastar tokens (GET /v1/models)
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const t0 = Date.now();
+      const r = await fetch('https://api.anthropic.com/v1/models?limit=1', {
+        headers: {
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      out.latencyMs = Date.now() - t0;
+      out.keyValid = r.ok;
+    } catch { /* noop */ }
+  }
+
+  // Derivar estado: incidentes mayores o key inválida → problema
+  if (out.indicator === 'none' && out.keyValid !== false) out.status = 'up';
+  else if (out.indicator === 'critical' || out.indicator === 'major' || out.keyValid === false) out.status = 'down';
+  else if (out.indicator === 'minor') out.status = 'degraded';
+  else if (out.indicator == null && out.keyValid == null) out.status = 'unknown';
+  else out.status = out.keyValid ? 'up' : 'unknown';
+
+  anthropicCache = { at: Date.now(), data: out };
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -268,19 +340,25 @@ async function getCloudinaryUsage() {
 // @route   GET /status
 // @access  Admin
 export const getSystemStatus = asyncHandler(async (req, res) => {
-  const [server, n8n, mongo, supabase, cloudinaryUsage] = await Promise.all([
+  const [server, n8n, mongo, supabase, cloudinaryUsage, anthropic] = await Promise.all([
     getServerHealth(),
     getSofiaHealth(),
     getMongoStats(),
     getSupabaseStats(),
     getCloudinaryUsage(),
+    getAnthropicHealth(),
   ]);
 
+  // Supabase caído o Anthropic con incidentes degradan el estado global
+  // (Sofia depende de ambos), pero solo server/n8n lo marcan como caído
+  const degradedDeps =
+    supabase?.status === 'down' || anthropic?.status === 'down' || anthropic?.status === 'degraded';
+
   const overall =
-    server.status === 'up' && n8n.status === 'up'
-      ? 'up'
-      : server.status === 'down' || n8n.status === 'down'
+    server.status === 'down' || n8n.status === 'down'
       ? 'down'
+      : server.status === 'up' && n8n.status === 'up' && !degradedDeps
+      ? 'up'
       : 'degraded';
 
   res.json({
@@ -290,6 +368,7 @@ export const getSystemStatus = asyncHandler(async (req, res) => {
     n8n,
     mongo,
     supabase,
+    anthropic,
     cloudinary: cloudinaryUsage,
   });
 });
