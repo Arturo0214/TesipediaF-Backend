@@ -3,6 +3,7 @@
 import asyncHandler from 'express-async-handler';
 import mongoose from 'mongoose';
 import cloudinary from '../config/cloudinary.js';
+import { getSecuritySnapshot } from '../middleware/securityMonitor.js';
 
 const N8N_URL = (process.env.N8N_BASE_URL || 'https://primary-production-73558.up.railway.app').replace(/\/$/, '');
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
@@ -340,19 +341,21 @@ async function getCloudinaryUsage() {
 // @route   GET /status
 // @access  Admin
 export const getSystemStatus = asyncHandler(async (req, res) => {
-  const [server, n8n, mongo, supabase, cloudinaryUsage, anthropic] = await Promise.all([
+  const [server, n8n, mongo, supabase, cloudinaryUsage, anthropic, security] = await Promise.all([
     getServerHealth(),
     getSofiaHealth(),
     getMongoStats(),
     getSupabaseStats(),
     getCloudinaryUsage(),
     getAnthropicHealth(),
+    getSecuritySnapshot().catch(() => null),
   ]);
 
-  // Supabase caído o Anthropic con incidentes degradan el estado global
-  // (Sofia depende de ambos), pero solo server/n8n lo marcan como caído
+  // Supabase caído, Anthropic con incidentes o actividad sospechosa degradan
+  // el estado global (solo server/n8n lo marcan como caído)
   const degradedDeps =
-    supabase?.status === 'down' || anthropic?.status === 'down' || anthropic?.status === 'degraded';
+    supabase?.status === 'down' || anthropic?.status === 'down' || anthropic?.status === 'degraded' ||
+    (security && security.status !== 'up');
 
   const overall =
     server.status === 'down' || n8n.status === 'down'
@@ -370,5 +373,6 @@ export const getSystemStatus = asyncHandler(async (req, res) => {
     supabase,
     anthropic,
     cloudinary: cloudinaryUsage,
+    security,
   });
 });

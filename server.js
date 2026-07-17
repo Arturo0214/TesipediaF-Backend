@@ -13,6 +13,7 @@ import { configureSocket } from './sockets/socketConfig.js';
 import { chatSocket } from './sockets/chatSocket.js';
 import { notificationSocket } from './sockets/notificationSocket.js';
 import { generalLimiter } from './middleware/rateLimiter.js';
+import { securityMonitor } from './middleware/securityMonitor.js';
 import { globalErrorHandler } from './middleware/asyncErrors.js';
 
 // Rutas (a implementar)
@@ -119,6 +120,7 @@ app.use((req, res, next) => {
 // Agregar trust proxy para rate limiter
 app.set('trust proxy', 1);
 
+app.use(securityMonitor);
 app.use(generalLimiter);
 app.use(validateRequest);
 
