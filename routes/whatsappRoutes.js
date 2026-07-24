@@ -38,6 +38,7 @@ import {
   sendDiscountPromo,
   getRevivalPipeline,
   updateLeadRevival,
+  getLeadsDiario,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
@@ -52,6 +53,7 @@ router.use(adminOnly);
 // Leer leads / conversaciones
 router.get('/leads', getLeads);
 router.get('/leads-status', getLeadsStatus);
+router.get('/leads-diario', getLeadsDiario);
 router.get('/leads/:waId', getLeadByWaId);
 router.get('/leads/:waId/window-status', getWindowStatus);
 

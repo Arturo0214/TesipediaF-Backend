@@ -13,6 +13,7 @@ import { join } from 'path';
 import ffmpegPath from 'ffmpeg-static';
 import { sendCtwaEvent } from '../utils/metaCapi.js';
 import { leadYaPago } from '../utils/leadPagadoGuard.js';
+import GeneratedQuote from '../models/GeneratedQuote.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://lsndrldvjzwdarfhenfj.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -746,11 +747,12 @@ export const updateLeadRevival = asyncHandler(async (req, res) => {
  */
 export const updateLeadNotes = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const { notas_admin, etiquetas } = req.body;
+  const { notas_admin, etiquetas, razon_descarte } = req.body;
 
   const updateData = { updated_at: new Date().toISOString() };
   if (notas_admin !== undefined) updateData.notas_admin = notas_admin;
   if (etiquetas !== undefined) updateData.etiquetas = etiquetas; // array de strings
+  if (razon_descarte !== undefined) updateData.razon_descarte = razon_descarte;
 
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
   const response = await fetch(patchUrl, {
@@ -765,6 +767,229 @@ export const updateLeadNotes = asyncHandler(async (req, res) => {
     throw new Error(`Error actualizando notas: ${err}`);
   }
   res.json({ success: true });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+//  TABLERO DIARIO DE LEADS — GET /api/v1/whatsapp/leads-diario?fecha=YYYY-MM-DD
+//
+//  Réplica del Excel de seguimiento de Hugo: TODOS los leads que llegaron un
+//  día (hora CDMX), con dueño, origen, estatus, último mensaje (de quién y
+//  hace cuánto), observaciones y razón de descarte editables, más señales de
+//  por qué no compra comparando contra el patrón de los que SÍ pagaron.
+// ──────────────────────────────────────────────────────────────────────────
+
+const CDMX_OFFSET_MS = 6 * 60 * 60 * 1000; // CDMX = UTC-6 fijo (sin horario de verano)
+const ESTADOS_COTIZADO = ['cotizacion_enviada', 'cotizacion_confirmada', 'esperando_aprobacion', 'cliente_acepto', 'pagado'];
+
+const fmtHoras = (h) => (h >= 48 ? `${Math.round(h / 24)} días` : `${Math.round(h)}h`);
+
+/**
+ * Señales heurísticas de por qué un lead no ha comprado, calibradas contra
+ * el benchmark de compradores (bench) de los últimos 90 días.
+ */
+function computeSenalesDiario(lead, bench, now) {
+  const senales = [];
+  const last = lead.last_msg && typeof lead.last_msg === 'object' ? lead.last_msg : null;
+  const lastTs = (last && last.timestamp) || lead.ultimo_mensaje_at || lead.updated_at;
+  const horas = lastTs ? Math.max(0, (now - new Date(lastTs).getTime()) / 3600e3) : null;
+  const estado = lead.estado_sofia || '';
+  const esFinal = estado === 'pagado' || estado === 'descartado' || estado === 'no_interesado';
+
+  if (!esFinal) {
+    if (estado === 'bienvenida') {
+      senales.push({ tipo: 'sin_respuesta', severidad: 'media', texto: 'Nunca respondió — solo recibió la bienvenida' });
+    }
+    if (last && last.role === 'user' && horas != null && horas >= 1) {
+      senales.push({ tipo: 'cliente_en_espera', severidad: 'alta', texto: `El cliente escribió hace ${fmtHoras(horas)} y nadie le ha contestado` });
+      if (horas >= 20 && horas < 24) {
+        senales.push({ tipo: 'ventana_por_expirar', severidad: 'alta', texto: 'Ventana de 24h por expirar — responder YA o tocará plantilla' });
+      }
+    }
+    if (last && last.role !== 'user' && horas != null && horas >= 24 && estado !== 'bienvenida') {
+      senales.push({ tipo: 'dejo_de_responder', severidad: horas >= 48 ? 'alta' : 'media', texto: `Dejó de responder hace ${fmtHoras(horas)} (el último mensaje fue nuestro)` });
+    }
+    if ((estado === 'cotizacion_enviada' || estado === 'esperando_aprobacion' || estado === 'cotizacion_confirmada') && horas != null && horas >= 24) {
+      const cierre = bench?.diasCierreMediana;
+      senales.push({ tipo: 'cotizado_sin_cierre', severidad: 'alta', texto: `Cotizado y sin cierre desde hace ${fmtHoras(horas)}${cierre ? ` — los que pagan cierran en ~${cierre} día(s)` : ''}` });
+    }
+    if (lead.precio > 0 && bench?.precioMediana > 0 && lead.precio > bench.precioMediana * 1.3) {
+      const pct = Math.round(((lead.precio / bench.precioMediana) - 1) * 100);
+      senales.push({ tipo: 'precio_alto', severidad: 'media', texto: `Precio $${Number(lead.precio).toLocaleString('es-MX')} — ${pct}% arriba del ticket típico de los que pagan ($${Number(bench.precioMediana).toLocaleString('es-MX')})` });
+    }
+    if (!lead.atendido_por) {
+      senales.push({ tipo: 'sin_dueno', severidad: 'media', texto: 'Sin dueño asignado' });
+    }
+  }
+  if ((estado === 'descartado' || estado === 'no_interesado') && !lead.razon_descarte) {
+    senales.push({ tipo: 'sin_razon_descarte', severidad: 'baja', texto: 'Descartado sin razón registrada — anotarla para medir descartes' });
+  }
+  return senales;
+}
+
+export const getLeadsDiario = asyncHandler(async (req, res) => {
+  const hoyCdmx = new Date(Date.now() - CDMX_OFFSET_MS).toISOString().slice(0, 10);
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : hoyCdmx;
+  const desde = `${fecha}T06:00:00.000Z`; // 00:00 CDMX
+  const hasta = new Date(Date.parse(desde) + 24 * 3600e3).toISOString();
+  const now = Date.now();
+
+  const cols = [
+    'wa_id', 'nombre', 'created_at', 'updated_at', 'estado_sofia', 'atendido_por',
+    'origen', 'ad_source', 'ad_campaign_name', 'ad_name', 'precio', 'cotizacion_enviada',
+    'cotizacion_aprobada', 'nivel', 'carrera', 'tema', 'tipo_servicio', 'tipo_proyecto',
+    'paginas', 'fecha_entrega', 'notas_admin', 'razon_descarte', 'modo_humano', 'bloqueado',
+    'ultimo_mensaje_at', 'ultimo_mensaje_preview', 'last_msg:historial_chat-%3E-1',
+  ].join(',');
+
+  const dayFilter = `&created_at=gte.${desde}&created_at=lt.${hasta}`;
+  let resp = await fetch(
+    `${SUPABASE_URL}/rest/v1/leads?select=${cols}${dayFilter}&order=created_at.asc&limit=1000`,
+    { headers: supabaseHeaders() }
+  );
+  if (!resp.ok) {
+    // Fallback sin el operador JSON (por si PostgREST rechaza historial_chat->-1)
+    const colsSinLast = cols.replace(',last_msg:historial_chat-%3E-1', '');
+    resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/leads?select=${colsSinLast}${dayFilter}&order=created_at.asc&limit=1000`,
+      { headers: supabaseHeaders() }
+    );
+  }
+  if (!resp.ok) {
+    const err = await resp.text();
+    res.status(resp.status);
+    throw new Error(`Error de Supabase (leads-diario): ${err}`);
+  }
+  const rows = await resp.json();
+
+  // ── Benchmark de compradores (últimos 90 días) ──
+  let bench = null;
+  try {
+    const d90 = new Date(now - 90 * 24 * 3600e3).toISOString();
+    const bResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/leads?select=created_at,updated_at,precio,atendido_por,ad_campaign_name,ad_source&estado_sofia=eq.pagado&created_at=gte.${d90}&limit=500`,
+      { headers: supabaseHeaders() }
+    );
+    if (bResp.ok) {
+      const pagados = await bResp.json();
+      if (pagados.length > 0) {
+        const mediana = (arr) => {
+          const s = [...arr].sort((a, b) => a - b);
+          return s.length ? s[Math.floor(s.length / 2)] : 0;
+        };
+        const precios = pagados.map((p) => p.precio || 0).filter((p) => p > 0);
+        // Aprox: días entre llegada y última actividad (el pago suele ser lo último)
+        const diasCierre = pagados
+          .map((p) => (new Date(p.updated_at) - new Date(p.created_at)) / 864e5)
+          .filter((d) => d >= 0 && d < 60);
+        const conteo = (arr) => arr.reduce((m, v) => { if (v) m[v] = (m[v] || 0) + 1; return m; }, {});
+        const porDueno = conteo(pagados.map((p) => (p.atendido_por || '').toLowerCase().trim()));
+        const porCampania = conteo(pagados.map((p) => p.ad_campaign_name));
+        const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1])[0] || null;
+        bench = {
+          n: pagados.length,
+          precioMediana: mediana(precios),
+          precioPromedio: precios.length ? Math.round(precios.reduce((s, p) => s + p, 0) / precios.length) : 0,
+          diasCierreMediana: diasCierre.length ? Math.round(mediana(diasCierre) * 10) / 10 : null,
+          conDueno: pagados.filter((p) => p.atendido_por).length,
+          topDueno: top(porDueno) ? { nombre: top(porDueno)[0], cierres: top(porDueno)[1] } : null,
+          topCampania: top(porCampania) ? { nombre: top(porCampania)[0], cierres: top(porCampania)[1] } : null,
+        };
+      }
+    }
+  } catch { /* benchmark es best-effort, no tumbar el tablero */ }
+
+  // Ticket y tiempo cotización→pago reales desde Mongo (los leads pagados en
+  // Supabase no conservan precio; GeneratedQuote es la fuente de verdad de pagos)
+  try {
+    const d90 = new Date(now - 90 * 24 * 3600e3);
+    const quotesPagadas = await GeneratedQuote.find({ status: 'paid', updatedAt: { $gte: d90 } })
+      .select('precioConDescuento precioConRecargo precioBase paidAt createdAt')
+      .lean();
+    if (quotesPagadas.length > 0) {
+      const mediana = (arr) => {
+        const s = [...arr].sort((a, b) => a - b);
+        return s.length ? s[Math.floor(s.length / 2)] : 0;
+      };
+      const tickets = quotesPagadas
+        .map((q) => q.precioConDescuento || q.precioConRecargo || q.precioBase || 0)
+        .filter((p) => p > 0);
+      const diasAPago = quotesPagadas
+        .filter((q) => q.paidAt && q.createdAt)
+        .map((q) => (new Date(q.paidAt) - new Date(q.createdAt)) / 864e5)
+        .filter((d) => d >= 0 && d < 60);
+      bench = bench || { n: quotesPagadas.length, conDueno: 0, topDueno: null, topCampania: null, diasCierreMediana: null };
+      if (tickets.length && !(bench.precioMediana > 0)) {
+        bench.precioMediana = Math.round(mediana(tickets));
+        bench.precioPromedio = Math.round(tickets.reduce((s, p) => s + p, 0) / tickets.length);
+      }
+      if (diasAPago.length) bench.diasCierreMediana = Math.round(mediana(diasAPago) * 10) / 10;
+    }
+  } catch { /* Mongo puede no estar disponible en local — best-effort */ }
+
+  // ── Leads con último mensaje + señales ──
+  const limpiarMsg = (t) => String(t || '')
+    .replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '')
+    .replace(/\[TEMPLATE:[^\]]*\]\s*/g, '').replace(/\[STATE:[\s\S]*?\]/g, '')
+    .replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
+
+  const leads = rows.map((l, i) => {
+    const last = l.last_msg && typeof l.last_msg === 'object' ? l.last_msg : null;
+    const lastTs = (last && last.timestamp) || l.ultimo_mensaje_at || l.updated_at;
+    let de = last ? (last.role === 'user' ? 'cliente' : 'nosotros') : null;
+    let rawContent = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : (l.ultimo_mensaje_preview || '');
+    if (!last && rawContent) {
+      // Inferir autor desde el prefijo del preview: "👤 Nombre:" = cliente; "Sofia:/Tú/📋" = nosotros
+      de = rawContent.startsWith('👤') ? 'cliente' : 'nosotros';
+    }
+    const { last_msg, historial_chat, ...rest } = l;
+    return {
+      no: i + 1,
+      ...rest,
+      ultimoMensaje: {
+        de,
+        texto: limpiarMsg(rawContent).slice(0, 220),
+        fecha: lastTs || null,
+        horasDesde: lastTs ? Math.round(Math.max(0, (now - new Date(lastTs).getTime()) / 3600e3) * 10) / 10 : null,
+      },
+      senales: computeSenalesDiario(l, bench, now),
+    };
+  });
+
+  // ── Métricas del día ──
+  const total = leads.length;
+  const nEstado = (fn) => leads.filter(fn).length;
+  const sinRespuesta = nEstado((l) => l.estado_sofia === 'bienvenida');
+  const cotizados = nEstado((l) => ESTADOS_COTIZADO.includes(l.estado_sofia) || l.cotizacion_enviada === true);
+  const esperandoAprobacion = nEstado((l) => l.estado_sofia === 'esperando_aprobacion');
+  const pagados = nEstado((l) => l.estado_sofia === 'pagado');
+  const descartados = nEstado((l) => l.estado_sofia === 'descartado' || l.estado_sofia === 'no_interesado');
+  const pct = (a, b) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
+  const porDueno = leads.reduce((m, l) => {
+    const k = (l.atendido_por || '').toLowerCase().trim() || 'sin_asignar';
+    m[k] = (m[k] || 0) + 1;
+    return m;
+  }, {});
+
+  res.json({
+    fecha,
+    leads,
+    stats: {
+      total,
+      sinRespuesta,
+      contestaron: total - sinRespuesta,
+      cotizados,
+      esperandoAprobacion,
+      pagados,
+      descartados,
+      conSenales: nEstado((l) => l.senales.length > 0),
+      tasaCotizacion: pct(cotizados, total),      // % de leads del día que llegaron a cotización
+      tasaPago: pct(pagados, total),              // % de leads del día que pagaron
+      tasaCierre: pct(pagados, cotizados),        // % de cotizados que pagaron
+      porDueno,
+    },
+    patronCompradores: bench,
+    generadoEn: new Date(now).toISOString(),
+  });
 });
 
 /**
