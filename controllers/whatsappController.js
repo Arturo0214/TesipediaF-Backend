@@ -783,6 +783,16 @@ const ESTADOS_COTIZADO = ['cotizacion_enviada', 'cotizacion_confirmada', 'espera
 
 const fmtHoras = (h) => (h >= 48 ? `${Math.round(h / 24)} días` : `${Math.round(h)}h`);
 
+// Supabase guarda timestamps SIN zona (UTC naive, ej. "2026-07-21T02:29:16").
+// El navegador los parsea como hora LOCAL → fechas corridas +6h ("leads del futuro").
+// Normalizar agregando Z para que siempre se interpreten como UTC.
+const zulu = (s) => (typeof s === 'string' && s.length > 10 && !/[Z+]/.test(s.slice(10)) ? s + 'Z' : s);
+
+// precio llega como texto y a veces formateado ("$20,000.00")
+const parsePrecio = (v) => Number(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
+
+const last10 = (s) => String(s || '').replace(/\D/g, '').slice(-10);
+
 /**
  * Señales heurísticas de por qué un lead no ha comprado, calibradas contra
  * el benchmark de compradores (bench) de los últimos 90 días.
@@ -812,9 +822,10 @@ function computeSenalesDiario(lead, bench, now) {
       const cierre = bench?.diasCierreMediana;
       senales.push({ tipo: 'cotizado_sin_cierre', severidad: 'alta', texto: `Cotizado y sin cierre desde hace ${fmtHoras(horas)}${cierre ? ` — los que pagan cierran en ~${cierre} día(s)` : ''}` });
     }
-    if (lead.precio > 0 && bench?.precioMediana > 0 && lead.precio > bench.precioMediana * 1.3) {
-      const pct = Math.round(((lead.precio / bench.precioMediana) - 1) * 100);
-      senales.push({ tipo: 'precio_alto', severidad: 'media', texto: `Precio $${Number(lead.precio).toLocaleString('es-MX')} — ${pct}% arriba del ticket típico de los que pagan ($${Number(bench.precioMediana).toLocaleString('es-MX')})` });
+    const precioNum = parsePrecio(lead.precio);
+    if (precioNum > 0 && bench?.precioMediana > 0 && precioNum > bench.precioMediana * 1.3) {
+      const pct = Math.round(((precioNum / bench.precioMediana) - 1) * 100);
+      senales.push({ tipo: 'precio_alto', severidad: 'media', texto: `Precio $${precioNum.toLocaleString('es-MX')} — ${pct}% arriba del ticket típico de los que pagan ($${Number(bench.precioMediana).toLocaleString('es-MX')})` });
     }
     if (!lead.atendido_por) {
       senales.push({ tipo: 'sin_dueno', severidad: 'media', texto: 'Sin dueño asignado' });
@@ -926,6 +937,30 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
     }
   } catch { /* Mongo puede no estar disponible en local — best-effort */ }
 
+  // ── Cotizaciones y ventas reales desde Mongo (fuente de verdad) ──
+  // Sofia solo marca sus propias cotizaciones; las manuales (SalesQuote) viven en
+  // GeneratedQuote. Sin este cruce el tablero subcuenta cotizados y ventas.
+  let quotesDesde = [];       // cotizaciones creadas desde el inicio del día consultado (para la cohorte)
+  let ventasDelDia = 0;       // cotizaciones PAGADAS dentro del día consultado (venta cerrada ese día)
+  try {
+    [quotesDesde, ventasDelDia] = await Promise.all([
+      GeneratedQuote.find({ createdAt: { $gte: new Date(desde) }, status: { $ne: 'cancelled' } })
+        .select('clientPhone status createdAt paidAt').lean(),
+      GeneratedQuote.countDocuments({ status: 'paid', paidAt: { $gte: new Date(desde), $lt: new Date(hasta) } }),
+    ]);
+  } catch { /* sin Mongo el tablero sigue con datos de Supabase */ }
+
+  const quotesPorTel = new Map();
+  for (const q of quotesDesde) {
+    const t = last10(q.clientPhone);
+    if (!t) continue;
+    if (!quotesPorTel.has(t)) quotesPorTel.set(t, []);
+    quotesPorTel.get(t).push(q);
+  }
+  const finDia = Date.parse(hasta);
+  const cohortPhones = new Set(rows.map((l) => last10(l.wa_id)));
+  const quotesEnElDia = quotesDesde.filter((q) => new Date(q.createdAt).getTime() < finDia);
+
   // ── Leads con último mensaje + señales ──
   const limpiarMsg = (t) => String(t || '')
     .replace(/^\[HUMANO:[^\]]*\]\s*/, '').replace(/^\[HUMANO\]\s*/, '')
@@ -933,25 +968,44 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
     .replace(/\[CALCULAR_COTIZACION\]/g, '').trim();
 
   const leads = rows.map((l, i) => {
-    const last = l.last_msg && typeof l.last_msg === 'object' ? l.last_msg : null;
-    const lastTs = (last && last.timestamp) || l.ultimo_mensaje_at || l.updated_at;
+    // Normalizar timestamps naive-UTC ANTES de calcular señales y responder
+    const norm = {
+      ...l,
+      created_at: zulu(l.created_at),
+      updated_at: zulu(l.updated_at),
+      ultimo_mensaje_at: zulu(l.ultimo_mensaje_at),
+      precio: parsePrecio(l.precio),
+    };
+    const last = norm.last_msg && typeof norm.last_msg === 'object' ? norm.last_msg : null;
+    const lastTs = (last && last.timestamp) || norm.ultimo_mensaje_at || norm.updated_at;
     let de = last ? (last.role === 'user' ? 'cliente' : 'nosotros') : null;
-    let rawContent = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : (l.ultimo_mensaje_preview || '');
+    let rawContent = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content)) : (norm.ultimo_mensaje_preview || '');
     if (!last && rawContent) {
       // Inferir autor desde el prefijo del preview: "👤 Nombre:" = cliente; "Sofia:/Tú/📋" = nosotros
       de = rawContent.startsWith('👤') ? 'cliente' : 'nosotros';
     }
-    const { last_msg, historial_chat, ...rest } = l;
+    // Cotizado por EVENTO (no por estado actual): flag de Sofia, PDF, o cotización en Mongo.
+    // Un lead cotizado y luego descartado/modo humano SIGUE contando como cotizado.
+    const qLead = quotesPorTel.get(last10(norm.wa_id)) || [];
+    const cotizado = ESTADOS_COTIZADO.includes(norm.estado_sofia)
+      || norm.cotizacion_enviada === true || norm.cotizacion_enviada === 'true'
+      || !!norm.pdf_url || qLead.length > 0;
+    const qPagada = qLead.find((q) => q.status === 'paid');
+    const pago = norm.estado_sofia === 'pagado' || !!qPagada;
+    const { last_msg, historial_chat, ...rest } = norm;
     return {
       no: i + 1,
       ...rest,
+      cotizado,
+      pago,
+      fecha_pago: qPagada?.paidAt || null,
       ultimoMensaje: {
         de,
         texto: limpiarMsg(rawContent).slice(0, 220),
-        fecha: lastTs || null,
-        horasDesde: lastTs ? Math.round(Math.max(0, (now - new Date(lastTs).getTime()) / 3600e3) * 10) / 10 : null,
+        fecha: zulu(lastTs) || null,
+        horasDesde: lastTs ? Math.round(Math.max(0, (now - new Date(zulu(lastTs)).getTime()) / 3600e3) * 10) / 10 : null,
       },
-      senales: computeSenalesDiario(l, bench, now),
+      senales: computeSenalesDiario(norm, bench, now),
     };
   });
 
@@ -959,9 +1013,9 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
   const total = leads.length;
   const nEstado = (fn) => leads.filter(fn).length;
   const sinRespuesta = nEstado((l) => l.estado_sofia === 'bienvenida');
-  const cotizados = nEstado((l) => ESTADOS_COTIZADO.includes(l.estado_sofia) || l.cotizacion_enviada === true);
+  const cotizados = nEstado((l) => l.cotizado);
   const esperandoAprobacion = nEstado((l) => l.estado_sofia === 'esperando_aprobacion');
-  const pagados = nEstado((l) => l.estado_sofia === 'pagado');
+  const pagados = nEstado((l) => l.pago);
   const descartados = nEstado((l) => l.estado_sofia === 'descartado' || l.estado_sofia === 'no_interesado');
   const pct = (a, b) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
   const porDueno = leads.reduce((m, l) => {
@@ -969,6 +1023,7 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
     m[k] = (m[k] || 0) + 1;
     return m;
   }, {});
+  const quotesACohorte = quotesEnElDia.filter((q) => cohortPhones.has(last10(q.clientPhone))).length;
 
   res.json({
     fecha,
@@ -977,15 +1032,21 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
       total,
       sinRespuesta,
       contestaron: total - sinRespuesta,
-      cotizados,
+      cotizados,                                   // leads del día que recibieron cotización (evento, Sofia o manual)
       esperandoAprobacion,
-      pagados,
+      pagados,                                     // leads del día que YA pagaron (a la fecha, no necesariamente ese día)
       descartados,
       conSenales: nEstado((l) => l.senales.length > 0),
-      tasaCotizacion: pct(cotizados, total),      // % de leads del día que llegaron a cotización
-      tasaPago: pct(pagados, total),              // % de leads del día que pagaron
-      tasaCierre: pct(pagados, cotizados),        // % de cotizados que pagaron
+      tasaCotizacion: pct(cotizados, total),
+      tasaPago: pct(pagados, total),
+      tasaCierre: pct(pagados, cotizados),
       porDueno,
+      cotizacionesEnviadasDia: {                   // cotizaciones CREADAS ese día (incluye leads de días previos)
+        total: quotesEnElDia.length,
+        aLeadsDelDia: quotesACohorte,
+        aLeadsPrevios: quotesEnElDia.length - quotesACohorte,
+      },
+      ventasCerradasDia: ventasDelDia,             // cotizaciones PAGADAS dentro de ese día
     },
     patronCompradores: bench,
     generadoEn: new Date(now).toISOString(),
