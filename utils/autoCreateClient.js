@@ -11,8 +11,15 @@ import { sendWhatsAppText } from './sendWhatsAppNotification.js';
  * Formato: PrimerNombre + 4 dígitos aleatorios + "!"
  */
 const generateGenericPassword = (name) => {
-  const firstName = (name || 'Cliente').split(' ')[0].toLowerCase();
-  const sanitized = firstName.replace(/[^a-z]/g, '') || 'cliente';
+  // Los nombres de perfil de WhatsApp traen decoraciones ("~k~ Octavio", "💕👀 Ana"):
+  // usar la primera palabra con 3+ letras reales, no la primera a secas.
+  const words = (name || 'Cliente')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // quitar acentos
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z]/g, ''))
+    .filter((w) => w.length >= 3);
+  const sanitized = words[0] || 'cliente';
   const digits = Math.floor(1000 + Math.random() * 9000); // 4 dígitos
   return `${sanitized}${digits}!`;
 };

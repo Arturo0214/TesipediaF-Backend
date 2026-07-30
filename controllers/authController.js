@@ -110,16 +110,15 @@ const login = asyncHandler(async (req, res) => {
   // Buscar por email o por teléfono
   let user = await User.findOne({ email: email?.toLowerCase() }).select('+password');
 
-  // Si no se encontró por email, intentar buscar por teléfono
+  // Si no se encontró por email, intentar buscar por teléfono.
+  // Los wa_id de WhatsApp traen el "1" legado tras el 52 (5215510496845), pero el
+  // cliente teclea su número de 10 dígitos — comparar por los últimos 10 dígitos
+  // cubre todos los formatos (10, 52+10, 521+10).
   if (!user && email) {
     const phoneClean = email.replace(/\D/g, '');
     if (phoneClean.length >= 10) {
-      const phoneVariants = [
-        phoneClean,
-        phoneClean.startsWith('52') ? phoneClean : `52${phoneClean}`,
-        phoneClean.startsWith('52') ? phoneClean.slice(2) : phoneClean,
-      ];
-      user = await User.findOne({ phone: { $in: phoneVariants.filter(p => p.length > 0) } }).select('+password');
+      const last10 = phoneClean.slice(-10);
+      user = await User.findOne({ phone: { $regex: `${last10}$` } }).select('+password');
     }
   }
 
