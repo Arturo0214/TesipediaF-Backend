@@ -39,6 +39,7 @@ import {
   getRevivalPipeline,
   getReactivationPipeline,
   updateLeadRevival,
+  uploadRevivalFile,
   getLeadsDiario,
 } from '../controllers/whatsappController.js';
 
@@ -115,6 +116,7 @@ router.post('/discount-promo/send', sendDiscountPromo);
 router.get('/revival-pipeline', getRevivalPipeline);
 router.get('/reactivation-pipeline', getReactivationPipeline);
 router.patch('/leads/:waId/revival', updateLeadRevival);
+router.post('/revival-upload', upload.single('file'), uploadRevivalFile);
 
 // Leads Stats — métricas completas para panel de informes
 router.get('/leads-stats', getLeadsStats);

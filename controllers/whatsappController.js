@@ -721,7 +721,7 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
     'created_at', 'updated_at', 'ultimo_mensaje_at',
     'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
-    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files',
   ].join(',');
 
   // cotizacion_enviada + esperando_aprobacion + calificando (filtro precio en JS)
@@ -759,7 +759,7 @@ export const getReactivationPipeline = asyncHandler(async (req, res) => {
     'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
     'created_at', 'updated_at', 'ultimo_mensaje_at', 'ctwa_clid', 'origen',
     'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
-    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files',
   ].join(',');
 
   // Filtros mutuamente excluyentes (cubren nulos Y vacíos, sin huecos):
@@ -790,12 +790,14 @@ export const getReactivationPipeline = asyncHandler(async (req, res) => {
  */
 export const updateLeadRevival = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const { revival_status, revival_notes, revival_assigned_to } = req.body;
+  const { revival_status, revival_notes, revival_assigned_to, revival_files } = req.body;
 
   const updateData = {};
   if (revival_status !== undefined) updateData.revival_status = revival_status;
   if (revival_notes !== undefined) updateData.revival_notes = revival_notes;
   if (revival_assigned_to !== undefined) updateData.revival_assigned_to = revival_assigned_to;
+  // revival_files: array de adjuntos [{ name, url, publicId, size, uploadedAt, uploadedBy }]
+  if (revival_files !== undefined) updateData.revival_files = Array.isArray(revival_files) ? revival_files : [];
   updateData.revival_last_contact = new Date().toISOString();
 
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
@@ -810,6 +812,40 @@ export const updateLeadRevival = asyncHandler(async (req, res) => {
     throw new Error(`Error actualizando revival: ${err}`);
   }
   res.json({ success: true });
+});
+
+/**
+ * POST /api/v1/whatsapp/revival-upload  (multipart, campo "file")
+ * Sube UN archivo a Cloudinary (carpeta revival-files) y devuelve su metadata.
+ * NO persiste nada: el frontend agrega el objeto devuelto al array revival_files
+ * del lead y guarda vía PATCH /leads/:waId/revival. Reusa la misma infra que /send.
+ */
+export const uploadRevivalFile = asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file) {
+    res.status(400);
+    throw new Error('No se recibió ningún archivo (campo "file")');
+  }
+  const fileBuffer = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+  let result;
+  try {
+    result = await cloudinary.uploader.upload(fileBuffer, {
+      folder: 'revival-files',
+      resource_type: 'auto',
+    });
+  } catch (uploadErr) {
+    res.status(502);
+    throw new Error(`Error al subir archivo a Cloudinary: ${uploadErr.message}`);
+  }
+  res.status(201).json({
+    name: file.originalname,
+    url: result.secure_url,
+    publicId: result.public_id,
+    size: file.size,
+    mimetype: file.mimetype,
+    uploadedAt: new Date().toISOString(),
+    uploadedBy: (req.user && (req.user.name || req.user.email)) || 'admin',
+  });
 });
 
 /**
