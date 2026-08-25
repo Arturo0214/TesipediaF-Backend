@@ -255,6 +255,34 @@ const supabaseHeaders = () => ({
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+//  parseHistorial — parseo TOLERANTE de historial_chat.
+//
+//  Bug histórico: si historial_chat contenía un carácter de control crudo
+//  (p.ej. un salto de línea sin escapar dentro de un mensaje de Sofia),
+//  JSON.parse tronaba y el `catch` lo reseteaba a []. En el siguiente guardado
+//  se persistía [] + el mensaje nuevo → SE PERDÍA TODA LA CONVERSACIÓN.
+//
+//  Ahora: intento estricto → si falla, saneo los caracteres de control (0x00-0x1F)
+//  y reintento. Solo si sigue siendo irrecuperable LANZO un error (HISTORIAL_CORRUPT)
+//  para que el caller ABORTE en vez de sobreescribir y destruir el historial.
+//  NUNCA devuelve [] silenciosamente para un valor no vacío.
+// ──────────────────────────────────────────────────────────────────────────
+const parseHistorial = (raw) => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  const s = raw.replace(/^=/, '');
+  if (!s.trim()) return [];
+  try { return JSON.parse(s); } catch { /* fallthrough a recuperacion */ }
+  // Recuperacion: eliminar caracteres de control crudos (0x00-0x1F: saltos de
+  // linea, tabs, etc.) que rompen el JSON. Los \n bien escapados (dos chars) NO se tocan.
+  try { return JSON.parse(s.replace(/[\u0000-\u001F]/g, '')); } catch { /* irrecuperable */ }
+  const err = new Error('HISTORIAL_CORRUPT');
+  err.code = 'HISTORIAL_CORRUPT';
+  err.rawHistorial = raw;
+  throw err;
+};
+
+// ──────────────────────────────────────────────────────────────────────────
 //  SCHEDULER PERSISTENTE — sobrevive reinicios/redeploys de Render.
 //
 //  Antes los jobs (auto-reminder, revival, quote-followup, calificacion) usaban
@@ -495,7 +523,7 @@ export const getLeads = asyncHandler(async (req, res) => {
         for (const item of batchData) {
           let hist = item.historial_chat;
           if (typeof hist === 'string') {
-            try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
+            try { hist = parseHistorial(hist); } catch { hist = []; } // solo lectura (preview): no persiste
           }
           if (Array.isArray(hist) && hist.length > 0) {
             const leadObj = filteredLeads.find(l => l.wa_id === item.wa_id);
@@ -711,6 +739,49 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     l.estado_sofia !== 'calificando' || (l.tipo_servicio && l.tipo_servicio.trim() !== '')
   );
   res.json(leads);
+});
+
+/**
+ * GET /api/v1/whatsapp/reactivation-pipeline?bucket=con_datos|solo_hola&offset=0
+ * Inventario REACTIVABLE: leads DESCARTADOS por el auto-descarte, separados en 2 buckets
+ * mutuamente excluyentes para que Tania y el equipo los trabajen a mano desde Revivals:
+ *   - con_datos (~668): dieron AL MENOS un dato (servicio/carrera/tema/proyecto). Prospectos reales.
+ *   - solo_hola (~3032): murieron en el "Hola" sin dar ningún dato. Baja prioridad / acción masiva.
+ * Devuelve { leads, total, bucket, offset } — solo_hola pagina de 1000 en 1000.
+ */
+export const getReactivationPipeline = asyncHandler(async (req, res) => {
+  const bucket = req.query.bucket === 'solo_hola' ? 'solo_hola' : 'con_datos';
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+
+  const columns = [
+    'wa_id', 'nombre', 'estado_sofia', 'atendido_por', 'precio',
+    'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto', 'tema',
+    'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
+    'created_at', 'updated_at', 'ultimo_mensaje_at', 'ctwa_clid', 'origen',
+    'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact',
+  ].join(',');
+
+  // Filtros mutuamente excluyentes (cubren nulos Y vacíos, sin huecos):
+  const CON_DATOS = 'or=(tipo_servicio.neq.,carrera.neq.,tema.neq.,tipo_proyecto.neq.)';
+  const SOLO_HOLA = 'and=(or(tipo_servicio.is.null,tipo_servicio.eq.),or(carrera.is.null,carrera.eq.),or(tema.is.null,tema.eq.),or(tipo_proyecto.is.null,tipo_proyecto.eq.))';
+  const filtro = bucket === 'solo_hola' ? SOLO_HOLA : CON_DATOS;
+
+  const url = `${SUPABASE_URL}/rest/v1/leads?select=${columns}&estado_sofia=eq.descartado&${filtro}&bloqueado=neq.true&order=updated_at.desc&offset=${offset}&limit=1000`;
+
+  const response = await fetch(url, {
+    headers: { ...supabaseHeaders(), 'Prefer': 'count=exact' },
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    res.status(response.status);
+    throw new Error(`Error de Supabase: ${errorText}`);
+  }
+  const leads = await response.json();
+  // total exacto desde el header content-range: "0-667/668"
+  const cr = response.headers.get('content-range') || '';
+  const total = parseInt((cr.split('/')[1] || leads.length), 10);
+  res.json({ leads, total, bucket, offset });
 });
 
 /**
@@ -1075,7 +1146,7 @@ export const getWindowStatus = asyncHandler(async (req, res) => {
   if (Array.isArray(raw)) {
     historial = raw;
   } else if (typeof raw === 'string' && raw.trim()) {
-    try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+    historial = parseHistorial(raw);
   }
   const expired = isWindowExpired(historial, updatedAt);
   const lastUserMsg = [...historial].reverse().find(m => m.role === 'user');
@@ -1262,7 +1333,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
         if (Array.isArray(raw)) {
           historialPre = raw;
         } else if (typeof raw === 'string' && raw.trim()) {
-          try { historialPre = JSON.parse(raw.replace(/^=/, '')); } catch { historialPre = []; }
+          historialPre = parseHistorial(raw);
         }
       }
     }
@@ -1589,7 +1660,7 @@ export const sendTemplate = asyncHandler(async (req, res) => {
       if (Array.isArray(raw)) {
         historial = raw;
       } else if (typeof raw === 'string' && raw.trim()) {
-        try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        historial = parseHistorial(raw);
       }
     }
   }
@@ -1772,7 +1843,7 @@ export const sendReengagement = asyncHandler(async (req, res) => {
         const raw = histData[0]?.historial_chat;
         if (Array.isArray(raw)) historial = raw;
         else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          historial = parseHistorial(raw);
         }
       }
     } catch { /* continuar */ }
@@ -1878,7 +1949,7 @@ async function runAutoReminder() {
           const raw = histData[0]?.historial_chat;
           if (Array.isArray(raw)) historial = raw;
           else if (typeof raw === 'string' && raw.trim()) {
-            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+            historial = parseHistorial(raw);
           }
         }
       } catch { /* continuar sin historial */ }
@@ -2242,7 +2313,7 @@ async function runRevivalCore(options = {}) {
         const raw = histData[0]?.historial_chat;
         if (Array.isArray(raw)) historial = raw;
         else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          historial = parseHistorial(raw);
         }
       }
     } catch { /* continuar sin historial */ }
@@ -3026,7 +3097,7 @@ async function runQuoteFollowUpCore(options = {}) {
         const raw = histData[0]?.historial_chat;
         if (Array.isArray(raw)) historial = raw;
         else if (typeof raw === 'string' && raw.trim()) {
-          try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+          historial = parseHistorial(raw);
         }
       }
     } catch { /* continuar sin historial */ }
@@ -3550,7 +3621,7 @@ export const sendManyChatReactivation = asyncHandler(async (req, res) => {
           const raw = existingLead.historial_chat;
           if (Array.isArray(raw)) historial = raw;
           else if (typeof raw === 'string' && raw.trim()) {
-            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+            historial = parseHistorial(raw);
           }
         }
       }
@@ -3882,7 +3953,7 @@ export const getManyChatLeadsView = asyncHandler(async (req, res) => {
   const enriched = leads.map(lead => {
     let hist = lead.historial_chat;
     if (typeof hist === 'string') {
-      try { hist = JSON.parse(hist.replace(/^=/, '')); } catch { hist = []; }
+      try { hist = parseHistorial(hist); } catch { hist = []; } // solo lectura (preview): no persiste
     }
     if (!Array.isArray(hist)) hist = [];
 
@@ -4178,7 +4249,7 @@ async function runCalificacionFollowUp() {
           const raw = histData[0]?.historial_chat;
           if (Array.isArray(raw)) historial = raw;
           else if (typeof raw === 'string' && raw.trim()) {
-            try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+            historial = parseHistorial(raw);
           }
         }
       } catch { /* continuar sin historial */ }
@@ -4387,7 +4458,7 @@ export const getDiscountPromoLeads = asyncHandler(async (req, res) => {
     const raw = l.historial_chat;
     if (Array.isArray(raw)) hist = raw;
     else if (typeof raw === 'string' && raw.trim()) {
-      try { hist = JSON.parse(raw.replace(/^=/, '')); } catch { hist = []; }
+      hist = parseHistorial(raw);
     }
     const lastMessages = hist.slice(-3).map(m => {
       let text = m.content || '';
@@ -4519,7 +4590,7 @@ export const sendDiscountPromo = asyncHandler(async (req, res) => {
       const raw = lead.historial_chat;
       if (Array.isArray(raw)) historial = raw;
       else if (typeof raw === 'string' && raw.trim()) {
-        try { historial = JSON.parse(raw.replace(/^=/, '')); } catch { historial = []; }
+        historial = parseHistorial(raw);
       }
 
       historial.push({

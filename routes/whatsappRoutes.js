@@ -37,6 +37,7 @@ import {
   getDiscountPromoLeads,
   sendDiscountPromo,
   getRevivalPipeline,
+  getReactivationPipeline,
   updateLeadRevival,
   getLeadsDiario,
 } from '../controllers/whatsappController.js';
@@ -112,6 +113,7 @@ router.post('/discount-promo/send', sendDiscountPromo);
 
 // Revival Pipeline — CRM de leads con cotización enviada / esperando aprobación
 router.get('/revival-pipeline', getRevivalPipeline);
+router.get('/reactivation-pipeline', getReactivationPipeline);
 router.patch('/leads/:waId/revival', updateLeadRevival);
 
 // Leads Stats — métricas completas para panel de informes
