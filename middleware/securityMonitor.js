@@ -165,9 +165,13 @@ export async function getSecuritySnapshot() {
     (e) => e.severity !== 'info' && now - new Date(e.at).getTime() < 60 * 60 * 1000
   ).length;
 
-  // Derivar estado: ataque activo > actividad sospechosa > limpio
+  // Derivar estado: ataque crítico ACTIVO > amenaza CONTENIDA > actividad sospechosa > limpio.
+  // Bloquear una IP es la defensa FUNCIONANDO (contención), NO "bajo ataque". Solo es 'down'
+  // si hay eventos críticos en curso (últimos 10 min); si lo único que hay son IPs bloqueadas,
+  // el ataque ya fue contenido → 'contained'.
   const status =
-    criticalLast10m > 0 || blocked.size > 0 ? 'down'
+    criticalLast10m > 0 ? 'down'
+    : blocked.size > 0 ? 'contained'
     : warningsLastHour > 0 ? 'degraded'
     : 'up';
 
@@ -177,7 +181,7 @@ export async function getSecuritySnapshot() {
     failedLoginAttempts += arr.filter((t) => now - t < FAILED_LOGIN_WINDOW_MS).length;
 
   return {
-    status, // up = sin amenazas | degraded = actividad sospechosa | down = bajo ataque / bloqueos activos
+    status, // up = sin amenazas | contained = amenaza contenida (IP bloqueada) | degraded = actividad sospechosa | down = ataque crítico activo
     blockedIps: [...blocked.keys()],
     failedLoginAttempts,
     eventos24h: dbStats, // { brute_force, probe, injection, rate_spike, ... } persistidos

@@ -352,10 +352,11 @@ export const getSystemStatus = asyncHandler(async (req, res) => {
   ]);
 
   // Supabase caído, Anthropic con incidentes o actividad sospechosa degradan
-  // el estado global (solo server/n8n lo marcan como caído)
+  // el estado global (solo server/n8n lo marcan como caído). Una amenaza CONTENIDA
+  // ('contained': IP bloqueada) NO degrada el sistema: es la defensa funcionando.
   const degradedDeps =
     supabase?.status === 'down' || anthropic?.status === 'down' || anthropic?.status === 'degraded' ||
-    (security && security.status !== 'up');
+    (security && security.status !== 'up' && security.status !== 'contained');
 
   const overall =
     server.status === 'down' || n8n.status === 'down'
