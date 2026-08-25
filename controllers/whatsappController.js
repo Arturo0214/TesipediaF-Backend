@@ -721,7 +721,7 @@ export const getRevivalPipeline = asyncHandler(async (req, res) => {
     'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
     'created_at', 'updated_at', 'ultimo_mensaje_at',
     'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
-    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files', 'revival_notes_log',
   ].join(',');
 
   // cotizacion_enviada + esperando_aprobacion + calificando (filtro precio en JS)
@@ -759,7 +759,7 @@ export const getReactivationPipeline = asyncHandler(async (req, res) => {
     'paginas', 'fecha_entrega', 'cotizacion_enviada', 'pdf_url',
     'created_at', 'updated_at', 'ultimo_mensaje_at', 'ctwa_clid', 'origen',
     'notas_admin', 'etiquetas', 'ultimo_mensaje_preview', 'datos_cotizacion',
-    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files',
+    'revival_status', 'revival_notes', 'revival_assigned_to', 'revival_last_contact', 'revival_files', 'revival_notes_log',
   ].join(',');
 
   // Filtros mutuamente excluyentes (cubren nulos Y vacíos, sin huecos):
@@ -790,7 +790,7 @@ export const getReactivationPipeline = asyncHandler(async (req, res) => {
  */
 export const updateLeadRevival = asyncHandler(async (req, res) => {
   const { waId } = req.params;
-  const { revival_status, revival_notes, revival_assigned_to, revival_files } = req.body;
+  const { revival_status, revival_notes, revival_assigned_to, revival_files, revival_notes_log } = req.body;
 
   const updateData = {};
   if (revival_status !== undefined) updateData.revival_status = revival_status;
@@ -798,6 +798,8 @@ export const updateLeadRevival = asyncHandler(async (req, res) => {
   if (revival_assigned_to !== undefined) updateData.revival_assigned_to = revival_assigned_to;
   // revival_files: array de adjuntos [{ name, url, publicId, size, uploadedAt, uploadedBy }]
   if (revival_files !== undefined) updateData.revival_files = Array.isArray(revival_files) ? revival_files : [];
+  // revival_notes_log: bitácora de notas [{ text, by, at }]
+  if (revival_notes_log !== undefined) updateData.revival_notes_log = Array.isArray(revival_notes_log) ? revival_notes_log : [];
   updateData.revival_last_contact = new Date().toISOString();
 
   const patchUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
