@@ -5,6 +5,7 @@
 // aquí solo vive la capa de admin (crear/generar/aprobar/publicar).
 import asyncHandler from 'express-async-handler';
 import supabaseAdmin from '../config/supabaseAdmin.js';
+import cloudinary from '../config/cloudinary.js';
 
 const ESTADOS = ['idea', 'guion_listo', 'aprobado', 'renderizando', 'render_ok', 'publicado', 'error'];
 const SEL = '*, canal:canales(id,marca,plataforma,idioma,formato_default,activo)';
@@ -159,6 +160,37 @@ export const discardSocial = asyncHandler(async (req, res) => {
   guard(res);
   const { data, error } = await supabaseAdmin.from('contenido_social')
     .update({ estado: 'borrador' }).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
+// POST /video-studio/social/:id/imagen  (multipart: imagen + index)
+// Reemplaza (o agrega) una imagen de la pieza: sube a Cloudinary y actualiza imagenes[index].
+export const uploadSocialImage = asyncHandler(async (req, res) => {
+  guard(res);
+  if (!req.file) { res.status(400); throw new Error('No se envió ninguna imagen'); }
+  const idx = parseInt(req.body.index ?? '0', 10);
+
+  const { data: row, error: e1 } = await supabaseAdmin
+    .from('contenido_social').select('imagenes').eq('id', req.params.id).single();
+  if (e1 || !row) { res.status(404); throw new Error('Pieza no encontrada'); }
+  const imgs = Array.isArray(row.imagenes) ? [...row.imagenes] : [];
+
+  // Reusa el public_id existente (sobrescribe en su lugar) o crea uno nuevo.
+  const existente = imgs[idx];
+  const m = existente && existente.match(/\/upload\/(?:v\d+\/)?(redes\/[^.]+)/);
+  const publicId = m ? m[1] : `redes/manual_${req.params.id}_${idx}_${Date.now()}`;
+
+  const dataUri = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+  const result = await cloudinary.uploader.upload(dataUri, {
+    public_id: publicId, overwrite: true, invalidate: true, resource_type: 'image',
+  });
+
+  if (idx >= 0 && idx < imgs.length) imgs[idx] = result.secure_url;
+  else imgs.push(result.secure_url);
+
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update({ imagenes: imgs }).eq('id', req.params.id).select('*').single();
   if (error) { res.status(500); throw new Error(error.message); }
   res.json(data);
 });
