@@ -112,6 +112,57 @@ export const publishVideo = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
+// ============================================================
+//  CONTENIDO DE REDES (imágenes) — tabla `contenido_social`
+//  El mismo Estudio muestra, además del video, las piezas de imagen
+//  (frase, carrusel, checklist, comparativa, diccionario, prueba, oferta).
+// ============================================================
+const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
+
+// GET /video-studio/social?estado=&formato=
+export const listSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  let q = supabaseAdmin.from('contenido_social').select('*')
+    .order('fecha', { ascending: true }).order('slot', { ascending: true }).limit(400);
+  if (req.query.estado) q = q.eq('estado', req.query.estado);
+  if (req.query.formato) q = q.eq('formato', req.query.formato);
+  const { data, error } = await q;
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
+// PATCH /video-studio/social/:id  { titular?, copy?, cta?, hashtags?, laminas?, estado?, programado? }
+export const updateSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const patch = {};
+  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema'].forEach((c) => {
+    if (req.body[c] !== undefined) patch[c] = req.body[c];
+  });
+  if (patch.estado && !ESTADOS_SOCIAL.includes(patch.estado)) { res.status(400); throw new Error('estado inválido'); }
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update(patch).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
+// POST /video-studio/social/:id/approve  -> 'programado' (listo para publicar)
+export const approveSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update({ estado: 'programado', nota_error: null }).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
+// POST /video-studio/social/:id/discard  -> 'borrador' (fuera de la cola)
+export const discardSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update({ estado: 'borrador' }).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
 // ── Generación de guion con IA (usa ANTHROPIC_API_KEY) ──
 // POST /video-studio/generate  { canal_id, tema }
 const BRIEFS = {

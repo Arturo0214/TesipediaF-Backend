@@ -3,9 +3,17 @@ import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
   getChannels, updateChannel, listVideos, getVideo, createVideo,
   updateVideo, deleteVideo, approveVideo, publishVideo, generateScript,
+  listSocial, updateSocial, approveSocial, discardSocial,
 } from '../controllers/videoStudioController.js';
 
 const router = express.Router();
+
+// ── Admin: contenido de redes (imágenes, tabla contenido_social) ──
+// Va ANTES de las rutas con /:id para que "social" no choque con un id.
+router.get('/social', protect, adminOnly, listSocial);
+router.patch('/social/:id', protect, adminOnly, updateSocial);
+router.post('/social/:id/approve', protect, adminOnly, approveSocial);
+router.post('/social/:id/discard', protect, adminOnly, discardSocial);
 
 // ── Admin: destinos (canales) ──
 router.get('/channels', protect, adminOnly, getChannels);
