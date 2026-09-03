@@ -195,6 +195,102 @@ export const uploadSocialImage = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
+// ── Publicación real a Meta (IG + FB) ──
+const META_TOKEN = process.env.META_ACCESS_TOKEN;
+const FB_PAGE_ID = process.env.FB_PAGE_ID || '855962324262046';
+const IG_USER_ID = process.env.IG_USER_ID || '17841477846360365';
+const GV = 'v21.0';
+
+async function graph(path, params = {}, method = 'POST') {
+  const body = new URLSearchParams({ ...params, access_token: META_TOKEN });
+  const opt = method === 'GET' ? {} : { method, body };
+  const url = method === 'GET'
+    ? `https://graph.facebook.com/${GV}/${path}?${body.toString()}`
+    : `https://graph.facebook.com/${GV}/${path}`;
+  const r = await fetch(url, opt);
+  const data = await r.json();
+  if (data.error) throw new Error(data.error.message || 'Error de Meta');
+  return data;
+}
+async function publicarFB(imgs, caption) {
+  if (imgs.length === 1) {
+    const r = await graph(`${FB_PAGE_ID}/photos`, { url: imgs[0], caption });
+    return r.post_id || r.id;
+  }
+  const ids = [];
+  for (const u of imgs) { const r = await graph(`${FB_PAGE_ID}/photos`, { url: u, published: 'false' }); ids.push(r.id); }
+  const r = await graph(`${FB_PAGE_ID}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) });
+  return r.id;
+}
+async function publicarIG(imgs, caption) {
+  let creation;
+  if (imgs.length === 1) {
+    creation = (await graph(`${IG_USER_ID}/media`, { image_url: imgs[0], caption })).id;
+  } else {
+    const hijos = [];
+    for (const u of imgs) { const c = await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }); hijos.push(c.id); }
+    creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption })).id;
+  }
+  return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation })).id;
+}
+
+// POST /video-studio/social/:id/publish  -> publica en IG + FB según plataformas
+export const publishSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  if (!META_TOKEN) { res.status(503); throw new Error('Falta META_ACCESS_TOKEN en el backend'); }
+  const { data: p, error } = await supabaseAdmin.from('contenido_social').select('*').eq('id', req.params.id).single();
+  if (error || !p) { res.status(404); throw new Error('Pieza no encontrada'); }
+  const imgs = (p.imagenes || []).filter(Boolean);
+  if (!imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes'); }
+  const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
+  const plats = p.plataformas || ['ig', 'fb'];
+  const patch = {};
+  const errores = [];
+  if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption); } catch (e) { errores.push(`FB: ${e.message}`); } }
+  if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption); } catch (e) { errores.push(`IG: ${e.message}`); } }
+  const ok = patch.fb_post_id || patch.ig_media_id;
+  patch.estado = ok ? 'publicado' : 'error';
+  if (ok) patch.publicado_en = new Date().toISOString();
+  patch.nota_error = errores.length ? errores.join(' | ') : null;
+  const { data } = await supabaseAdmin.from('contenido_social').update(patch).eq('id', p.id).select('*').single();
+  if (!ok) { res.status(502); throw new Error(errores.join(' | ') || 'No se pudo publicar'); }
+  res.json(data);
+});
+
+// DELETE /video-studio/social/:id  -> borra la pieza (y el post de FB si existe)
+export const deleteSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const { data: p } = await supabaseAdmin.from('contenido_social').select('fb_post_id').eq('id', req.params.id).single();
+  if (p?.fb_post_id && META_TOKEN) { try { await graph(p.fb_post_id, {}, 'DELETE'); } catch { /* best-effort */ } }
+  const { error } = await supabaseAdmin.from('contenido_social').delete().eq('id', req.params.id);
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json({ ok: true, igNota: p?.fb_post_id ? undefined : 'Instagram no permite borrar publicaciones por API; hazlo desde la app si aplica.' });
+});
+
+// POST /video-studio/social/:id/sugerencias  -> hashtags de tendencia + tips (IA)
+export const sugerenciasSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(503); throw new Error('Falta ANTHROPIC_API_KEY en el backend'); }
+  const { data: p } = await supabaseAdmin.from('contenido_social').select('tema,formato,copy,hashtags').eq('id', req.params.id).single();
+  const prompt = `Eres estratega de redes de Tesipedia (asesoría de tesis en México; Instagram, Facebook, TikTok).
+Pieza — formato ${p?.formato}, tema "${p?.tema}". Hashtags actuales: ${p?.hashtags || '(ninguno)'}.
+Según TENDENCIAS del nicho estudiantil/tesis en México (audiencia universitaria, titulación, metodología, APA, antiplagio, IA en tesis), sugiere para más alcance:
+- 12 hashtags NUEVOS (no repitas los actuales): mezcla de volumen alto, de nicho y de intención de titulación.
+- 3 tips cortos y accionables para mejorar el gancho del pie de foto de esta pieza.
+Devuelve EXCLUSIVAMENTE un JSON: {"hashtags":["#..."],"tips":["..."]}. Sin texto extra, sin markdown.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.CONTENT_STUDIO_MODEL || 'claude-sonnet-4-6', max_tokens: 700, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!resp.ok) { res.status(502); throw new Error('Error de IA'); }
+  const data = await resp.json();
+  let txt = (data?.content?.[0]?.text || '').trim();
+  const m = txt.match(/\{[\s\S]*\}/); if (m) txt = m[0];
+  let out; try { out = JSON.parse(txt); } catch { out = { hashtags: [], tips: [] }; }
+  res.json(out);
+});
+
 // ── Generación de guion con IA (usa ANTHROPIC_API_KEY) ──
 // POST /video-studio/generate  { canal_id, tema }
 const BRIEFS = {

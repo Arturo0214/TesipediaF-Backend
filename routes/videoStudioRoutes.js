@@ -5,6 +5,7 @@ import {
   getChannels, updateChannel, listVideos, getVideo, createVideo,
   updateVideo, deleteVideo, approveVideo, publishVideo, generateScript,
   listSocial, updateSocial, approveSocial, discardSocial, uploadSocialImage,
+  publishSocial, deleteSocial, sugerenciasSocial,
 } from '../controllers/videoStudioController.js';
 
 const router = express.Router();
@@ -16,6 +17,9 @@ router.get('/social', protect, adminOnly, listSocial);
 router.patch('/social/:id', protect, adminOnly, updateSocial);
 router.post('/social/:id/approve', protect, adminOnly, approveSocial);
 router.post('/social/:id/discard', protect, adminOnly, discardSocial);
+router.post('/social/:id/publish', protect, adminOnly, publishSocial);
+router.post('/social/:id/sugerencias', protect, adminOnly, sugerenciasSocial);
+router.delete('/social/:id', protect, adminOnly, deleteSocial);
 router.post('/social/:id/imagen', protect, adminOnly, upload.single('imagen'), uploadSocialImage);
 
 // ── Admin: destinos (canales) ──
