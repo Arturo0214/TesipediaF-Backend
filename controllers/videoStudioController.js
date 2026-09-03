@@ -120,13 +120,14 @@ export const publishVideo = asyncHandler(async (req, res) => {
 // ============================================================
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
 
-// GET /video-studio/social?estado=&formato=
+// GET /video-studio/social?estado=&formato=&marca=
 export const listSocial = asyncHandler(async (req, res) => {
   guard(res);
   let q = supabaseAdmin.from('contenido_social').select('*')
-    .order('fecha', { ascending: true }).order('slot', { ascending: true }).limit(400);
+    .order('fecha', { ascending: true }).order('slot', { ascending: true }).limit(600);
   if (req.query.estado) q = q.eq('estado', req.query.estado);
   if (req.query.formato) q = q.eq('formato', req.query.formato);
+  if (req.query.marca) q = q.eq('marca', req.query.marca);
   const { data, error } = await q;
   if (error) { res.status(500); throw new Error(error.message); }
   res.json(data);
