@@ -70,13 +70,13 @@ export const GUIAS_DATA = [
     id: 'vancouver', sku: '11', tipo: 'citacion', precio: 139, folder: '11-Vancouver',
     nombre: 'Cita como se cita en salud · Vancouver', kicker: 'Normas Vancouver',
     resumen: 'Estilo Vancouver para tesis de salud: citas numéricas, referencias y el formato que piden las revistas médicas.',
-    blogSlug: null,
+    blogSlug: 'normas-vancouver-como-citar-en-tesis-de-salud-ejemplos',
   },
   {
     id: 'chicago', sku: '12', tipo: 'citacion', precio: 139, folder: '12-Chicago',
     nombre: 'La nota al pie, bien puesta · Chicago', kicker: 'Normas Chicago',
     resumen: 'Estilo Chicago: notas al pie, bibliografía y las dos variantes (notas y autor-fecha) con ejemplos.',
-    blogSlug: null,
+    blogSlug: 'estilo-chicago-notas-al-pie-y-bibliografia-en-tesis',
   },
   {
     id: 'busqueda-literatura', sku: '13', tipo: 'seccion', precio: 79, folder: '13-Busqueda-articulos',
