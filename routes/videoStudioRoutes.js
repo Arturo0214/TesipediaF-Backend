@@ -4,7 +4,7 @@ import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import {
   getChannels, updateChannel, listVideos, getVideo, createVideo,
   updateVideo, deleteVideo, approveVideo, publishVideo, generateScript,
-  listSocial, updateSocial, approveSocial, discardSocial, uploadSocialImage,
+  listSocial, createSocial, updateSocial, approveSocial, discardSocial, uploadSocialImage,
   publishSocial, deleteSocial, sugerenciasSocial,
   getAutopublish, setAutopublish,
 } from '../controllers/videoStudioController.js';
@@ -17,6 +17,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 router.get('/social/autopublish', protect, adminOnly, getAutopublish);
 router.put('/social/autopublish', protect, adminOnly, setAutopublish);
 router.get('/social', protect, adminOnly, listSocial);
+router.post('/social', protect, adminOnly, createSocial);
 router.patch('/social/:id', protect, adminOnly, updateSocial);
 router.post('/social/:id/approve', protect, adminOnly, approveSocial);
 router.post('/social/:id/discard', protect, adminOnly, discardSocial);

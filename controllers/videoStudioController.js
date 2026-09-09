@@ -119,6 +119,49 @@ export const publishVideo = asyncHandler(async (req, res) => {
 //  (frase, carrusel, checklist, comparativa, diccionario, prueba, oferta).
 // ============================================================
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
+const SLOTS_SOCIAL = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+// POST /video-studio/social  { fecha, marca?, formato?, hora?, tema?, slot? }
+// Crea una pieza vacía (borrador) para una fecha, eligiendo el próximo slot libre.
+// Sirve para agregar una 3ª+ publicación a un día o para llenar el calendario a futuro.
+export const createSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const fecha = String(req.body.fecha || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { res.status(400); throw new Error('Fecha inválida (usa YYYY-MM-DD)'); }
+  const marca = String(req.body.marca || 'Tesipedia');
+
+  // slots ya ocupados ese día (para esa marca no aplica: el índice único es (fecha,slot))
+  const { data: existentes, error: e1 } = await supabaseAdmin
+    .from('contenido_social').select('slot').eq('fecha', fecha);
+  if (e1) { res.status(500); throw new Error(e1.message); }
+  const ocupados = new Set((existentes || []).map((r) => r.slot));
+  const slot = req.body.slot && SLOTS_SOCIAL.includes(req.body.slot) && !ocupados.has(req.body.slot)
+    ? req.body.slot
+    : SLOTS_SOCIAL.find((s) => !ocupados.has(s));
+  if (!slot) { res.status(409); throw new Error('Ese día ya tiene el máximo de publicaciones (6). Usa otra fecha.'); }
+
+  const fila = {
+    dia: 0,
+    fecha,
+    slot,
+    hora: `${String(req.body.hora || '10:00').slice(0, 5)}:00`,
+    pilar: String(req.body.pilar || 'Manual'),
+    formato: String(req.body.formato || 'CARRUSEL'),
+    tema: String(req.body.tema || 'Nueva publicación'),
+    titular: '',
+    laminas: [],
+    copy: '',
+    cta: '',
+    hashtags: '',
+    imagenes: [],
+    plataformas: ['ig', 'fb'],
+    estado: 'borrador',
+    marca,
+  };
+  const { data, error } = await supabaseAdmin.from('contenido_social').insert(fila).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.status(201).json(data);
+});
 
 // GET /video-studio/social?estado=&formato=&marca=
 export const listSocial = asyncHandler(async (req, res) => {
