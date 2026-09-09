@@ -119,6 +119,7 @@ export const publishVideo = asyncHandler(async (req, res) => {
 //  (frase, carrusel, checklist, comparativa, diccionario, prueba, oferta).
 // ============================================================
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
+const FORMATOS_SOCIAL = ['FRASE', 'CARRUSEL', 'CHECKLIST', 'COMPARATIVA', 'DICCIONARIO', 'PRUEBA', 'OFERTA', 'VIDEO'];
 const SLOTS_SOCIAL = ['A', 'B', 'C', 'D', 'E', 'F'];
 const MAX_POR_DIA = 3;              // máximo de publicaciones por día
 const HORA_NUEVA = '17:00';         // hora fija para publicaciones agregadas manualmente (5 PM)
@@ -187,10 +188,11 @@ export const listSocial = asyncHandler(async (req, res) => {
 export const updateSocial = asyncHandler(async (req, res) => {
   guard(res);
   const patch = {};
-  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema'].forEach((c) => {
+  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas'].forEach((c) => {
     if (req.body[c] !== undefined) patch[c] = req.body[c];
   });
   if (patch.estado && !ESTADOS_SOCIAL.includes(patch.estado)) { res.status(400); throw new Error('estado inválido'); }
+  if (patch.formato && !FORMATOS_SOCIAL.includes(patch.formato)) { res.status(400); throw new Error('formato inválido'); }
   const { data, error } = await supabaseAdmin.from('contenido_social')
     .update(patch).eq('id', req.params.id).select('*').single();
   if (error) { res.status(500); throw new Error(error.message); }
@@ -242,6 +244,28 @@ export const uploadSocialImage = asyncHandler(async (req, res) => {
 
   const { data, error } = await supabaseAdmin.from('contenido_social')
     .update({ imagenes: imgs }).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
+// POST /video-studio/social/:id/video  (multipart: video)
+// Sube un video a Cloudinary (resource_type video), guarda video_url y marca formato VIDEO.
+export const uploadSocialVideo = asyncHandler(async (req, res) => {
+  guard(res);
+  if (!req.file) { res.status(400); throw new Error('No se envió ningún video'); }
+  if (!/^video\//.test(req.file.mimetype || '')) { res.status(400); throw new Error('El archivo no es un video'); }
+
+  const publicId = `redes/video_${req.params.id}_${Date.now()}`;
+  const result = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { public_id: publicId, resource_type: 'video', overwrite: true, invalidate: true },
+      (err, r) => (err ? reject(err) : resolve(r)),
+    );
+    stream.end(req.file.buffer);
+  });
+
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update({ video_url: result.secure_url, formato: 'VIDEO' }).eq('id', req.params.id).select('*').single();
   if (error) { res.status(500); throw new Error(error.message); }
   res.json(data);
 });
@@ -331,6 +355,22 @@ async function publicarIG(imgs, caption, token) {
   throw ultimoErr;
 }
 
+// Publicación de VIDEO (reel). FB: /videos (asíncrono, best-effort). IG: REELS con polling.
+async function publicarVideoFB(videoUrl, caption, token) {
+  const r = await graph(`${FB_PAGE_ID}/videos`, { file_url: videoUrl, description: caption }, 'POST', token);
+  return r.id;
+}
+async function publicarVideoIG(videoUrl, caption, token) {
+  const creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'REELS', video_url: videoUrl, caption }, 'POST', token)).id;
+  await esperarContenedorIG(creation, token, { intentos: 24, esperaMs: 5000 }); // el video tarda más en procesar
+  let ultimoErr;
+  for (let i = 0; i < 3; i++) {
+    try { return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id; }
+    catch (e) { ultimoErr = e; await sleep(4000); }
+  }
+  throw ultimoErr;
+}
+
 // POST /video-studio/social/:id/publish  -> publica en IG + FB según plataformas
 export const publishSocial = asyncHandler(async (req, res) => {
   guard(res);
@@ -338,14 +378,15 @@ export const publishSocial = asyncHandler(async (req, res) => {
   const { data: p, error } = await supabaseAdmin.from('contenido_social').select('*').eq('id', req.params.id).single();
   if (error || !p) { res.status(404); throw new Error('Pieza no encontrada'); }
   const imgs = (p.imagenes || []).filter(Boolean);
-  if (!imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes'); }
+  const esVideo = !!p.video_url;
+  if (!esVideo && !imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes ni video'); }
   const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
   const plats = p.plataformas || ['ig', 'fb'];
   const pageToken = await getPageToken();
   const patch = {};
   const errores = [];
-  if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
-  if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
+  if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, pageToken) : await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
+  if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, pageToken) : await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
   const ok = patch.fb_post_id || patch.ig_media_id;
   patch.estado = ok ? 'publicado' : 'error';
   if (ok) patch.publicado_en = new Date().toISOString();
@@ -388,15 +429,16 @@ export async function runSocialPublishing() {
     const pageToken = await getPageToken();
     for (const p of rows || []) {
       const imgs = (p.imagenes || []).filter(Boolean);
-      if (!p.fecha || !imgs.length) continue;
+      const esVideo = !!p.video_url;
+      if (!p.fecha || (!esVideo && !imgs.length)) continue;
       const hora = (p.hora || '10:00').slice(0, 5);
       const dueUTC = new Date(`${p.fecha}T${hora}:00-06:00`).getTime(); // CDMX = UTC-6
       if (Number.isNaN(dueUTC) || dueUTC > now || dueUTC < now - 26 * 3600 * 1000) continue; // vencidas ≤26h
       const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
       const plats = p.plataformas || ['ig', 'fb'];
       const patch = {}; const errores = [];
-      if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
-      if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
+      if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, pageToken) : await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
+      if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, pageToken) : await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
       const ok = patch.fb_post_id || patch.ig_media_id;
       patch.estado = ok ? 'publicado' : 'error';
       if (ok) patch.publicado_en = new Date().toISOString();
