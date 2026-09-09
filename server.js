@@ -44,6 +44,8 @@ import loopsRoutes from './routes/loopsRoutes.js';
 import contentGuideRoutes from './routes/contentGuideRoutes.js';
 import seguimientoRoutes from './routes/seguimientoRoutes.js';
 import videoStudioRoutes from './routes/videoStudioRoutes.js';
+import detectorRoutes from './routes/detectorRoutes.js';
+import guiasStoreRoutes from './routes/guiasStoreRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 import { startResolveCampaignsCron } from './cron/resolveCampaignsCron.js';
@@ -170,6 +172,8 @@ app.use('/content-guides', contentGuideRoutes);
 app.use('/seguimientos', seguimientoRoutes);
 app.use('/api/seguimientos', seguimientoRoutes);
 app.use('/video-studio', videoStudioRoutes);
+app.use('/detector', detectorRoutes);
+app.use('/guias', guiasStoreRoutes);
 
 // Middlewares de error
 app.use(notFound);
