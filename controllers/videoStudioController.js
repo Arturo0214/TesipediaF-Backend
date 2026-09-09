@@ -120,6 +120,8 @@ export const publishVideo = asyncHandler(async (req, res) => {
 // ============================================================
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
 const SLOTS_SOCIAL = ['A', 'B', 'C', 'D', 'E', 'F'];
+const MAX_POR_DIA = 3;              // máximo de publicaciones por día
+const HORA_NUEVA = '17:00';         // hora fija para publicaciones agregadas manualmente (5 PM)
 
 // POST /video-studio/social  { fecha, marca?, formato?, hora?, tema?, slot? }
 // Crea una pieza vacía (borrador) para una fecha, eligiendo el próximo slot libre.
@@ -134,17 +136,20 @@ export const createSocial = asyncHandler(async (req, res) => {
   const { data: existentes, error: e1 } = await supabaseAdmin
     .from('contenido_social').select('slot').eq('fecha', fecha);
   if (e1) { res.status(500); throw new Error(e1.message); }
+  if ((existentes || []).length >= MAX_POR_DIA) {
+    res.status(409); throw new Error(`Ese día ya tiene el máximo de ${MAX_POR_DIA} publicaciones. Usa otra fecha.`);
+  }
   const ocupados = new Set((existentes || []).map((r) => r.slot));
   const slot = req.body.slot && SLOTS_SOCIAL.includes(req.body.slot) && !ocupados.has(req.body.slot)
     ? req.body.slot
     : SLOTS_SOCIAL.find((s) => !ocupados.has(s));
-  if (!slot) { res.status(409); throw new Error('Ese día ya tiene el máximo de publicaciones (6). Usa otra fecha.'); }
+  if (!slot) { res.status(409); throw new Error(`Ese día ya tiene el máximo de ${MAX_POR_DIA} publicaciones. Usa otra fecha.`); }
 
   const fila = {
     dia: 0,
     fecha,
     slot,
-    hora: `${String(req.body.hora || '10:00').slice(0, 5)}:00`,
+    hora: `${HORA_NUEVA}:00`,
     pilar: String(req.body.pilar || 'Manual'),
     formato: String(req.body.formato || 'CARRUSEL'),
     tema: String(req.body.tema || 'Nueva publicación'),
