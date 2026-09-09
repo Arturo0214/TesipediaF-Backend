@@ -202,8 +202,8 @@ const FB_PAGE_ID = process.env.FB_PAGE_ID || '855962324262046';
 const IG_USER_ID = process.env.IG_USER_ID || '17841477846360365';
 const GV = 'v21.0';
 
-async function graph(path, params = {}, method = 'POST') {
-  const body = new URLSearchParams({ ...params, access_token: META_TOKEN });
+async function graph(path, params = {}, method = 'POST', token = META_TOKEN) {
+  const body = new URLSearchParams({ ...params, access_token: token });
   const opt = method === 'GET' ? {} : { method, body };
   const url = method === 'GET'
     ? `https://graph.facebook.com/${GV}/${path}?${body.toString()}`
@@ -213,26 +213,39 @@ async function graph(path, params = {}, method = 'POST') {
   if (data.error) throw new Error(data.error.message || 'Error de Meta');
   return data;
 }
-async function publicarFB(imgs, caption) {
+
+// Publicar en Page/IG requiere el PAGE token (no el de usuario). Lo obtenemos de /me/accounts.
+let _pageToken = null;
+async function getPageToken() {
+  if (_pageToken) return _pageToken;
+  try {
+    const d = await graph('me/accounts', {}, 'GET');
+    const pg = (d.data || []).find((p) => p.id === FB_PAGE_ID);
+    _pageToken = pg?.access_token || META_TOKEN; // fallback si ya es page token
+  } catch { _pageToken = META_TOKEN; }
+  return _pageToken;
+}
+
+async function publicarFB(imgs, caption, token) {
   if (imgs.length === 1) {
-    const r = await graph(`${FB_PAGE_ID}/photos`, { url: imgs[0], caption });
+    const r = await graph(`${FB_PAGE_ID}/photos`, { url: imgs[0], caption }, 'POST', token);
     return r.post_id || r.id;
   }
   const ids = [];
-  for (const u of imgs) { const r = await graph(`${FB_PAGE_ID}/photos`, { url: u, published: 'false' }); ids.push(r.id); }
-  const r = await graph(`${FB_PAGE_ID}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) });
+  for (const u of imgs) { const r = await graph(`${FB_PAGE_ID}/photos`, { url: u, published: 'false' }, 'POST', token); ids.push(r.id); }
+  const r = await graph(`${FB_PAGE_ID}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) }, 'POST', token);
   return r.id;
 }
-async function publicarIG(imgs, caption) {
+async function publicarIG(imgs, caption, token) {
   let creation;
   if (imgs.length === 1) {
-    creation = (await graph(`${IG_USER_ID}/media`, { image_url: imgs[0], caption })).id;
+    creation = (await graph(`${IG_USER_ID}/media`, { image_url: imgs[0], caption }, 'POST', token)).id;
   } else {
     const hijos = [];
-    for (const u of imgs) { const c = await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }); hijos.push(c.id); }
-    creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption })).id;
+    for (const u of imgs) { const c = await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token); hijos.push(c.id); }
+    creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption }, 'POST', token)).id;
   }
-  return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation })).id;
+  return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id;
 }
 
 // POST /video-studio/social/:id/publish  -> publica en IG + FB según plataformas
@@ -245,10 +258,11 @@ export const publishSocial = asyncHandler(async (req, res) => {
   if (!imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes'); }
   const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
   const plats = p.plataformas || ['ig', 'fb'];
+  const pageToken = await getPageToken();
   const patch = {};
   const errores = [];
-  if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption); } catch (e) { errores.push(`FB: ${e.message}`); } }
-  if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption); } catch (e) { errores.push(`IG: ${e.message}`); } }
+  if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
+  if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
   const ok = patch.fb_post_id || patch.ig_media_id;
   patch.estado = ok ? 'publicado' : 'error';
   if (ok) patch.publicado_en = new Date().toISOString();
