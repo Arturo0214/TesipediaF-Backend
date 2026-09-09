@@ -286,16 +286,49 @@ async function publicarFB(imgs, caption, token) {
   const r = await graph(`${FB_PAGE_ID}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) }, 'POST', token);
   return r.id;
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// IG ingiere el image_url de forma ASÍNCRONA. Hay que esperar a que el
+// contenedor quede FINISHED antes de media_publish; si no, Meta responde
+// "Media ID is not available" y la pieza se publica en FB pero NO en IG.
+async function esperarContenedorIG(containerId, token, { intentos = 12, esperaMs = 2500 } = {}) {
+  for (let i = 0; i < intentos; i++) {
+    const r = await graph(containerId, { fields: 'status_code,status' }, 'GET', token);
+    if (r.status_code === 'FINISHED') return;
+    if (r.status_code === 'ERROR' || r.status_code === 'EXPIRED') {
+      throw new Error(`contenedor IG ${r.status_code}: ${r.status || 'sin detalle'} (revisa que image_url sea público y ≤8MB, JPG)`);
+    }
+    await sleep(esperaMs); // IN_PROGRESS → seguir esperando
+  }
+  throw new Error('el contenedor de IG no quedó listo a tiempo (timeout de procesamiento de imagen)');
+}
+
 async function publicarIG(imgs, caption, token) {
   let creation;
   if (imgs.length === 1) {
     creation = (await graph(`${IG_USER_ID}/media`, { image_url: imgs[0], caption }, 'POST', token)).id;
+    await esperarContenedorIG(creation, token);
   } else {
     const hijos = [];
-    for (const u of imgs) { const c = await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token); hijos.push(c.id); }
+    for (const u of imgs) {
+      const c = (await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token)).id;
+      await esperarContenedorIG(c, token); // cada lámina debe estar lista
+      hijos.push(c);
+    }
     creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption }, 'POST', token)).id;
+    await esperarContenedorIG(creation, token);
   }
-  return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id;
+  // Reintento de media_publish por si IG lo marca disponible con unos segundos de retraso.
+  let ultimoErr;
+  for (let i = 0; i < 3; i++) {
+    try {
+      return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id;
+    } catch (e) {
+      ultimoErr = e;
+      await sleep(3000);
+    }
+  }
+  throw ultimoErr;
 }
 
 // POST /video-studio/social/:id/publish  -> publica en IG + FB según plataformas
