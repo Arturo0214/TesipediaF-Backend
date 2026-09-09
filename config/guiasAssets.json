@@ -257,5 +257,15 @@
     "extras": [],
     "muestra": "https://res.cloudinary.com/dbowaer8j/raw/upload/v1788907435/tesipedia/guias/tesis-arquitectura/muestra.pdf",
     "completaPublicId": "tesipedia/guias/tesis-arquitectura/completa.pdf"
+  },
+  "tesis-unam": {
+    "pages": [
+      "https://res.cloudinary.com/dbowaer8j/image/upload/v1788962266/tesipedia/guias/tesis-unam/page-1.png",
+      "https://res.cloudinary.com/dbowaer8j/image/upload/v1788962266/tesipedia/guias/tesis-unam/page-3.png",
+      "https://res.cloudinary.com/dbowaer8j/image/upload/v1788962268/tesipedia/guias/tesis-unam/page-4.png"
+    ],
+    "extras": [],
+    "muestra": "https://res.cloudinary.com/dbowaer8j/raw/upload/v1788962271/tesipedia/guias/tesis-unam/muestra.pdf",
+    "completaPublicId": "tesipedia/guias/tesis-unam/completa.pdf"
   }
 }

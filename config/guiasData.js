@@ -98,6 +98,9 @@ export const GUIAS_DATA = [
   { id: 'tesis-trabajo-social', sku: 'C10', tipo: 'carrera', precio: 79, folder: 'C10-Trabajo-social', nombre: 'La tesis del trabajo social', kicker: 'Tesis de Trabajo Social', resumen: 'Guía de tesis para Trabajo Social: 60 temas comunitarios, con diseño cualitativo e intervención.', careerLanding: '/tesis-de-trabajo-social' },
   { id: 'tesis-comunicacion', sku: 'C11', tipo: 'carrera', precio: 79, folder: 'C11-Comunicacion', nombre: 'La tesis del comunicólogo', kicker: 'Tesis de Comunicación', resumen: 'Guía de tesis para Comunicación: 60 temas de medios y discurso, con análisis de contenido.', careerLanding: '/tesis-de-comunicacion' },
   { id: 'tesis-arquitectura', sku: 'C12', tipo: 'carrera', precio: 79, folder: 'C12-Arquitectura', nombre: 'La tesis del arquitecto', kicker: 'Tesis de Arquitectura', resumen: 'Guía de tesis para Arquitectura: 60 temas de proyecto y ciudad, con metodología proyectual.', careerLanding: '/tesis-de-arquitectura' },
+
+  // ── Serie por universidad (trámite de titulación, todas $79) ──
+  { id: 'tesis-unam', sku: 'U1', tipo: 'universidad', precio: 79, folder: 'U1-UNAM', nombre: 'Titularte en la UNAM', kicker: 'Titulación UNAM', resumen: 'El trámite de titulación de la UNAM entendido de una vez: del registro del tema a la firma del acta, con formatos, plazos y las diferencias que cambian de una facultad a otra. 10 módulos + 4 anexos de consulta.', universityLanding: '/tesis-unam' },
 ];
 
 // Paquetes (doc §2). Contenido = ids de guías incluidas. Precio siempre 25-35% abajo de la suma.

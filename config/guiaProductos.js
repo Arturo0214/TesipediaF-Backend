@@ -16,6 +16,7 @@ try { MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, 'guiasAssets.js
 function incluyeDe(g) {
   if (g.tipo === 'carrera') return ['Guía completa en PDF (49 págs)', '60 temas de tesis con población y diseño sugerido', 'Checklist de 30 puntos', 'Plantillas y anexos'];
   if (g.tipo === 'citacion') return ['Guía completa en PDF (49 págs)', '50-60 pares «así no / así sí» con ejemplos', 'Fichas modelo y checklist de 30 puntos', 'Plantillas y anexos'];
+  if (g.tipo === 'universidad') return ['Guía completa del trámite en PDF', '10 módulos + 4 anexos de consulta permanente', 'Tabla de documentos y diferencias por facultad', 'Checklist de 30 puntos'];
   return ['Guía completa en PDF (49 págs)', 'Ejercicios resueltos sobre la página', 'Checklist de 30 puntos', 'Plantillas y anexos'];
 }
 
