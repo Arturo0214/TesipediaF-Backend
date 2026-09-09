@@ -272,6 +272,58 @@ export const publishSocial = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
+// ── Auto-publicación programada (switch on/off) ──
+export async function getAutopubFlag() {
+  try {
+    const { data } = await supabaseAdmin.from('app_config').select('valor').eq('clave', 'social_autopublish').single();
+    return data?.valor === true || data?.valor === 'true';
+  } catch { return false; }
+}
+export const getAutopublish = asyncHandler(async (req, res) => {
+  guard(res);
+  res.json({ enabled: await getAutopubFlag() });
+});
+export const setAutopublish = asyncHandler(async (req, res) => {
+  guard(res);
+  const enabled = !!req.body.enabled;
+  const { error } = await supabaseAdmin.from('app_config')
+    .upsert({ clave: 'social_autopublish', valor: enabled, actualizado_en: new Date().toISOString() });
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json({ enabled });
+});
+
+// Scheduler: publica las piezas 'programado' cuya fecha+hora (CDMX) ya venció.
+let socialPubRunning = false;
+export async function runSocialPublishing() {
+  if (socialPubRunning || !supabaseAdmin || !META_TOKEN) return;
+  if (!(await getAutopubFlag())) return;                 // switch apagado
+  socialPubRunning = true;
+  try {
+    const now = Date.now();
+    const { data: rows } = await supabaseAdmin.from('contenido_social')
+      .select('*').eq('estado', 'programado').eq('marca', 'Tesipedia');
+    const pageToken = await getPageToken();
+    for (const p of rows || []) {
+      const imgs = (p.imagenes || []).filter(Boolean);
+      if (!p.fecha || !imgs.length) continue;
+      const hora = (p.hora || '10:00').slice(0, 5);
+      const dueUTC = new Date(`${p.fecha}T${hora}:00-06:00`).getTime(); // CDMX = UTC-6
+      if (Number.isNaN(dueUTC) || dueUTC > now || dueUTC < now - 26 * 3600 * 1000) continue; // vencidas ≤26h
+      const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
+      const plats = p.plataformas || ['ig', 'fb'];
+      const patch = {}; const errores = [];
+      if (plats.includes('fb')) { try { patch.fb_post_id = await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
+      if (plats.includes('ig')) { try { patch.ig_media_id = await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
+      const ok = patch.fb_post_id || patch.ig_media_id;
+      patch.estado = ok ? 'publicado' : 'error';
+      if (ok) patch.publicado_en = new Date().toISOString();
+      patch.nota_error = errores.length ? errores.join(' | ') : null;
+      await supabaseAdmin.from('contenido_social').update(patch).eq('id', p.id);
+      console.log(`[SocialAuto] dia${p.dia}${p.slot} → ${ok ? 'publicado' : 'error'}`);
+    }
+  } catch (e) { console.error('[SocialAuto]', e.message); } finally { socialPubRunning = false; }
+}
+
 // DELETE /video-studio/social/:id  -> borra la pieza (y el post de FB si existe)
 export const deleteSocial = asyncHandler(async (req, res) => {
   guard(res);

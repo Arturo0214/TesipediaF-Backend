@@ -81,7 +81,11 @@ connectDB().then(async () => {
     // Cadencia de contenido: revisa cada 6h y rellena la cola (gate de 7 días/backlog dentro)
     setInterval(() => { runContentCadence(); }, 6 * 60 * 60 * 1000);
     setTimeout(() => { runContentCadence(); }, 30 * 1000); // un chequeo al arrancar
-    console.log('📅 Schedulers de redes activos (auto-publicar 60s + cadencia de contenido 6h)');
+    // Estudio de Contenido (Supabase contenido_social): publica lo 'programado'
+    // vencido SOLO si el switch de auto-publicación está encendido.
+    const { runSocialPublishing } = await import('./controllers/videoStudioController.js');
+    setInterval(() => { runSocialPublishing(); }, 60 * 1000);
+    console.log('📅 Schedulers de redes activos (auto-publicar 60s + cadencia 6h + Estudio 60s)');
   } catch (err) {
     console.error('Error iniciando scheduler de redes:', err.message);
   }
