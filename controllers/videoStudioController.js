@@ -133,9 +133,9 @@ export const createSocial = asyncHandler(async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { res.status(400); throw new Error('Fecha inválida (usa YYYY-MM-DD)'); }
   const marca = String(req.body.marca || 'Tesipedia');
 
-  // slots ya ocupados ese día (para esa marca no aplica: el índice único es (fecha,slot))
+  // slots ya ocupados ese día PARA ESA MARCA (el único es (fecha,slot,marca)).
   const { data: existentes, error: e1 } = await supabaseAdmin
-    .from('contenido_social').select('slot').eq('fecha', fecha);
+    .from('contenido_social').select('slot').eq('fecha', fecha).eq('marca', marca);
   if (e1) { res.status(500); throw new Error(e1.message); }
   if ((existentes || []).length >= MAX_POR_DIA) {
     res.status(409); throw new Error(`Ese día ya tiene el máximo de ${MAX_POR_DIA} publicaciones. Usa otra fecha.`);
@@ -287,11 +287,24 @@ export const uploadSocialVideo = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
-// ── Publicación real a Meta (IG + FB) ──
+// ── Publicación real a Meta (IG + FB), multi-marca ──
 const META_TOKEN = process.env.META_ACCESS_TOKEN;
-const FB_PAGE_ID = process.env.FB_PAGE_ID || '855962324262046';
-const IG_USER_ID = process.env.IG_USER_ID || '17841477846360365';
 const GV = 'v21.0';
+
+// Config de Meta por marca. Tesipedia usa token de USUARIO (deriva el page token);
+// Contratado ya trae un PAGE TOKEN directo. Cada marca publica en SUS cuentas.
+const BRAND_META = {
+  Tesipedia: {
+    pageId: process.env.FB_PAGE_ID || '855962324262046',
+    igUserId: process.env.IG_USER_ID || '17841477846360365',
+    userToken: process.env.META_ACCESS_TOKEN,
+  },
+  Contratado: {
+    pageId: process.env.CONTRATADO_FB_PAGE_ID,
+    igUserId: process.env.CONTRATADO_IG_USER_ID,
+    pageToken: process.env.CONTRATADO_FB_PAGE_TOKEN,
+  },
+};
 
 async function graph(path, params = {}, method = 'POST', token = META_TOKEN) {
   const body = new URLSearchParams({ ...params, access_token: token });
@@ -306,25 +319,39 @@ async function graph(path, params = {}, method = 'POST', token = META_TOKEN) {
 }
 
 // Publicar en Page/IG requiere el PAGE token (no el de usuario). Lo obtenemos de /me/accounts.
-let _pageToken = null;
-async function getPageToken() {
-  if (_pageToken) return _pageToken;
+// Cache por pageId (varias marcas).
+const _pageTokens = {};
+async function derivePageToken(pageId, userToken) {
+  if (_pageTokens[pageId]) return _pageTokens[pageId];
   try {
-    const d = await graph('me/accounts', {}, 'GET');
-    const pg = (d.data || []).find((p) => p.id === FB_PAGE_ID);
-    _pageToken = pg?.access_token || META_TOKEN; // fallback si ya es page token
-  } catch { _pageToken = META_TOKEN; }
-  return _pageToken;
+    const d = await graph('me/accounts', {}, 'GET', userToken);
+    const pg = (d.data || []).find((p) => p.id === pageId);
+    _pageTokens[pageId] = pg?.access_token || userToken; // fallback si ya es page token
+  } catch { _pageTokens[pageId] = userToken; }
+  return _pageTokens[pageId];
 }
 
-async function publicarFB(imgs, caption, token) {
+// Devuelve el contexto Meta listo para publicar { marca, pageId, igUserId, token }.
+// null si la marca no tiene credenciales configuradas (se salta, no rompe).
+async function getBrandCtx(marca) {
+  const key = BRAND_META[marca] ? marca : 'Tesipedia';
+  const b = BRAND_META[key];
+  if (!b || (!b.pageId && !b.igUserId)) return null;
+  let token = b.pageToken;
+  if (!token && b.userToken) token = await derivePageToken(b.pageId, b.userToken);
+  if (!token) return null;
+  return { marca: key, pageId: b.pageId, igUserId: b.igUserId, token };
+}
+
+async function publicarFB(imgs, caption, ctx) {
+  const { pageId, token } = ctx;
   if (imgs.length === 1) {
-    const r = await graph(`${FB_PAGE_ID}/photos`, { url: imgs[0], caption }, 'POST', token);
+    const r = await graph(`${pageId}/photos`, { url: imgs[0], caption }, 'POST', token);
     return r.post_id || r.id;
   }
   const ids = [];
-  for (const u of imgs) { const r = await graph(`${FB_PAGE_ID}/photos`, { url: u, published: 'false' }, 'POST', token); ids.push(r.id); }
-  const r = await graph(`${FB_PAGE_ID}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) }, 'POST', token);
+  for (const u of imgs) { const r = await graph(`${pageId}/photos`, { url: u, published: 'false' }, 'POST', token); ids.push(r.id); }
+  const r = await graph(`${pageId}/feed`, { message: caption, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) }, 'POST', token);
   return r.id;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -344,26 +371,27 @@ async function esperarContenedorIG(containerId, token, { intentos = 12, esperaMs
   throw new Error('el contenedor de IG no quedó listo a tiempo (timeout de procesamiento de imagen)');
 }
 
-async function publicarIG(imgs, caption, token) {
+async function publicarIG(imgs, caption, ctx) {
+  const { igUserId, token } = ctx;
   let creation;
   if (imgs.length === 1) {
-    creation = (await graph(`${IG_USER_ID}/media`, { image_url: imgs[0], caption }, 'POST', token)).id;
+    creation = (await graph(`${igUserId}/media`, { image_url: imgs[0], caption }, 'POST', token)).id;
     await esperarContenedorIG(creation, token);
   } else {
     const hijos = [];
     for (const u of imgs) {
-      const c = (await graph(`${IG_USER_ID}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token)).id;
+      const c = (await graph(`${igUserId}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token)).id;
       await esperarContenedorIG(c, token); // cada lámina debe estar lista
       hijos.push(c);
     }
-    creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption }, 'POST', token)).id;
+    creation = (await graph(`${igUserId}/media`, { media_type: 'CAROUSEL', children: hijos.join(','), caption }, 'POST', token)).id;
     await esperarContenedorIG(creation, token);
   }
   // Reintento de media_publish por si IG lo marca disponible con unos segundos de retraso.
   let ultimoErr;
   for (let i = 0; i < 3; i++) {
     try {
-      return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id;
+      return (await graph(`${igUserId}/media_publish`, { creation_id: creation }, 'POST', token)).id;
     } catch (e) {
       ultimoErr = e;
       await sleep(3000);
@@ -382,17 +410,86 @@ function playableVideoUrl(url) {
     .replace(/\.(mov|m4v|avi|mkv|webm|mpeg|mpg|3gp|hevc)$/i, '.mp4');
 }
 
+// ── LinkedIn (por marca) ──
+const LINKEDIN = {
+  Contratado: {
+    token: process.env.CONTRATADO_LINKEDIN_ACCESS_TOKEN,
+    author: process.env.CONTRATADO_LINKEDIN_AUTHOR,
+    version: process.env.CONTRATADO_LINKEDIN_VERSION || '202506',
+  },
+};
+function getLinkedInCtx(marca) {
+  const c = LINKEDIN[marca];
+  if (!c || !c.token || !c.author) return null;
+  return c;
+}
+// La Posts API usa "Little Text": hay que escapar reservados. NO escapamos '#'
+// (para que los hashtags funcionen) ni '@'.
+function liEscape(text) {
+  return String(text || '').replace(/[\\|{}\[\]()<>*_~]/g, (m) => '\\' + m);
+}
+async function liFetch(path, { method = 'POST', ctx, body } = {}) {
+  const r = await fetch(`https://api.linkedin.com/rest/${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${ctx.token}`,
+      'LinkedIn-Version': ctx.version,
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return r;
+}
+// Sube una imagen (desde su URL pública) a LinkedIn y devuelve su URN.
+async function liSubirImagen(imgUrl, ctx) {
+  const initR = await liFetch('images?action=initializeUpload', {
+    ctx, body: { initializeUploadRequest: { owner: ctx.author } },
+  });
+  const init = await initR.json();
+  if (!initR.ok) throw new Error(`init imagen (${init.message || initR.status})`);
+  const { uploadUrl, image } = init.value;
+  const bytes = Buffer.from(await (await fetch(imgUrl)).arrayBuffer());
+  const upR = await fetch(uploadUrl, { method: 'POST', headers: { Authorization: `Bearer ${ctx.token}` }, body: bytes });
+  if (!upR.ok) throw new Error(`subida de bytes (${upR.status})`);
+  return image; // urn:li:image:...
+}
+// Publica en LinkedIn (imágenes; el video de LinkedIn es otro flujo y se omite por ahora).
+async function publicarLinkedIn(imgs, caption, ctx) {
+  const urns = [];
+  for (const u of imgs.slice(0, 20)) urns.push(await liSubirImagen(u, ctx));
+  const content = urns.length === 1
+    ? { media: { id: urns[0] } }
+    : { multiImage: { images: urns.map((id) => ({ id })) } };
+  const r = await liFetch('posts', {
+    ctx,
+    body: {
+      author: ctx.author,
+      commentary: liEscape(caption),
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      content,
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    },
+  });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`post (${e.message || r.status})`); }
+  return r.headers.get('x-restli-id') || r.headers.get('x-linkedin-id') || 'posted';
+}
+
 // Publicación de VIDEO (reel). FB: /videos (asíncrono, best-effort). IG: REELS con polling.
-async function publicarVideoFB(videoUrl, caption, token) {
-  const r = await graph(`${FB_PAGE_ID}/videos`, { file_url: playableVideoUrl(videoUrl), description: caption }, 'POST', token);
+async function publicarVideoFB(videoUrl, caption, ctx) {
+  const { pageId, token } = ctx;
+  const r = await graph(`${pageId}/videos`, { file_url: playableVideoUrl(videoUrl), description: caption }, 'POST', token);
   return r.id;
 }
-async function publicarVideoIG(videoUrl, caption, token) {
-  const creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'REELS', video_url: playableVideoUrl(videoUrl), caption }, 'POST', token)).id;
+async function publicarVideoIG(videoUrl, caption, ctx) {
+  const { igUserId, token } = ctx;
+  const creation = (await graph(`${igUserId}/media`, { media_type: 'REELS', video_url: playableVideoUrl(videoUrl), caption }, 'POST', token)).id;
   await esperarContenedorIG(creation, token, { intentos: 24, esperaMs: 5000 }); // el video tarda más en procesar
   let ultimoErr;
   for (let i = 0; i < 3; i++) {
-    try { return (await graph(`${IG_USER_ID}/media_publish`, { creation_id: creation }, 'POST', token)).id; }
+    try { return (await graph(`${igUserId}/media_publish`, { creation_id: creation }, 'POST', token)).id; }
     catch (e) { ultimoErr = e; await sleep(4000); }
   }
   throw ultimoErr;
@@ -401,20 +498,26 @@ async function publicarVideoIG(videoUrl, caption, token) {
 // POST /video-studio/social/:id/publish  -> publica en IG + FB según plataformas
 export const publishSocial = asyncHandler(async (req, res) => {
   guard(res);
-  if (!META_TOKEN) { res.status(503); throw new Error('Falta META_ACCESS_TOKEN en el backend'); }
   const { data: p, error } = await supabaseAdmin.from('contenido_social').select('*').eq('id', req.params.id).single();
   if (error || !p) { res.status(404); throw new Error('Pieza no encontrada'); }
+  const ctx = await getBrandCtx(p.marca || 'Tesipedia');
+  if (!ctx) { res.status(503); throw new Error(`Faltan credenciales de Meta para la marca "${p.marca || 'Tesipedia'}" en el backend`); }
   const imgs = (p.imagenes || []).filter(Boolean);
   const esVideo = !!p.video_url;
   if (!esVideo && !imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes ni video'); }
   const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
   const plats = p.plataformas || ['ig', 'fb'];
-  const pageToken = await getPageToken();
   const patch = {};
   const errores = [];
-  if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, pageToken) : await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
-  if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, pageToken) : await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
-  const ok = patch.fb_post_id || patch.ig_media_id;
+  if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, ctx) : await publicarFB(imgs, caption, ctx); } catch (e) { errores.push(`FB: ${e.message}`); } }
+  if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, ctx) : await publicarIG(imgs, caption, ctx); } catch (e) { errores.push(`IG: ${e.message}`); } }
+  if (plats.includes('linkedin')) {
+    const liCtx = getLinkedInCtx(p.marca || 'Tesipedia');
+    if (!liCtx) errores.push('LinkedIn: sin credenciales para esta marca');
+    else if (esVideo) errores.push('LinkedIn: el video aún no está soportado (solo imágenes)');
+    else { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
+  }
+  const ok = patch.fb_post_id || patch.ig_media_id || patch.linkedin_id;
   patch.estado = ok ? 'publicado' : 'error';
   if (ok) patch.publicado_en = new Date().toISOString();
   patch.nota_error = errores.length ? errores.join(' | ') : null;
@@ -446,14 +549,15 @@ export const setAutopublish = asyncHandler(async (req, res) => {
 // Scheduler: publica las piezas 'programado' cuya fecha+hora (CDMX) ya venció.
 let socialPubRunning = false;
 export async function runSocialPublishing() {
-  if (socialPubRunning || !supabaseAdmin || !META_TOKEN) return;
+  if (socialPubRunning || !supabaseAdmin) return;
   if (!(await getAutopubFlag())) return;                 // switch apagado
   socialPubRunning = true;
   try {
     const now = Date.now();
+    // TODAS las marcas (cada una publica en sus cuentas). Sin credenciales → se salta.
     const { data: rows } = await supabaseAdmin.from('contenido_social')
-      .select('*').eq('estado', 'programado').eq('marca', 'Tesipedia');
-    const pageToken = await getPageToken();
+      .select('*').eq('estado', 'programado');
+    const ctxCache = {};
     for (const p of rows || []) {
       const imgs = (p.imagenes || []).filter(Boolean);
       const esVideo = !!p.video_url;
@@ -461,12 +565,20 @@ export async function runSocialPublishing() {
       const hora = (p.hora || '10:00').slice(0, 5);
       const dueUTC = new Date(`${p.fecha}T${hora}:00-06:00`).getTime(); // CDMX = UTC-6
       if (Number.isNaN(dueUTC) || dueUTC > now || dueUTC < now - 26 * 3600 * 1000) continue; // vencidas ≤26h
+      const marca = p.marca || 'Tesipedia';
+      if (!(marca in ctxCache)) ctxCache[marca] = await getBrandCtx(marca);
+      const ctx = ctxCache[marca];
+      if (!ctx) continue; // marca sin credenciales configuradas → saltar sin marcar error
       const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
       const plats = p.plataformas || ['ig', 'fb'];
       const patch = {}; const errores = [];
-      if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, pageToken) : await publicarFB(imgs, caption, pageToken); } catch (e) { errores.push(`FB: ${e.message}`); } }
-      if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, pageToken) : await publicarIG(imgs, caption, pageToken); } catch (e) { errores.push(`IG: ${e.message}`); } }
-      const ok = patch.fb_post_id || patch.ig_media_id;
+      if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, ctx) : await publicarFB(imgs, caption, ctx); } catch (e) { errores.push(`FB: ${e.message}`); } }
+      if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, ctx) : await publicarIG(imgs, caption, ctx); } catch (e) { errores.push(`IG: ${e.message}`); } }
+      if (plats.includes('linkedin') && !esVideo) {
+        const liCtx = getLinkedInCtx(marca);
+        if (liCtx) { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
+      }
+      const ok = patch.fb_post_id || patch.ig_media_id || patch.linkedin_id;
       patch.estado = ok ? 'publicado' : 'error';
       if (ok) patch.publicado_en = new Date().toISOString();
       patch.nota_error = errores.length ? errores.join(' | ') : null;
