@@ -121,7 +121,7 @@ export const publishVideo = asyncHandler(async (req, res) => {
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
 const FORMATOS_SOCIAL = ['FRASE', 'CARRUSEL', 'CHECKLIST', 'COMPARATIVA', 'DICCIONARIO', 'PRUEBA', 'OFERTA', 'VIDEO'];
 const SLOTS_SOCIAL = ['A', 'B', 'C', 'D', 'E', 'F'];
-const MAX_POR_DIA = 3;              // máximo de publicaciones por día
+const MAX_POR_DIA = 4;              // máximo de publicaciones por día
 const HORA_NUEVA = '17:00';         // hora fija para publicaciones agregadas manualmente (5 PM)
 
 // POST /video-studio/social  { fecha, marca?, formato?, hora?, tema?, slot? }
