@@ -18,6 +18,23 @@ const visitSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // Cookie persistente del visitante (se enviaba pero el modelo la descartaba)
+    cookieId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    // Identificador persistente del visitante (compartido con los eventos)
+    visitorId: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    // Fuente/origen detectado del visitante
+    source: {
+      type: String,
+      default: '',
+    },
     geoLocation: {
       city: String,
       region: String,

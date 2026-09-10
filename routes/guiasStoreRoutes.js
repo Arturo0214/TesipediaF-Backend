@@ -5,7 +5,8 @@ import GuidePurchase from '../models/GuidePurchase.js';
 import { GUIA_PRODUCTOS, getProducto } from '../config/guiaProductos.js';
 import { crearCheckout, crearCheckoutCart, verificarPago, mpWebhook, metodosDisponibles } from '../lib/guiaPagos.js';
 import { signedRawUrl } from '../lib/cloudinary.js';
-import { protect } from '../middleware/authMiddleware.js';
+import { protect, adminOnly } from '../middleware/authMiddleware.js';
+import { getStoreStats } from '../controllers/guiasStatsController.js';
 import sendEmail from '../utils/emailSender.js';
 
 const FRONT = (process.env.CLIENT_URL || process.env.FRONT_URL || 'https://tesipedia.com').replace(/\/$/, '');
@@ -279,6 +280,9 @@ router.get('/mis-compras', protect, async (req, res) => {
     res.status(500).json({ error: 'No se pudieron cargar tus guías.' });
   }
 });
+
+/* ───────────── Admin: métricas de la tienda (Mercado Pago) ───────────── */
+router.get('/admin/stats', protect, adminOnly, getStoreStats);
 
 /* ───────────── Webhook MercadoPago ───────────── */
 router.post('/webhook/mp', (req, res) => mpWebhook(req, res, registrarCompra));

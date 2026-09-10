@@ -258,14 +258,31 @@ export const uploadSocialVideo = asyncHandler(async (req, res) => {
   const publicId = `redes/video_${req.params.id}_${Date.now()}`;
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { public_id: publicId, resource_type: 'video', overwrite: true, invalidate: true },
+      {
+        public_id: publicId,
+        resource_type: 'video',
+        overwrite: true,
+        invalidate: true,
+        // Transcodifica a mp4/h264/aac: reproducible en navegador y compatible con IG Reels/FB.
+        // Async para no bloquear la subida; la URL derivada dispara la misma transformación.
+        eager: [{ format: 'mp4', video_codec: 'h264', audio_codec: 'aac' }],
+        eager_async: true,
+      },
       (err, r) => (err ? reject(err) : resolve(r)),
     );
     stream.end(req.file.buffer);
   });
 
+  // URL mp4/h264 reproducible en <video> y válida para publicar en Meta (no la original .mov/HEVC).
+  const playableUrl = cloudinary.url(result.public_id, {
+    resource_type: 'video',
+    format: 'mp4',
+    secure: true,
+    transformation: [{ video_codec: 'h264', audio_codec: 'aac', quality: 'auto' }],
+  });
+
   const { data, error } = await supabaseAdmin.from('contenido_social')
-    .update({ video_url: result.secure_url, formato: 'VIDEO' }).eq('id', req.params.id).select('*').single();
+    .update({ video_url: playableUrl, formato: 'VIDEO' }).eq('id', req.params.id).select('*').single();
   if (error) { res.status(500); throw new Error(error.message); }
   res.json(data);
 });
@@ -355,13 +372,23 @@ async function publicarIG(imgs, caption, token) {
   throw ultimoErr;
 }
 
+// Fuerza mp4/h264/aac en URLs de Cloudinary: reproducible y aceptado por IG Reels/FB.
+// Arregla también registros viejos guardados con la URL original (.mov/HEVC).
+function playableVideoUrl(url) {
+  if (!url || !url.includes('res.cloudinary.com') || !url.includes('/video/upload/')) return url;
+  if (url.includes('/upload/f_') || url.includes('/upload/vc_')) return url;
+  return url
+    .replace('/video/upload/', '/video/upload/f_mp4,vc_h264,ac_aac/')
+    .replace(/\.(mov|m4v|avi|mkv|webm|mpeg|mpg|3gp|hevc)$/i, '.mp4');
+}
+
 // Publicación de VIDEO (reel). FB: /videos (asíncrono, best-effort). IG: REELS con polling.
 async function publicarVideoFB(videoUrl, caption, token) {
-  const r = await graph(`${FB_PAGE_ID}/videos`, { file_url: videoUrl, description: caption }, 'POST', token);
+  const r = await graph(`${FB_PAGE_ID}/videos`, { file_url: playableVideoUrl(videoUrl), description: caption }, 'POST', token);
   return r.id;
 }
 async function publicarVideoIG(videoUrl, caption, token) {
-  const creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'REELS', video_url: videoUrl, caption }, 'POST', token)).id;
+  const creation = (await graph(`${IG_USER_ID}/media`, { media_type: 'REELS', video_url: playableVideoUrl(videoUrl), caption }, 'POST', token)).id;
   await esperarContenedorIG(creation, token, { intentos: 24, esperaMs: 5000 }); // el video tarda más en procesar
   let ultimoErr;
   for (let i = 0; i < 3; i++) {

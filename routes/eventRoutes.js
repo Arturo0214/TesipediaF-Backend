@@ -5,6 +5,8 @@ import {
   getEventFeed,
   getEventStats,
   getRealtimeData,
+  getVisitors,
+  getVisitorJourney,
 } from '../controllers/eventController.js';
 
 const router = express.Router();
@@ -19,5 +21,7 @@ router.use(adminOnly);
 router.get('/feed', getEventFeed);
 router.get('/stats', getEventStats);
 router.get('/realtime', getRealtimeData);
+router.get('/visitors', getVisitors);
+router.get('/visitor/:visitorId', getVisitorJourney);
 
 export default router;

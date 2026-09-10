@@ -11,7 +11,10 @@ export const trackVisit = asyncHandler(async (req, res) => {
   const userAgent = req.get('User-Agent');
   const path = req.body.path || req.originalUrl;
 
-  const cookieId = req.cookies?.cookieId || null;
+  // Identidad persistente del visitante (cookie tsp_vid puesta por el frontend).
+  const visitorId = req.cookies?.tsp_vid || req.body?.visitorId || '';
+  const cookieId = visitorId || req.cookies?.cookieId || null;
+  const source = req.body?.source || '';
   const geo = await getGeoFromIP(ip);
 
   await Visit.create({
@@ -19,6 +22,8 @@ export const trackVisit = asyncHandler(async (req, res) => {
     userAgent,
     path,
     cookieId,
+    visitorId,
+    source,
     geoLocation: {
       city: geo?.city,
       region: geo?.region,
