@@ -6,7 +6,7 @@ import {
   updateVideo, deleteVideo, approveVideo, publishVideo, generateScript,
   listSocial, createSocial, updateSocial, approveSocial, discardSocial, uploadSocialImage,
   uploadSocialVideo, publishSocial, deleteSocial, sugerenciasSocial,
-  getAutopublish, setAutopublish,
+  getAutopublish, setAutopublish, getRendimientoPiezas, diagnosticoIA,
 } from '../controllers/videoStudioController.js';
 
 const router = express.Router();
@@ -17,6 +17,8 @@ const uploadVid = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 // Va ANTES de las rutas con /:id para que "social" no choque con un id.
 router.get('/social/autopublish', protect, adminOnly, getAutopublish);
 router.put('/social/autopublish', protect, adminOnly, setAutopublish);
+router.get('/social/rendimiento-piezas', protect, adminOnly, getRendimientoPiezas);
+router.post('/social/diagnostico-ia', protect, adminOnly, diagnosticoIA);
 router.get('/social', protect, adminOnly, listSocial);
 router.post('/social', protect, adminOnly, createSocial);
 router.patch('/social/:id', protect, adminOnly, updateSocial);

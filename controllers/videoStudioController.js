@@ -146,6 +146,11 @@ export const createSocial = asyncHandler(async (req, res) => {
     : SLOTS_SOCIAL.find((s) => !ocupados.has(s));
   if (!slot) { res.status(409); throw new Error(`Ese día ya tiene el máximo de ${MAX_POR_DIA} publicaciones. Usa otra fecha.`); }
 
+  // plataformas por defecto (desde la barra de canales); sólo redes reales, ig+fb si no llega nada
+  const PLATS_OK = ['ig', 'fb', 'tiktok', 'linkedin'];
+  const platsIn = Array.isArray(req.body.plataformas) ? req.body.plataformas.filter((p) => PLATS_OK.includes(p)) : [];
+  const plataformas = platsIn.length ? [...new Set(platsIn)] : ['ig', 'fb'];
+
   const fila = {
     dia: 0,
     fecha,
@@ -160,7 +165,7 @@ export const createSocial = asyncHandler(async (req, res) => {
     cta: '',
     hashtags: '',
     imagenes: [],
-    plataformas: ['ig', 'fb'],
+    plataformas,
     estado: 'borrador',
     marca,
   };
@@ -529,6 +534,114 @@ export const publishSocial = asyncHandler(async (req, res) => {
   const { data } = await supabaseAdmin.from('contenido_social').update(patch).eq('id', p.id).select('*').single();
   if (!ok) { res.status(502); throw new Error(errores.join(' | ') || 'No se pudo publicar'); }
   res.json(data);
+});
+
+// GET /video-studio/social/rendimiento-piezas?marca=  → nuestras piezas PUBLICADAS con
+// sus métricas reales por-post (vistas/reacciones/comentarios) traídas del Graph API.
+// Cache en memoria 10 min por marca para no pegarle al Graph en cada carga.
+const _rendPiezasCache = {};
+async function piezasConMetricas(marca) {
+  const ctx = await getBrandCtx(marca);
+  const { data: filas } = await supabaseAdmin.from('contenido_social')
+    .select('id,marca,formato,tema,imagenes,video_url,fecha,plataformas,fb_post_id,ig_media_id,linkedin_id,publicado_en')
+    .eq('marca', marca).eq('estado', 'publicado')
+    .order('publicado_en', { ascending: false }).limit(60);
+
+  // FB: leer métricas por-post desde el FEED de la página (una sola llamada). El nodo directo
+  // /{post_id} requiere pages_read_engagement; el feed de la propia página sí se puede leer.
+  const fbMap = {};
+  const necesitaFB = (filas || []).some((p) => p.fb_post_id);
+  if (ctx && ctx.pageId && necesitaFB) {
+    try {
+      const feed = await graph(`${ctx.pageId}/posts`, { fields: 'id,permalink_url,reactions.summary(true),comments.summary(true),shares', limit: '100' }, 'GET', ctx.token);
+      for (const post of feed.data || []) fbMap[post.id] = post;
+    } catch { /* sin permiso de lectura de feed → sin métricas FB */ }
+  }
+
+  const piezas = [];
+  for (const p of filas || []) {
+    const item = {
+      id: p.id, marca: p.marca, formato: p.formato, tema: p.tema,
+      preview: (p.imagenes || [])[0] || null, video: p.video_url || null,
+      fecha: p.publicado_en || p.fecha, redes: p.plataformas || [],
+      red: null, vistas: null, reacciones: null, comentarios: null, compartidos: null, permalink: null,
+    };
+    if (ctx) {
+      let gotIg = false;
+      if (p.ig_media_id) {
+        try {
+          const m = await graph(`${p.ig_media_id}`, { fields: 'like_count,comments_count,media_type,permalink,thumbnail_url,media_url' }, 'GET', ctx.token);
+          item.red = 'ig'; gotIg = true;
+          item.reacciones = m.like_count ?? null;
+          item.comentarios = m.comments_count ?? null;
+          item.permalink = m.permalink || null;
+          if (!item.preview) item.preview = m.thumbnail_url || m.media_url || null;
+          if (['VIDEO', 'REELS'].includes(m.media_type)) {
+            try {
+              const ins = await graph(`${p.ig_media_id}/insights`, { metric: 'plays' }, 'GET', ctx.token);
+              item.vistas = ins.data?.[0]?.values?.[0]?.value ?? ins.data?.[0]?.total_value?.value ?? null;
+            } catch { /* algunas cuentas no exponen plays */ }
+          }
+        } catch (e) { item.error = e.message; /* IG inválido → intentamos FB abajo */ }
+      }
+      if (!gotIg && p.fb_post_id) {
+        const m = fbMap[p.fb_post_id];
+        item.red = 'fb';
+        if (m) {
+          item.reacciones = m.reactions?.summary?.total_count ?? null;
+          item.comentarios = m.comments?.summary?.total_count ?? null;
+          item.compartidos = m.shares?.count ?? null;
+          item.permalink = m.permalink_url || null;
+          item.error = null;
+        }
+      } else if (!gotIg && !p.fb_post_id && p.linkedin_id) {
+        item.red = 'linkedin'; // sin insights por-post disponibles
+      }
+    }
+    piezas.push(item);
+  }
+  return { marca, piezas, sinCredenciales: !ctx, ts: new Date().toISOString() };
+}
+
+export const getRendimientoPiezas = asyncHandler(async (req, res) => {
+  guard(res);
+  const marca = String(req.query.marca || 'Tesipedia');
+  const now = Date.now();
+  if (_rendPiezasCache[marca] && now - _rendPiezasCache[marca].at < 10 * 60 * 1000) {
+    return res.json(_rendPiezasCache[marca].data);
+  }
+  const payload = await piezasConMetricas(marca);
+  _rendPiezasCache[marca] = { at: now, data: payload };
+  res.json(payload);
+});
+
+// POST /video-studio/social/diagnostico-ia { marca }  → Claude lee las métricas reales de las
+// piezas y devuelve un análisis accionable (qué se hace bien/mal + próximos pasos). Económico (Haiku).
+export const diagnosticoIA = asyncHandler(async (req, res) => {
+  guard(res);
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(503); throw new Error('Falta ANTHROPIC_API_KEY en el backend'); }
+  const marca = String(req.body.marca || 'Tesipedia');
+  const { piezas } = _rendPiezasCache[marca]?.data || await piezasConMetricas(marca);
+  const con = (piezas || []).filter((p) => p.reacciones != null || p.vistas != null);
+  if (!con.length) { return res.json({ resumen: 'Aún no hay piezas publicadas con métricas para analizar.', acciones: [] }); }
+  const resumen = con.map((p) => `- ${p.formato} "${(p.tema || '').slice(0, 40)}" (${p.red || '?'}): ${p.reacciones ?? '—'} reac, ${p.comentarios ?? '—'} coment, ${p.vistas ?? '—'} vistas`).join('\n');
+  const prompt = `Eres analista de redes sociales de ${marca} (Instagram/Facebook). Estas son NUESTRAS publicaciones con sus métricas reales:
+${resumen}
+
+Con base SOLO en estos datos, responde en español mexicano, directo y accionable. Devuelve EXCLUSIVAMENTE un JSON:
+{"resumen":"2-3 frases: qué estamos haciendo bien y qué mal","acciones":["4-6 acciones concretas y priorizadas para mejorar alcance e interacción"]}
+Sin markdown, sin texto fuera del JSON.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.CONTENT_STUDIO_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 700, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!resp.ok) { res.status(502); throw new Error('Error de IA'); }
+  const data = await resp.json();
+  let txt = (data?.content?.[0]?.text || '').trim();
+  const mm = txt.match(/\{[\s\S]*\}/); if (mm) txt = mm[0];
+  let out; try { out = JSON.parse(txt); } catch { out = { resumen: txt.slice(0, 400), acciones: [] }; }
+  res.json(out);
 });
 
 // ── Auto-publicación programada (switch on/off) ──
