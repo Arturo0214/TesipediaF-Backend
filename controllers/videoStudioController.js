@@ -217,7 +217,7 @@ export const listSocial = asyncHandler(async (req, res) => {
 export const updateSocial = asyncHandler(async (req, res) => {
   guard(res);
   const patch = {};
-  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas', 'hora'].forEach((c) => {
+  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas', 'hora', 'historia'].forEach((c) => {
     if (req.body[c] !== undefined) patch[c] = req.body[c];
   });
   if (patch.estado && !ESTADOS_SOCIAL.includes(patch.estado)) { res.status(400); throw new Error('estado inválido'); }
@@ -434,6 +434,46 @@ async function publicarIG(imgs, caption, ctx) {
   throw ultimoErr;
 }
 
+// ── Historias (Stories) IG + FB ──
+// IG: contenedor media_type=STORIES (imagen o video) → publish. Recomendado 9:16.
+async function publicarIGStory(mediaUrl, esVideo, ctx) {
+  const { igUserId, token } = ctx;
+  const params = esVideo
+    ? { media_type: 'STORIES', video_url: playableVideoUrl(mediaUrl) }
+    : { media_type: 'STORIES', image_url: mediaUrl };
+  const creation = (await graph(`${igUserId}/media`, params, 'POST', token)).id;
+  await esperarContenedorIG(creation, token, esVideo ? { intentos: 24, esperaMs: 3000 } : {});
+  let ultimoErr;
+  for (let i = 0; i < 3; i++) {
+    try { return (await graph(`${igUserId}/media_publish`, { creation_id: creation }, 'POST', token)).id; }
+    catch (e) { ultimoErr = e; await sleep(3000); }
+  }
+  throw ultimoErr;
+}
+// FB Page Stories: foto = subir sin publicar → photo_stories; video = start → upload por file_url → finish.
+async function publicarFBStory(mediaUrl, esVideo, ctx) {
+  const { pageId, token } = ctx;
+  if (esVideo) {
+    const start = await graph(`${pageId}/video_stories`, { upload_phase: 'start' }, 'POST', token);
+    const videoId = start.video_id;
+    const up = await fetch(start.upload_url, { method: 'POST', headers: { Authorization: `OAuth ${token}`, file_url: playableVideoUrl(mediaUrl) } });
+    const upData = await up.json().catch(() => ({}));
+    if (upData.error) throw new Error(upData.error.message || 'error subiendo video a historia');
+    const fin = await graph(`${pageId}/video_stories`, { upload_phase: 'finish', video_id: videoId }, 'POST', token);
+    return fin.post_id || videoId;
+  }
+  const photo = await graph(`${pageId}/photos`, { url: mediaUrl, published: 'false' }, 'POST', token);
+  const r = await graph(`${pageId}/photo_stories`, { photo_id: photo.id }, 'POST', token);
+  return r.post_id || r.id || photo.id;
+}
+// Sube la historia en las redes seleccionadas; acumula errores sin romper el feed.
+async function publicarHistorias(p, imgs, esVideo, ctx, plats, errores) {
+  const media = esVideo ? p.video_url : imgs[0];
+  if (!media) { errores.push('Historia: la pieza no tiene imagen/video'); return; }
+  if (plats.includes('ig')) { try { await publicarIGStory(media, esVideo, ctx); } catch (e) { errores.push(`IG Historia: ${e.message}`); } }
+  if (plats.includes('fb')) { try { await publicarFBStory(media, esVideo, ctx); } catch (e) { errores.push(`FB Historia: ${e.message}`); } }
+}
+
 // Fuerza mp4/h264/aac en URLs de Cloudinary: reproducible y aceptado por IG Reels/FB.
 // Arregla también registros viejos guardados con la URL original (.mov/HEVC).
 function playableVideoUrl(url) {
@@ -551,6 +591,7 @@ export const publishSocial = asyncHandler(async (req, res) => {
     else if (esVideo) errores.push('LinkedIn: el video aún no está soportado (solo imágenes)');
     else { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
   }
+  if (p.historia) await publicarHistorias(p, imgs, esVideo, ctx, plats, errores);
   const ok = patch.fb_post_id || patch.ig_media_id || patch.linkedin_id;
   patch.estado = ok ? 'publicado' : 'error';
   if (ok) patch.publicado_en = new Date().toISOString();
@@ -720,6 +761,7 @@ export async function runSocialPublishing() {
         const liCtx = getLinkedInCtx(marca);
         if (liCtx) { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
       }
+      if (p.historia) await publicarHistorias(p, imgs, esVideo, ctx, plats, errores);
       const ok = patch.fb_post_id || patch.ig_media_id || patch.linkedin_id;
       patch.estado = ok ? 'publicado' : 'error';
       if (ok) patch.publicado_en = new Date().toISOString();
