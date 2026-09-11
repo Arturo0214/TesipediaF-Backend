@@ -219,11 +219,12 @@ export const listSocial = asyncHandler(async (req, res) => {
 export const updateSocial = asyncHandler(async (req, res) => {
   guard(res);
   const patch = {};
-  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas', 'hora', 'historia'].forEach((c) => {
+  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas', 'hora', 'historia', 'aspecto'].forEach((c) => {
     if (req.body[c] !== undefined) patch[c] = req.body[c];
   });
   if (patch.estado && !ESTADOS_SOCIAL.includes(patch.estado)) { res.status(400); throw new Error('estado inválido'); }
   if (patch.formato && !FORMATOS_SOCIAL.includes(patch.formato)) { res.status(400); throw new Error('formato inválido'); }
+  if (patch.aspecto !== undefined && patch.aspecto !== null && !['9:16', '4:5', '1:1'].includes(patch.aspecto)) { res.status(400); throw new Error('aspecto inválido'); }
   if (patch.hora !== undefined) {                                  // normaliza HH:MM (o HH:MM:SS)
     const m = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(patch.hora || '').trim());
     if (!m) { res.status(400); throw new Error('hora inválida (usa HH:MM)'); }
@@ -407,6 +408,16 @@ async function esperarContenedorIG(containerId, token, { intentos = 12, esperaMs
   throw new Error('el contenedor de IG no quedó listo a tiempo (timeout de procesamiento de imagen)');
 }
 
+// Ajusta una imagen de Cloudinary al formato de publicación elegido (9:16, 4:5 o 1:1).
+// c_fill recorta al ratio (como muestran las guías del Estudio); f_jpg asegura JPEG.
+// Si aspecto es null, deja la imagen tal cual.
+function fmtUrl(u, aspecto) {
+  if (!aspecto || !/res\.cloudinary\.com/.test(u) || !u.includes('/upload/')) return u;
+  return u.replace('/upload/', `/upload/ar_${aspecto},c_fill,g_center,f_jpg,q_auto/`);
+}
+// Formato efectivo de una pieza: el elegido, o 4:5 por defecto para carrusel (feed IG).
+const aspectoDe = (p) => p.aspecto || (p.formato === 'CARRUSEL' ? '4:5' : null);
+
 async function publicarIG(imgs, caption, ctx) {
   const { igUserId, token } = ctx;
   let creation;
@@ -416,6 +427,7 @@ async function publicarIG(imgs, caption, ctx) {
   } else {
     const hijos = [];
     for (const u of imgs) {
+      // imgs ya vienen normalizadas al aspecto elegido (mismo ratio en todas → sin recorte raro).
       const c = (await graph(`${igUserId}/media`, { image_url: u, is_carousel_item: 'true' }, 'POST', token)).id;
       await esperarContenedorIG(c, token); // cada lámina debe estar lista
       hijos.push(c);
@@ -578,7 +590,7 @@ export const publishSocial = asyncHandler(async (req, res) => {
   if (error || !p) { res.status(404); throw new Error('Pieza no encontrada'); }
   const ctx = await getBrandCtx(p.marca || 'Tesipedia');
   if (!ctx) { res.status(503); throw new Error(`Faltan credenciales de Meta para la marca "${p.marca || 'Tesipedia'}" en el backend`); }
-  const imgs = (p.imagenes || []).filter(Boolean);
+  const imgs = (p.imagenes || []).filter(Boolean).map((u) => fmtUrl(u, aspectoDe(p)));
   const esVideo = !!p.video_url;
   if (!esVideo && !imgs.length) { res.status(400); throw new Error('La pieza no tiene imágenes ni video'); }
   const caption = `${p.copy || ''}\n\n${p.hashtags || ''}`.trim();
@@ -744,7 +756,7 @@ export async function runSocialPublishing() {
       .select('*').eq('estado', 'programado');
     const ctxCache = {};
     for (const p of rows || []) {
-      const imgs = (p.imagenes || []).filter(Boolean);
+      const imgs = (p.imagenes || []).filter(Boolean).map((u) => fmtUrl(u, aspectoDe(p)));
       const esVideo = !!p.video_url;
       if (!p.fecha || (!esVideo && !imgs.length)) continue;
       const hora = (p.hora || '10:00').slice(0, 5);
