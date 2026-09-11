@@ -41,7 +41,7 @@ export async function pollinationsImage(prompt, { width = 1080, height = 1350 } 
         if (!r.ok) return null;
         const buf = Buffer.from(await r.arrayBuffer());
         if (buf.length < 2000) return null; // respuesta inválida
-        const up = await cloudinary.uploader.upload(`data:image/jpeg;base64,${buf.toString('base64')}`, { folder: 'tesipedia-social' });
+        const up = await cloudinary.uploader.upload(`data:image/jpeg;base64,${buf.toString('base64')}`, { folder: 'tesipedia-social', resource_type: 'image' });
         return up.secure_url;
     } catch { return null; }
 }
@@ -414,7 +414,7 @@ export const generateImage = asyncHandler(async (req, res) => {
             }
 
             // Upload to Cloudinary
-            const upload = await cloudinary.uploader.upload(`data:${mime};base64,${b64}`, { folder: 'tesipedia-social' });
+            const upload = await cloudinary.uploader.upload(`data:${mime};base64,${b64}`, { folder: 'tesipedia-social', resource_type: 'image' });
             console.log(`[Social:GenImage] ${model.name} → ${upload.secure_url}`);
             return res.json({ success: true, url: upload.secure_url, publicId: upload.public_id, source: model.name });
         } catch (err) {
@@ -434,6 +434,6 @@ export const uploadImage = asyncHandler(async (req, res) => {
     const { imageUrl } = req.body;
     if (!imageUrl) { res.status(400); throw new Error('imageUrl required'); }
 
-    const upload = await cloudinary.uploader.upload(imageUrl, { folder: 'tesipedia-social' });
+    const upload = await cloudinary.uploader.upload(imageUrl, { folder: 'tesipedia-social', resource_type: 'image' });
     res.json({ success: true, url: upload.secure_url, publicId: upload.public_id });
 });
