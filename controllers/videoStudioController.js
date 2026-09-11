@@ -188,11 +188,16 @@ export const listSocial = asyncHandler(async (req, res) => {
 export const updateSocial = asyncHandler(async (req, res) => {
   guard(res);
   const patch = {};
-  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas'].forEach((c) => {
+  ['titular', 'copy', 'cta', 'hashtags', 'laminas', 'estado', 'tema', 'formato', 'video_url', 'plataformas', 'hora'].forEach((c) => {
     if (req.body[c] !== undefined) patch[c] = req.body[c];
   });
   if (patch.estado && !ESTADOS_SOCIAL.includes(patch.estado)) { res.status(400); throw new Error('estado inválido'); }
   if (patch.formato && !FORMATOS_SOCIAL.includes(patch.formato)) { res.status(400); throw new Error('formato inválido'); }
+  if (patch.hora !== undefined) {                                  // normaliza HH:MM (o HH:MM:SS)
+    const m = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(patch.hora || '').trim());
+    if (!m) { res.status(400); throw new Error('hora inválida (usa HH:MM)'); }
+    patch.hora = `${m[1].padStart(2, '0')}:${m[2]}`;
+  }
   const { data, error } = await supabaseAdmin.from('contenido_social')
     .update(patch).eq('id', req.params.id).select('*').single();
   if (error) { res.status(500); throw new Error(error.message); }
