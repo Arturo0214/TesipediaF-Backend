@@ -6,7 +6,7 @@ import {
   updateVideo, deleteVideo, approveVideo, publishVideo, generateScript,
   listSocial, createSocial, updateSocial, approveSocial, discardSocial, uploadSocialImage,
   uploadSocialVideo, publishSocial, deleteSocial, sugerenciasSocial,
-  getAutopublish, setAutopublish, getRendimientoPiezas, diagnosticoIA,
+  getAutopublish, setAutopublish, getRendimientoPiezas, diagnosticoIA, moverSocial,
 } from '../controllers/videoStudioController.js';
 
 const router = express.Router();
@@ -22,6 +22,7 @@ router.post('/social/diagnostico-ia', protect, adminOnly, diagnosticoIA);
 router.get('/social', protect, adminOnly, listSocial);
 router.post('/social', protect, adminOnly, createSocial);
 router.patch('/social/:id', protect, adminOnly, updateSocial);
+router.patch('/social/:id/mover', protect, adminOnly, moverSocial);
 router.post('/social/:id/approve', protect, adminOnly, approveSocial);
 router.post('/social/:id/discard', protect, adminOnly, discardSocial);
 router.post('/social/:id/publish', protect, adminOnly, publishSocial);

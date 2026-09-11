@@ -174,6 +174,30 @@ export const createSocial = asyncHandler(async (req, res) => {
   res.status(201).json(data);
 });
 
+// PATCH /video-studio/social/:id/mover  { fecha }
+// Mueve una pieza a otro día (drag&drop en la cuadrícula): valida máximo por día y asigna slot libre.
+export const moverSocial = asyncHandler(async (req, res) => {
+  guard(res);
+  const fecha = String(req.body.fecha || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { res.status(400); throw new Error('Fecha inválida (usa YYYY-MM-DD)'); }
+  const { data: pieza, error: e0 } = await supabaseAdmin.from('contenido_social').select('id,fecha,slot,marca').eq('id', req.params.id).single();
+  if (e0 || !pieza) { res.status(404); throw new Error('Pieza no encontrada'); }
+  if (pieza.fecha === fecha) return res.json(pieza); // mismo día, sin cambios
+  const marca = pieza.marca || 'Tesipedia';
+  const { data: existentes } = await supabaseAdmin
+    .from('contenido_social').select('slot').eq('fecha', fecha).eq('marca', marca);
+  if ((existentes || []).length >= MAX_POR_DIA) {
+    res.status(409); throw new Error(`Ese día ya tiene el máximo de ${MAX_POR_DIA} publicaciones.`);
+  }
+  const ocupados = new Set((existentes || []).map((r) => r.slot));
+  const slot = SLOTS_SOCIAL.find((s) => !ocupados.has(s));
+  if (!slot) { res.status(409); throw new Error(`Ese día ya está lleno.`); }
+  const { data, error } = await supabaseAdmin.from('contenido_social')
+    .update({ fecha, slot }).eq('id', req.params.id).select('*').single();
+  if (error) { res.status(500); throw new Error(error.message); }
+  res.json(data);
+});
+
 // GET /video-studio/social?estado=&formato=&marca=
 export const listSocial = asyncHandler(async (req, res) => {
   guard(res);
