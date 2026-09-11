@@ -151,13 +151,14 @@ export const createSocial = asyncHandler(async (req, res) => {
   const platsIn = Array.isArray(req.body.plataformas) ? req.body.plataformas.filter((p) => PLATS_OK.includes(p)) : [];
   const plataformas = platsIn.length ? [...new Set(platsIn)] : ['ig', 'fb'];
 
+  const formato = String(req.body.formato || 'CARRUSEL');
   const fila = {
     dia: 0,
     fecha,
     slot,
     hora: `${HORA_NUEVA}:00`,
     pilar: String(req.body.pilar || 'Manual'),
-    formato: String(req.body.formato || 'CARRUSEL'),
+    formato,
     tema: String(req.body.tema || 'Nueva publicación'),
     titular: '',
     laminas: [],
@@ -166,6 +167,7 @@ export const createSocial = asyncHandler(async (req, res) => {
     hashtags: '',
     imagenes: [],
     plataformas,
+    historia: formato !== 'CARRUSEL',   // Historias ON por defecto salvo carruseles
     estado: 'borrador',
     marca,
   };
