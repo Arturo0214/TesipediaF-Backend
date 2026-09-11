@@ -253,7 +253,9 @@ export const getSocialPosts = asyncHandler(async (req, res) => {
         posts = (data.data || []).map(p => ({
             id: p.id, likes: p.like_count || 0, comments: p.comments_count || 0,
             type: p.media_type || 'IMAGE', caption: p.caption || '',
-            date: p.timestamp, url: p.permalink || '', mediaUrl: p.media_url || p.thumbnail_url || '',
+            date: p.timestamp, url: p.permalink || '',
+            // Para VIDEO/REELS el media_url es el archivo de video (rompe <img>): usamos la portada.
+            mediaUrl: (p.media_type === 'VIDEO' ? (p.thumbnail_url || p.media_url) : (p.media_url || p.thumbnail_url)) || '',
         }));
     } else if (platform === 'facebook') {
         const r = await fetch(`https://graph.facebook.com/v21.0/${PAGE_ID}/posts?fields=message,created_time,full_picture,likes.summary(true),comments.summary(true),shares,permalink_url&limit=20&access_token=${pageToken}`);
@@ -268,6 +270,24 @@ export const getSocialPosts = asyncHandler(async (req, res) => {
 
     setCache(`posts_${platform}`, posts);
     res.json({ success: true, data: posts });
+});
+
+// GET /social/img?u=<url>  → proxy de imágenes de IG/FB CDN.
+// Sus URLs firmadas expiran y bloquean hotlink en <img>; las servimos desde el backend.
+// PÚBLICO (un <img> no manda JWT) pero con allowlist de host para evitar SSRF.
+export const imgProxy = asyncHandler(async (req, res) => {
+    const u = String(req.query.u || '');
+    let host;
+    try { host = new URL(u).hostname; } catch { res.status(400); return res.end('URL inválida'); }
+    const permitido = /(^|\.)cdninstagram\.com$/i.test(host) || /(^|\.)fbcdn\.net$/i.test(host);
+    if (!permitido) { res.status(400); return res.end('Host no permitido'); }
+    try {
+        const r = await fetch(u);
+        if (!r.ok) { res.status(502); return res.end(); }
+        res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+        res.set('Cache-Control', 'public, max-age=21600');
+        res.send(Buffer.from(await r.arrayBuffer()));
+    } catch { res.status(502); res.end(); }
 });
 
 // ════════════════════════════════════════

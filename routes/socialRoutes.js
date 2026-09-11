@@ -1,6 +1,6 @@
 import express from 'express';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
-import { getSocialMetrics, getSocialPosts, getSocialInsights, publishPost, generateImage, uploadImage } from '../controllers/socialController.js';
+import { getSocialMetrics, getSocialPosts, getSocialInsights, publishPost, generateImage, uploadImage, imgProxy } from '../controllers/socialController.js';
 import {
     listContent, createContent, importContent, updateContent, deleteContent,
     listCompetitors, addCompetitor, removeCompetitor, scanCompetitors,
@@ -9,6 +9,7 @@ import {
 
 const router = express.Router();
 
+router.get('/img', imgProxy); // público: proxy de imágenes CDN para <img> (no puede mandar JWT)
 router.get('/metrics', protect, adminOnly, getSocialMetrics);
 router.get('/insights/:platform', protect, adminOnly, getSocialInsights);
 router.get('/posts/:platform', protect, adminOnly, getSocialPosts);
