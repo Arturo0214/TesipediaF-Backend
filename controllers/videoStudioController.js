@@ -506,13 +506,19 @@ const LI_VERSION = '202608';
 const LINKEDIN = {
   Contratado: {
     token: process.env.CONTRATADO_LINKEDIN_ACCESS_TOKEN,
-    author: process.env.CONTRATADO_LINKEDIN_AUTHOR,
+    // Para publicar en la PÁGINA de empresa se usa el URN de organización (no el personal).
+    // Requiere un token con Community Management API (w_organization_social) — en trámite.
+    author: process.env.CONTRATADO_LINKEDIN_ORG || 'urn:li:organization:146333900',
     version: LI_VERSION,
+    // LinkedIn queda EN PAUSA hasta que se apruebe el acceso de Página: pon
+    // CONTRATADO_LINKEDIN_PAGE_READY=1 (y el token de organización) cuando esté listo.
+    pageReady: process.env.CONTRATADO_LINKEDIN_PAGE_READY === '1',
   },
 };
 function getLinkedInCtx(marca) {
   const c = LINKEDIN[marca];
   if (!c || !c.token || !c.author) return null;
+  if (!c.pageReady) return null; // pausado hasta tener acceso de Página (no publica al perfil personal)
   return c;
 }
 // La Posts API usa "Little Text": hay que escapar reservados. NO escapamos '#'
