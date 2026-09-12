@@ -499,11 +499,15 @@ function playableVideoUrl(url) {
 }
 
 // ── LinkedIn (por marca) ──
+// Versión ACTIVA de la LinkedIn REST API (formato YYYYMM). LinkedIn desactiva las versiones
+// tras ~1 año, así que hay que subirla ~1 vez al año. NO usar el env viejo (traía 202506 =
+// junio 2025, ya desactivada → error "version not active"). Bumpear cuando falle.
+const LI_VERSION = '202608';
 const LINKEDIN = {
   Contratado: {
     token: process.env.CONTRATADO_LINKEDIN_ACCESS_TOKEN,
     author: process.env.CONTRATADO_LINKEDIN_AUTHOR,
-    version: process.env.CONTRATADO_LINKEDIN_VERSION || '202506',
+    version: LI_VERSION,
   },
 };
 function getLinkedInCtx(marca) {
