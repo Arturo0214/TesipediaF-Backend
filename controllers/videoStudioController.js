@@ -786,7 +786,9 @@ export async function runSocialPublishing() {
       const patch = {}; const errores = [];
       if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, ctx) : await publicarFB(imgs, caption, ctx); } catch (e) { errores.push(`FB: ${e.message}`); } }
       if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, ctx) : await publicarIG(imgs, caption, ctx); } catch (e) { errores.push(`IG: ${e.message}`); } }
-      if (plats.includes('linkedin') && !esVideo) {
+      // LinkedIn APAGADO también en el scheduler (decisión del usuario 2026-09-14).
+      // Reactivar con LINKEDIN_INSTANT_ENABLED=1. Sin el gate, el scheduler publicaba a LinkedIn.
+      if (plats.includes('linkedin') && !esVideo && LINKEDIN_INSTANT_ENABLED) {
         const liCtx = getLinkedInCtx(marca);
         if (liCtx) { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
       }
