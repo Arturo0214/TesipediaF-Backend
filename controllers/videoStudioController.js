@@ -503,6 +503,9 @@ function playableVideoUrl(url) {
 // tras ~1 año, así que hay que subirla ~1 vez al año. NO usar el env viejo (traía 202506 =
 // junio 2025, ya desactivada → error "version not active"). Bumpear cuando falle.
 const LI_VERSION = '202608';
+// Post INSTANTÁNEO a LinkedIn (al publicar desde el Estudio) DESACTIVADO por defecto.
+// Para reactivarlo pon LINKEDIN_INSTANT_ENABLED=1 en el backend. (El scheduler es aparte.)
+const LINKEDIN_INSTANT_ENABLED = process.env.LINKEDIN_INSTANT_ENABLED === '1';
 const LINKEDIN = {
   Contratado: {
     token: process.env.CONTRATADO_LINKEDIN_ACCESS_TOKEN,
@@ -609,12 +612,14 @@ export const publishSocial = asyncHandler(async (req, res) => {
   const errores = [];
   if (plats.includes('fb')) { try { patch.fb_post_id = esVideo ? await publicarVideoFB(p.video_url, caption, ctx) : await publicarFB(imgs, caption, ctx); } catch (e) { errores.push(`FB: ${e.message}`); } }
   if (plats.includes('ig')) { try { patch.ig_media_id = esVideo ? await publicarVideoIG(p.video_url, caption, ctx) : await publicarIG(imgs, caption, ctx); } catch (e) { errores.push(`IG: ${e.message}`); } }
-  if (plats.includes('linkedin')) {
+  if (plats.includes('linkedin') && LINKEDIN_INSTANT_ENABLED) {
     const liCtx = getLinkedInCtx(p.marca || 'Tesipedia');
     if (!liCtx) errores.push('LinkedIn: sin credenciales para esta marca');
     else if (esVideo) errores.push('LinkedIn: el video aún no está soportado (solo imágenes)');
     else { try { patch.linkedin_id = await publicarLinkedIn(imgs, caption, liCtx); } catch (e) { errores.push(`LinkedIn: ${e.message}`); } }
   }
+  // Si LinkedIn está en la pieza pero el post instantáneo está desactivado, se ignora en silencio
+  // (no cuenta como error): FB/IG se publican normal y el estado no se marca en error por LinkedIn.
   if (p.historia) await publicarHistorias(p, imgs, esVideo, ctx, plats, errores);
   const ok = patch.fb_post_id || patch.ig_media_id || patch.linkedin_id;
   patch.estado = ok ? 'publicado' : 'error';
