@@ -151,3 +151,39 @@ export const getStoreStats = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/**
+ * GET /guias/admin/whatsapp-leads  (protect + adminOnly)
+ * Embudo de leads de WhatsApp de la campaña de guías (Sofia), leídos de Supabase.
+ * Estados: guia_explorando → guia_link_enviado → guia_pagada (+ guia_upsell).
+ */
+export const getWhatsappGuideLeads = async (req, res) => {
+  const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  const KEY = process.env.SUPABASE_SERVICE_KEY || '';
+  if (!SUPABASE_URL || !KEY) return res.status(503).json({ error: 'Supabase no configurado' });
+  const ESTADOS = ['guia_explorando', 'guia_link_enviado', 'guia_pagada', 'guia_upsell'];
+  try {
+    const q = `estado_sofia=in.(${ESTADOS.join(',')})`;
+    const sel = 'select=wa_id,nombre,estado_sofia,updated_at,ultimo_mensaje_preview';
+    const url = `${SUPABASE_URL}/rest/v1/leads?${q}&${sel}&order=updated_at.desc&limit=200`;
+    const r = await fetch(url, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } });
+    const rows = await r.json();
+    const list = Array.isArray(rows) ? rows : [];
+    const funnel = ESTADOS.reduce((a, e) => { a[e] = 0; return a; }, {});
+    for (const l of list) if (funnel[l.estado_sofia] != null) funnel[l.estado_sofia] += 1;
+    res.json({
+      total: list.length,
+      funnel, // { guia_explorando, guia_link_enviado, guia_pagada, guia_upsell }
+      leads: list.map((l) => ({
+        waId: l.wa_id,
+        nombre: l.nombre || 'Lead',
+        estado: l.estado_sofia,
+        ultimoMensaje: l.ultimo_mensaje_preview || '',
+        actualizado: l.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[guias whatsapp-leads] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+};

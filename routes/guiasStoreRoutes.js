@@ -6,7 +6,7 @@ import { GUIA_PRODUCTOS, getProducto } from '../config/guiaProductos.js';
 import { crearCheckout, crearCheckoutCart, verificarPago, mpWebhook, metodosDisponibles } from '../lib/guiaPagos.js';
 import { signedRawUrl } from '../lib/cloudinary.js';
 import { protect, adminOnly } from '../middleware/authMiddleware.js';
-import { getStoreStats } from '../controllers/guiasStatsController.js';
+import { getStoreStats, getWhatsappGuideLeads } from '../controllers/guiasStatsController.js';
 import sendEmail from '../utils/emailSender.js';
 
 // Fuerza https en los enlaces (descarga/gracias) que van al cliente por correo o WhatsApp.
@@ -18,6 +18,9 @@ const MAX_CART_ITEMS = 30; // techo defensivo del carrito
 // Webhook de n8n (Sofia) para entregar la guía dentro del chat de WhatsApp cuando la compra
 // nació en la conversación. Si no está configurado, la entrega por correo sigue igual.
 const DELIVERY_WEBHOOK = (process.env.GUIAS_DELIVERY_WEBHOOK_URL || '').trim();
+// Supabase (tabla `leads` de Sofia): para mover el lead a estado 'guia_pagada' al confirmarse el pago.
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
 const router = express.Router();
 
@@ -136,8 +139,8 @@ async function registrarCompra({ productId, items = [], email, monto, provider, 
   const wa = String(waId || '').replace(/\D/g, '');
   const existing = await GuidePurchase.findOne({ ref });
   if (existing && existing.status === 'paid') {
-    // Ya procesado: reintenta la entrega por WhatsApp si quedó pendiente (idempotente).
-    if (wa && !existing.notifiedWaAt) await notificarEntregaWhatsApp(existing);
+    // Ya procesado: marca el lead pagado y reintenta la entrega por WhatsApp si quedó pendiente.
+    if (wa) { await marcarLeadPagado(wa); if (!existing.notifiedWaAt) await notificarEntregaWhatsApp(existing); }
     return existing;
   }
 
@@ -175,10 +178,37 @@ async function registrarCompra({ productId, items = [], email, monto, provider, 
     }
   }
 
-  // Entrega dentro del chat de Sofia (WhatsApp) si la compra nació en la conversación.
-  if (purchase.waId && !purchase.notifiedWaAt) await notificarEntregaWhatsApp(purchase);
+  // Embudo + entrega dentro del chat de Sofia (WhatsApp) si la compra nació en la conversación.
+  if (purchase.waId) {
+    await marcarLeadPagado(purchase.waId);
+    if (!purchase.notifiedWaAt) await notificarEntregaWhatsApp(purchase);
+  }
 
   return purchase;
+}
+
+// Mueve el lead de WhatsApp al estado 'guia_pagada' en Supabase (embudo de la campaña de guías).
+// Fire-and-forget: no bloquea la entrega si Supabase falla.
+async function marcarLeadPagado(waId) {
+  const wa = String(waId || '').replace(/\D/g, '');
+  if (!SUPABASE_URL || !SUPABASE_KEY || !wa) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${encodeURIComponent(wa)}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ estado_sofia: 'guia_pagada', updated_at: new Date().toISOString() }),
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(t));
+  } catch (e) {
+    console.error('[guias] no se pudo marcar lead guia_pagada:', e.message);
+  }
 }
 
 // Avisa a n8n (Sofia) que un pago fue confirmado para entregar la guía en el chat.
@@ -344,6 +374,9 @@ router.get('/mis-compras', protect, async (req, res) => {
 
 /* ───────────── Admin: métricas de la tienda (Mercado Pago) ───────────── */
 router.get('/admin/stats', protect, adminOnly, getStoreStats);
+
+/* ───────────── Admin: leads de WhatsApp de la campaña de guías (embudo) ───────────── */
+router.get('/admin/whatsapp-leads', protect, adminOnly, getWhatsappGuideLeads);
 
 /* ───────────── Webhook MercadoPago ───────────── */
 router.post('/webhook/mp', (req, res) => mpWebhook(req, res, registrarCompra));
