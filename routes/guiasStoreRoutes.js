@@ -97,12 +97,14 @@ router.post('/checkout-cart', checkoutLimiter, async (req, res) => {
     const rawItems = req.body?.items;
     const email = strParam(req.body?.email).toLowerCase();
     const metodo = strParam(req.body?.metodo) || 'mercadopago';
+    // Opcional: número de WhatsApp cuando la compra nace en el chat de Sofia (solo dígitos).
+    const waId = strParam(req.body?.waId).replace(/\D/g, '');
     if (!Array.isArray(rawItems) || !rawItems.length) return res.status(400).json({ error: 'Tu carrito está vacío.' });
     // Solo ids string, sin duplicados y con techo defensivo.
     const items = [...new Set(rawItems.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean))].slice(0, MAX_CART_ITEMS);
     if (!items.length) return res.status(400).json({ error: 'Tu carrito está vacío.' });
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Correo inválido.' });
-    const { url } = await crearCheckoutCart({ items, email, metodo });
+    const { url } = await crearCheckoutCart({ items, email, metodo, waId });
     res.json({ url });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || 'No se pudo iniciar el pago.' });
