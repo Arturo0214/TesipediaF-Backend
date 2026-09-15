@@ -13,6 +13,9 @@ const FRONT = (process.env.CLIENT_URL || process.env.FRONT_URL || 'https://tesip
 const API_BASE = (process.env.PUBLIC_API_URL || process.env.BACKEND_URL || 'https://api.tesipedia.com').replace(/\/$/, '');
 const DOWNLOAD_DAYS = 30;
 const MAX_CART_ITEMS = 30; // techo defensivo del carrito
+// Webhook de n8n (Sofia) para entregar la guía dentro del chat de WhatsApp cuando la compra
+// nació en la conversación. Si no está configurado, la entrega por correo sigue igual.
+const DELIVERY_WEBHOOK = (process.env.GUIAS_DELIVERY_WEBHOOK_URL || '').trim();
 
 const router = express.Router();
 
@@ -75,11 +78,13 @@ router.post('/checkout', checkoutLimiter, async (req, res) => {
     const productId = strParam(req.body?.productId);
     const email = strParam(req.body?.email).toLowerCase();
     const metodo = strParam(req.body?.metodo) || 'mercadopago';
+    // Opcional: número de WhatsApp cuando la compra nace en el chat de Sofia (solo dígitos).
+    const waId = strParam(req.body?.waId).replace(/\D/g, '');
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Correo inválido.' });
     }
     // El precio SIEMPRE se resuelve en el backend a partir del productId (nunca del cliente).
-    const { url } = await crearCheckout({ productId, email, metodo });
+    const { url } = await crearCheckout({ productId, email, metodo, waId });
     res.json({ url });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || 'No se pudo iniciar el pago.' });
@@ -120,31 +125,39 @@ function nombreDe(purchase) {
 }
 
 /* ───────────── Persistir compra + entregar (idempotente por ref) ───────────── */
-async function registrarCompra({ productId, items = [], email, monto, provider, ref }) {
+async function registrarCompra({ productId, items = [], email, monto, provider, ref, waId = null }) {
   if (!productId || !email || !ref) return null;
   const p = getProducto(productId);
   const nombre = (items && items.length) ? items.map((id) => getProducto(id)?.nombre || id).join(' + ') : (p?.nombre || productId);
+  const wa = String(waId || '').replace(/\D/g, '');
   const existing = await GuidePurchase.findOne({ ref });
-  if (existing && existing.status === 'paid') return existing; // ya procesado
+  if (existing && existing.status === 'paid') {
+    // Ya procesado: reintenta la entrega por WhatsApp si quedó pendiente (idempotente).
+    if (wa && !existing.notifiedWaAt) await notificarEntregaWhatsApp(existing);
+    return existing;
+  }
 
   const token = existing?.downloadToken || crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + DOWNLOAD_DAYS * 24 * 60 * 60 * 1000);
 
+  const set = {
+    productId,
+    items: items || [],
+    productName: nombre,
+    email: String(email).toLowerCase().trim(),
+    amount: monto || p?.precio || 0,
+    currency: p?.currency || 'MXN',
+    provider,
+    ref,
+    status: 'paid',
+    downloadToken: token,
+    expiresAt,
+  };
+  if (wa) set.waId = wa; // solo lo escribimos si llegó, para no pisar un valor previo
+
   const purchase = await GuidePurchase.findOneAndUpdate(
     { ref },
-    {
-      productId,
-      items: items || [],
-      productName: nombre,
-      email: String(email).toLowerCase().trim(),
-      amount: monto || p?.precio || 0,
-      currency: p?.currency || 'MXN',
-      provider,
-      ref,
-      status: 'paid',
-      downloadToken: token,
-      expiresAt,
-    },
+    set,
     { new: true, upsert: true, setDefaultsOnInsert: true },
   );
 
@@ -157,7 +170,50 @@ async function registrarCompra({ productId, items = [], email, monto, provider, 
       console.error('[guias] error enviando email:', e.message);
     }
   }
+
+  // Entrega dentro del chat de Sofia (WhatsApp) si la compra nació en la conversación.
+  if (purchase.waId && !purchase.notifiedWaAt) await notificarEntregaWhatsApp(purchase);
+
   return purchase;
+}
+
+// Avisa a n8n (Sofia) que un pago fue confirmado para entregar la guía en el chat.
+// Fire-and-forget: si falla, la compra ya quedó registrada y el correo salió igual.
+async function notificarEntregaWhatsApp(purchase) {
+  if (!DELIVERY_WEBHOOK || !purchase?.waId) return;
+  try {
+    const links = archivosDe(purchase).map((a, idx) => ({
+      label: a.label,
+      url: `${API_BASE}/guias/descargar/${purchase.downloadToken}/${idx}`,
+    }));
+    const payload = {
+      event: 'guia_pagada',
+      waId: purchase.waId,
+      productId: purchase.productId,
+      productName: purchase.productName || nombreDe(purchase),
+      email: purchase.email,
+      amount: purchase.amount,
+      token: purchase.downloadToken,
+      links,
+      graciasUrl: `${FRONT}/guias/gracias?product=${purchase.productId}&token=${purchase.downloadToken}`,
+    };
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const resp = await fetch(DELIVERY_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(t));
+    if (resp.ok) {
+      purchase.notifiedWaAt = new Date();
+      await purchase.save();
+    } else {
+      console.error('[guias] webhook entrega WhatsApp respondió', resp.status);
+    }
+  } catch (e) {
+    console.error('[guias] error avisando entrega WhatsApp:', e.message);
+  }
 }
 
 async function enviarGuiaEmail(purchase) {
@@ -212,6 +268,7 @@ router.get('/verificar', verifyLimiter, async (req, res) => {
       monto: info.monto,
       provider: info.provider,
       ref: info.ref,
+      waId: info.waId || null,
     });
     if (!purchase) return res.status(500).json({ error: 'No se pudo registrar la compra.' });
     res.json(respuestaCompra(purchase));

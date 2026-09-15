@@ -23,6 +23,11 @@ const guidePurchaseSchema = new mongoose.Schema({
     downloadCount: { type: Number, default: 0 },
     emailedAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null },
+    // Número de WhatsApp del comprador (solo dígitos, formato wa_id) cuando la compra
+    // se originó en el chat de Sofia. Permite entregar la guía dentro de la conversación.
+    waId: { type: String, default: null, index: true },
+    // Marca del aviso de entrega enviado a n8n → evita entregar dos veces en el chat.
+    notifiedWaAt: { type: Date, default: null },
 }, { timestamps: true });
 
 const GuidePurchase = mongoose.model('GuidePurchase', guidePurchaseSchema);
