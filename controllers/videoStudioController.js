@@ -119,7 +119,7 @@ export const publishVideo = asyncHandler(async (req, res) => {
 //  (frase, carrusel, checklist, comparativa, diccionario, prueba, oferta).
 // ============================================================
 const ESTADOS_SOCIAL = ['borrador', 'programado', 'publicado', 'error'];
-const FORMATOS_SOCIAL = ['FRASE', 'CARRUSEL', 'CHECKLIST', 'COMPARATIVA', 'DICCIONARIO', 'PRUEBA', 'OFERTA', 'VIDEO'];
+const FORMATOS_SOCIAL = ['FRASE', 'CARRUSEL', 'CHECKLIST', 'COMPARATIVA', 'DICCIONARIO', 'PRUEBA', 'OFERTA', 'VIDEO', 'meme', 'VACANTE'];
 const SLOTS_SOCIAL = ['A', 'B', 'C', 'D', 'E', 'F'];
 const MAX_POR_DIA = 4;              // máximo de publicaciones por día
 const HORA_NUEVA = '17:00';         // hora fija para publicaciones agregadas manualmente (5 PM)
@@ -401,7 +401,7 @@ async function esperarContenedorIG(containerId, token, { intentos = 12, esperaMs
     const r = await graph(containerId, { fields: 'status_code,status' }, 'GET', token);
     if (r.status_code === 'FINISHED') return;
     if (r.status_code === 'ERROR' || r.status_code === 'EXPIRED') {
-      throw new Error(`contenedor IG ${r.status_code}: ${r.status || 'sin detalle'} (revisa que image_url sea público y ≤8MB, JPG)`);
+      throw new Error(`contenedor IG ${r.status_code}: ${r.status || 'sin detalle'} (media no pública/inaccesible o fuera de specs — imagen ≤8MB JPG, o video H.264/AAC ≤1GB)`);
     }
     await sleep(esperaMs); // IN_PROGRESS → seguir esperando
   }
@@ -492,10 +492,31 @@ async function publicarHistorias(p, imgs, esVideo, ctx, plats, errores) {
 // Arregla también registros viejos guardados con la URL original (.mov/HEVC).
 function playableVideoUrl(url) {
   if (!url || !url.includes('res.cloudinary.com') || !url.includes('/video/upload/')) return url;
-  if (url.includes('/upload/f_') || url.includes('/upload/vc_')) return url;
+  // fl_faststart mueve el moov atom al inicio → el fetcher de IG/FB puede empezar
+  // a leer de inmediato (sin él, Meta suele fallar con error 2207076 "media download").
+  if (url.includes('/upload/f_') || url.includes('/upload/vc_')) {
+    return url.includes('fl_faststart') ? url : url.replace('/video/upload/', '/video/upload/fl_faststart/');
+  }
   return url
-    .replace('/video/upload/', '/video/upload/f_mp4,vc_h264,ac_aac/')
+    .replace('/video/upload/', '/video/upload/f_mp4,vc_h264,ac_aac,fl_faststart/')
     .replace(/\.(mov|m4v|avi|mkv|webm|mpeg|mpg|3gp|hevc)$/i, '.mp4');
+}
+
+// Pre-calienta la transcodificación de Cloudinary: pide el archivo derivado una vez
+// desde el servidor para que quede generado/cacheado ANTES de dárselo a Meta. Evita
+// la carrera donde IG intenta bajar el video mientras Cloudinary aún lo genera (2207076).
+async function calentarVideo(url) {
+  const derivada = playableVideoUrl(url);
+  if (derivada === url && !derivada.includes('/upload/')) return derivada;
+  try {
+    for (let i = 0; i < 6; i++) {
+      const r = await fetch(derivada, { method: 'GET', headers: { Range: 'bytes=0-1048575' } });
+      if (r.status === 200 || r.status === 206) { await r.arrayBuffer().catch(() => {}); return derivada; }
+      if (r.status === 423 || r.status >= 500) { await sleep(4000); continue; } // 423 = Cloudinary procesando
+      return derivada;
+    }
+  } catch { /* best-effort: si el warm-up falla, igual mandamos la URL a Meta */ }
+  return derivada;
 }
 
 // ── LinkedIn (por marca) ──
@@ -586,9 +607,23 @@ async function publicarVideoFB(videoUrl, caption, ctx) {
 }
 async function publicarVideoIG(videoUrl, caption, ctx) {
   const { igUserId, token } = ctx;
-  const creation = (await graph(`${igUserId}/media`, { media_type: 'REELS', video_url: playableVideoUrl(videoUrl), caption }, 'POST', token)).id;
-  await esperarContenedorIG(creation, token, { intentos: 24, esperaMs: 5000 }); // el video tarda más en procesar
-  let ultimoErr;
+  const url = await calentarVideo(videoUrl); // asegura que Cloudinary ya sirva el derivado
+  // El contenedor REELS puede caer en ERROR 2207076 ("media download") si IG no alcanza
+  // a bajar el video. Suele ser transitorio → reintentamos crear el contenedor de cero.
+  let creation, ultimoErr;
+  for (let intento = 0; intento < 3; intento++) {
+    try {
+      creation = (await graph(`${igUserId}/media`, { media_type: 'REELS', video_url: url, caption }, 'POST', token)).id;
+      await esperarContenedorIG(creation, token, { intentos: 24, esperaMs: 5000 }); // el video tarda más en procesar
+      ultimoErr = null;
+      break;
+    } catch (e) {
+      ultimoErr = e; creation = null;
+      if (!/2207076|media download|ERROR/i.test(e.message)) throw e; // error no transitorio → aborta
+      await sleep(6000);
+    }
+  }
+  if (!creation) throw ultimoErr;
   for (let i = 0; i < 3; i++) {
     try { return (await graph(`${igUserId}/media_publish`, { creation_id: creation }, 'POST', token)).id; }
     catch (e) { ultimoErr = e; await sleep(4000); }
