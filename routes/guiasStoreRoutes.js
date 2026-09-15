@@ -9,8 +9,10 @@ import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import { getStoreStats } from '../controllers/guiasStatsController.js';
 import sendEmail from '../utils/emailSender.js';
 
-const FRONT = (process.env.CLIENT_URL || process.env.FRONT_URL || 'https://tesipedia.com').replace(/\/$/, '');
-const API_BASE = (process.env.PUBLIC_API_URL || process.env.BACKEND_URL || 'https://api.tesipedia.com').replace(/\/$/, '');
+// Fuerza https en los enlaces (descarga/gracias) que van al cliente por correo o WhatsApp.
+const httpsify = (u) => u.replace(/\/$/, '').replace(/^http:\/\//i, 'https://');
+const FRONT = httpsify(process.env.CLIENT_URL || process.env.FRONT_URL || 'https://tesipedia.com');
+const API_BASE = httpsify(process.env.PUBLIC_API_URL || process.env.BACKEND_URL || 'https://api.tesipedia.com');
 const DOWNLOAD_DAYS = 30;
 const MAX_CART_ITEMS = 30; // techo defensivo del carrito
 // Webhook de n8n (Sofia) para entregar la guía dentro del chat de WhatsApp cuando la compra
