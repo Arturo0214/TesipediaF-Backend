@@ -492,13 +492,13 @@ async function publicarHistorias(p, imgs, esVideo, ctx, plats, errores) {
 // Arregla también registros viejos guardados con la URL original (.mov/HEVC).
 function playableVideoUrl(url) {
   if (!url || !url.includes('res.cloudinary.com') || !url.includes('/video/upload/')) return url;
-  // fl_faststart mueve el moov atom al inicio → el fetcher de IG/FB puede empezar
-  // a leer de inmediato (sin él, Meta suele fallar con error 2207076 "media download").
-  if (url.includes('/upload/f_') || url.includes('/upload/vc_')) {
-    return url.includes('fl_faststart') ? url : url.replace('/video/upload/', '/video/upload/fl_faststart/');
-  }
+  // Cloudinary dejó de aceptar fl_faststart (400 "Invalid flag in transformation:
+  // faststart") y eso tumbaba todos los reels programados. No hace falta: los MP4
+  // derivados de Cloudinary ya salen con el moov atom al inicio.
+  url = url.replace('/fl_faststart/', '/').replace('fl_faststart,', '').replace(',fl_faststart', '');
+  if (url.includes('/upload/f_') || url.includes('/upload/vc_')) return url;
   return url
-    .replace('/video/upload/', '/video/upload/f_mp4,vc_h264,ac_aac,fl_faststart/')
+    .replace('/video/upload/', '/video/upload/f_mp4,vc_h264,ac_aac/')
     .replace(/\.(mov|m4v|avi|mkv|webm|mpeg|mpg|3gp|hevc)$/i, '.mp4');
 }
 
