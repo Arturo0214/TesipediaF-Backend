@@ -368,7 +368,7 @@ export const getLeads = asyncHandler(async (req, res) => {
   // Nota: se necesita historial de todos para que el frontend pueda ordenar correctamente
 
   const metaColumns = [
-    'wa_id', 'nombre', 'etapa', 'precio', 'datos_cotizacion',
+    'wa_id', 'id', 'cotizacion_id', 'nombre', 'etapa', 'precio', 'datos_cotizacion',
     'created_at', 'updated_at', 'estado_sofia', 'paso_sofia',
     'carrera', 'nivel', 'tipo_servicio', 'tipo_proyecto',
     'paginas', 'paginas_avance', 'tipo_trabajo', 'fecha_entrega',

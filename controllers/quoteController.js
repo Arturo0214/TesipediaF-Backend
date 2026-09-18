@@ -14,6 +14,7 @@ import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
 import { generarEsquemaPago } from '../utils/esquemaPago.js';
 import syncHubSpotContact from '../utils/syncHubSpotContact.js';
+import { linkGeneratedQuoteToLead } from '../utils/linkQuoteLead.js';
 import { notifyQuoteSent, notifyNewClient } from '../utils/sendWhatsAppNotification.js';
 import Project from '../models/Project.js';
 import { autoSyncProject, autoSyncPaymentSchedule } from './googleCalendarController.js';
@@ -1218,6 +1219,15 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
     const newQuote = await GeneratedQuote.create(quoteData);
 
     console.log('✅ Cotización generada guardada con ID:', newQuote._id);
+
+    // 🔗 Vincular por ID con el lead de Supabase (por waId si viene de Sofia, o por teléfono).
+    // No bloquea la respuesta si falla; newQuote queda con leadId/waId si hubo match.
+    try {
+      const link = await linkGeneratedQuoteToLead(newQuote, { waId: req.body.waId || req.body.wa_id });
+      if (link) console.log('🔗 Cotización vinculada al lead:', link.leadId, link.waId);
+    } catch (e) {
+      console.error('[saveGeneratedQuote] link error:', e.message);
+    }
 
     // Sync contact to HubSpot if we have an email
     if (quoteData.clientEmail) {

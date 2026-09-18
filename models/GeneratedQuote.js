@@ -20,6 +20,17 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: String,
             default: '',
         },
+        // Vinculación por ID con el lead de Supabase (independiente del teléfono).
+        leadId: {
+            type: String,   // = leads.id (uuid) en Supabase
+            default: null,
+            index: true,
+        },
+        waId: {
+            type: String,   // = leads.wa_id (clave denormalizada de apoyo)
+            default: null,
+            index: true,
+        },
         tipoTrabajo: {
             type: String,
             required: true,
