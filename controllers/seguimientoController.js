@@ -82,7 +82,8 @@ export const getSeguimientos = asyncHandler(async (req, res) => {
     return {
       type: 'quote',
       id: String(q._id),
-      cliente: q.clientName || 'Cliente',
+      cliente: seg?.nombre || q.clientName || 'Cliente',
+      nombre: seg?.nombre || '',
       celular: proj?.clientPhone || q.clientPhone || '',
       email: proj?.clientEmail || q.clientEmail || '',
       vendedor: seg?.vendedor || q.vendedor || '',
@@ -145,14 +146,15 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
   if (fechaEntrega !== undefined) doc.fechaEntrega = fechaEntrega || null;
   if (estado !== undefined) doc.estado = estado;
+  if (nombre !== undefined) doc.nombre = nombre;
   await doc.save();
-  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado });
+  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre });
 });
 
 /* ─────────────── POST /:type/:id/archivo (upload Cloudinary) ─────────────── */

@@ -5,6 +5,7 @@ import {
   getLeads,
   getLeadByWaId,
   getLeadsStatus,
+  getLeadCampaigns,
   getLeadsStats,
   getWindowStatus,
   toggleModoHumano,
@@ -55,6 +56,7 @@ router.use(adminOnly);
 // Leer leads / conversaciones
 router.get('/leads', getLeads);
 router.get('/leads-status', getLeadsStatus);
+router.get('/leads-campaigns', getLeadCampaigns);
 router.get('/leads-diario', getLeadsDiario);
 router.get('/leads/:waId', getLeadByWaId);
 router.get('/leads/:waId/window-status', getWindowStatus);

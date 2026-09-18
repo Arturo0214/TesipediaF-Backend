@@ -29,6 +29,7 @@ const seguimientoSchema = new mongoose.Schema({
   payment: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment', default: null, index: true },
   project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null, index: true },
   // Overrides manuales (opcionales; si están vacíos se usa el dato en vivo del pago/proyecto)
+  nombre: { type: String, default: '' },   // nombre editable del cliente (para "S/T" o sin nombre)
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {

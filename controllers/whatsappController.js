@@ -396,16 +396,17 @@ export const getLeads = asyncHandler(async (req, res) => {
 
   // ── Filtros server-side (query params) ──
   const { estado, atendido, fecha, search } = req.query;
+  const hasCampania = req.query.campania && req.query.campania !== 'all';
   if (estado && estado !== 'all') {
     if (estado === 'sin_estado') {
       andConditions.push('estado_sofia=is.null');
     } else {
       andConditions.push(`estado_sofia=eq.${encodeURIComponent(estado)}`);
     }
-  } else {
-    // Vista por defecto (sin filtro de estado): ocultar leads muertos (descartado / no_interesado).
+  } else if (!hasCampania) {
+    // Vista por defecto (sin filtro de estado ni campaña): ocultar leads muertos (descartado / no_interesado).
     // Evita que operaciones masivas (p.ej. un descarte masivo, que bumpea updated_at) entierren las
-    // conversaciones activas. Si el usuario filtra explícitamente por esos estados, sí se muestran.
+    // conversaciones activas. Si el usuario filtra explícitamente por esos estados o por campaña, sí se muestran.
     andConditions.push('estado_sofia=not.in.(descartado,no_interesado)');
   }
   if (atendido && atendido !== 'all') {
@@ -423,6 +424,17 @@ export const getLeads = asyncHandler(async (req, res) => {
   if (fecha) {
     andConditions.push(`created_at=gte.${fecha}T00:00:00`);
     andConditions.push(`created_at=lt.${fecha}T23:59:59`);
+  }
+  // ── Filtro por campaña (query param ?campania=) ──
+  //   '__guias'  → embudo de la tienda de guías (estado_sofia = guia_*)
+  //   otro valor → nombre exacto de la campaña Meta (ad_campaign_name)
+  const { campania } = req.query;
+  if (campania && campania !== 'all') {
+    if (campania === '__guias') {
+      andConditions.push('estado_sofia=in.(guia_explorando,guia_link_enviado,guia_pagada,guia_upsell)');
+    } else {
+      andConditions.push(`ad_campaign_name=eq.${encodeURIComponent(campania)}`);
+    }
   }
   // Combinar filtros para PostgREST
   // PostgREST no permite dos or=() al mismo nivel, pero sí anidados: and=(or(a,b),or(c,d))
@@ -646,6 +658,44 @@ export const toggleAutoPaused = asyncHandler(async (req, res) => {
   }
   const data = await response.json();
   res.json({ success: true, data });
+});
+
+/**
+ * GET /api/v1/whatsapp/leads-campaigns
+ * Lista las campañas Meta (ad_campaign_name) presentes en los leads, con su conteo,
+ * + el conteo del embudo de guías. Sirve para poblar el filtro de campaña del inbox.
+ */
+export const getLeadCampaigns = asyncHandler(async (req, res) => {
+  const base = `${SUPABASE_URL}/rest/v1/leads`;
+  try {
+    // Campañas Meta: traer solo la columna ad_campaign_name de leads que la tengan.
+    const campUrl = `${base}?select=ad_campaign_name&ad_campaign_name=not.is.null&limit=10000`;
+    const campResp = await fetch(campUrl, { headers: supabaseHeaders() });
+    const campRows = campResp.ok ? await campResp.json() : [];
+    const counts = {};
+    for (const r of campRows) {
+      const name = (r.ad_campaign_name || '').trim();
+      if (!name) continue;
+      counts[name] = (counts[name] || 0) + 1;
+    }
+    const campaigns = Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Conteo del embudo de guías (estado_sofia = guia_*)
+    let guias = 0;
+    try {
+      const gUrl = `${base}?select=wa_id&estado_sofia=in.(guia_explorando,guia_link_enviado,guia_pagada,guia_upsell)`;
+      const gResp = await fetch(gUrl, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact', 'Range': '0-0' } });
+      const h = gResp.headers.get('content-range');
+      guias = h ? parseInt(h.match(/\/(\d+)/)?.[1] || '0') : 0;
+    } catch { /* noop */ }
+
+    res.json({ campaigns, guias });
+  } catch (err) {
+    console.error('[getLeadCampaigns] error:', err.message);
+    res.json({ campaigns: [], guias: 0 });
+  }
 });
 
 /**
@@ -2637,6 +2687,14 @@ function stopAutoRevival() {
  * Body: { wa_id, nombre, mensaje, is_new_lead?, media_id?, media_type?, mimetype?, filename?, caption? }
  */
 export const incomingMessageWebhook = asyncHandler(async (req, res) => {
+  // Guard: si WHATSAPP_WEBHOOK_SECRET está definida, el caller (n8n) debe mandar
+  // el header X-Webhook-Secret. Sin la env var, se mantiene el comportamiento
+  // actual — así el deploy es seguro antes de configurar n8n.
+  const webhookSecret = process.env.WHATSAPP_WEBHOOK_SECRET;
+  if (webhookSecret && req.headers['x-webhook-secret'] !== webhookSecret) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+
   const { wa_id, nombre, mensaje, is_new_lead, media_id, media_type, mimetype, filename, caption } = req.body;
   if (!wa_id) return res.status(400).json({ error: 'wa_id requerido' });
 
