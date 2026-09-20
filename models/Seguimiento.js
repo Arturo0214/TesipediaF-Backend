@@ -57,6 +57,8 @@ const seguimientoSchema = new mongoose.Schema({
   // Overrides manuales (opcionales; si están vacíos se usa el dato en vivo del pago/proyecto)
   nombre: { type: String, default: '' },   // nombre editable del cliente (para "S/T" o sin nombre)
   prioritario: { type: Boolean, default: false }, // marcado a mano: sube al inicio del tablero
+  entregado: { type: Boolean, default: false },   // marcado a mano: el proyecto ya se entregó
+  entregadoEn: { type: Date, default: null },
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {

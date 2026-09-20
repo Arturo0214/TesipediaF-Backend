@@ -212,6 +212,8 @@ export async function buildSeguimientoRows() {
       cliente: seg?.nombre || q.clientName || 'Cliente',
       nombre: seg?.nombre || '',
       prioritario: !!seg?.prioritario,
+      entregado: !!seg?.entregado,
+      entregadoEn: seg?.entregadoEn || null,
       celular,
       email,
       vendedor: seg?.vendedor || q.vendedor || '',
@@ -294,7 +296,7 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado, nombre, prioritario } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
@@ -302,8 +304,12 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
   if (estado !== undefined) doc.estado = estado;
   if (nombre !== undefined) doc.nombre = nombre;
   if (prioritario !== undefined) doc.prioritario = !!prioritario;
+  if (entregado !== undefined) {
+    doc.entregado = !!entregado;
+    doc.entregadoEn = entregado ? new Date() : null;
+  }
   await doc.save();
-  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario });
+  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn });
 });
 
 /* ─────────────── POST /:type/:id/archivo (upload Cloudinary) ─────────────── */
