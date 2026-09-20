@@ -172,6 +172,12 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.Mixed,
             default: {},
         },
+        // Fecha REAL en que se marcó pagada cada parcialidad: { "0": Date, ... }
+        // Si paidAt > fecha programada, el cobro entró con atraso (indicador de cartera vencida).
+        installmentPaidAt: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {},
+        },
         // Esquema de pago detallado (para reconstruir las parcialidades en el dashboard)
         esquemaTipo: {
             type: String,

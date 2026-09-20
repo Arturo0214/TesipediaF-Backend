@@ -90,6 +90,17 @@ connectDB().then(async () => {
   } catch (err) {
     console.error('Error iniciando scheduler de redes:', err.message);
   }
+
+  // Alertas de Seguimiento (cobranza): pagos vencidos, leads sin respuesta y
+  // clientes sin seguimiento → notificaciones type 'seguimiento' (badge sidebar).
+  try {
+    const { runSeguimientoAlerts } = await import('./controllers/seguimientoController.js');
+    setTimeout(() => { runSeguimientoAlerts(app); }, 2 * 60 * 1000); // al arrancar (io ya listo)
+    setInterval(() => { runSeguimientoAlerts(app); }, 6 * 60 * 60 * 1000);
+    console.log('🔔 Alertas de Seguimiento activas (arranque + cada 6h)');
+  } catch (err) {
+    console.error('Error iniciando alertas de seguimiento:', err.message);
+  }
 });
 
 // Inicializar la app

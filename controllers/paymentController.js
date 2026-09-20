@@ -745,8 +745,18 @@ export const updateInstallmentStatus = asyncHandler(async (req, res) => {
     if (!quote.installmentStatuses) quote.installmentStatuses = {};
     quote.installmentStatuses = { ...quote.installmentStatuses, [String(installmentIndex)]: status };
     quote.markModified('installmentStatuses');
+    // Fecha real del cobro: se fija al marcar 'paid' (si no existía) y se limpia al
+    // desmarcar, para poder medir con cuántos días de atraso entró cada pago vencido.
+    const paidAtMap = { ...(quote.installmentPaidAt || {}) };
+    if (status === 'paid') {
+      if (!paidAtMap[String(installmentIndex)]) paidAtMap[String(installmentIndex)] = new Date();
+    } else {
+      delete paidAtMap[String(installmentIndex)];
+    }
+    quote.installmentPaidAt = paidAtMap;
+    quote.markModified('installmentPaidAt');
     await quote.save();
-    return res.json({ success: true, installmentStatuses: quote.installmentStatuses });
+    return res.json({ success: true, installmentStatuses: quote.installmentStatuses, installmentPaidAt: quote.installmentPaidAt });
   }
 
   if (source === 'guest') {

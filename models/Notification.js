@@ -11,6 +11,7 @@ const NOTIFICATION_TYPES = [
   'proyecto',
   'whatsapp',   // Mensajes entrantes de WhatsApp (leads)
   'lead',       // Nuevo lead creado / lead actualizado
+  'seguimiento', // Cobranza: pagos vencidos / leads sin respuesta / sin seguimiento
   'alerta',
   'info',
 ];

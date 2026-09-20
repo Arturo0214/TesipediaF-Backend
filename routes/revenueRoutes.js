@@ -25,7 +25,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   const targetYear = parseInt(year) || new Date().getFullYear();
 
   const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
-    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses paidAt updatedAt createdAt')
+    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt')
     .lean();
 
   // Proyecto vinculado: estatus (para "concluido"), avance, fecha de entrega, contacto y última nota.
@@ -80,7 +80,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
       else if (it.status === 'lost') { m.perdido += it.amount; perdido += it.amount; } // cartera perdida: no cuenta como por cobrar
       else { m.porCobrar += it.amount; porCobrar += it.amount; }
       // idx = índice real en installmentStatuses (para marcar pagado/perdido desde la matriz)
-      projInst.push({ idx: i, mes: k, fecha: it.fecha, amount: it.amount, status: it.status });
+      projInst.push({ idx: i, mes: k, fecha: it.fecha, amount: it.amount, status: it.status, paidAt: it.paidAt || null });
     });
 
     const info = projInfoByQuote[String(q._id)] || {};

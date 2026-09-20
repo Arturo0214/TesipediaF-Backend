@@ -62,12 +62,15 @@ export const buildInstallments = (q) => {
   const esquema = q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago);
   const start = new Date(q.paidAt || q.updatedAt || q.createdAt || Date.now());
   const statuses = q.installmentStatuses || {};
+  const paidDates = q.installmentPaidAt || {};
   const descFactor = 1 - ((parseFloat(q.descuentoEfectivo) || 0) / 100);
   // Estados: 'paid' (cobrado) · 'lost' (cartera perdida, ya no se cobrará) · 'pending' (por cobrar).
   const statusOf = (i) => {
     const s = statuses[String(i)];
     return s === 'paid' ? 'paid' : s === 'lost' ? 'lost' : 'pending';
   };
+  // Fecha real en que se marcó pagada (null si no se registró — pagos previos a este campo).
+  const paidAtOf = (i) => (paidDates[String(i)] ? new Date(paidDates[String(i)]) : null);
 
   // Redondea a 2 decimales sin perder centavos reales (evita 500.49999 por flotantes).
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -78,6 +81,7 @@ export const buildInstallments = (q) => {
       amount: r2((Number(p.monto) || 0) * descFactor),
       fecha: p.fecha ? new Date(`${p.fecha}T12:00:00`) : new Date(start),
       status: statusOf(i),
+      paidAt: paidAtOf(i),
     }));
   }
 
@@ -94,7 +98,7 @@ export const buildInstallments = (q) => {
     for (let i = 0; i < n; i++) {
       const amount = amounts[i] != null ? r2(amounts[i]) : r2(total / n);
       const fecha = dates[i] || new Date(start.getTime() + i * stepDays * 24 * 60 * 60 * 1000);
-      insts.push({ amount, fecha, status: statusOf(i) });
+      insts.push({ amount, fecha, status: statusOf(i), paidAt: paidAtOf(i) });
     }
     // Cuadrar al total exacto ajustando el último pago: solo absorbe el remanente real
     // cuando el texto trae montos redondeados; con montos exactos no cambia nada.
@@ -111,5 +115,6 @@ export const buildInstallments = (q) => {
     fecha: new Date(start),
     // Único: cobrado salvo que se haya marcado explícitamente pendiente o perdido
     status: statuses['0'] === 'pending' ? 'pending' : statuses['0'] === 'lost' ? 'lost' : 'paid',
+    paidAt: paidAtOf(0),
   }];
 };

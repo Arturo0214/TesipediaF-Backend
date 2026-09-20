@@ -23,6 +23,32 @@ const archivoSchema = new mongoose.Schema({
   subidoEn: { type: Date, default: Date.now },
 }, { _id: true });
 
+// Comprobante de pago ligado a UNA parcialidad (installmentIdx = índice en installmentStatuses).
+const comprobanteSchema = new mongoose.Schema({
+  installmentIdx: { type: Number, required: true },
+  url: { type: String, required: true },
+  publicId: { type: String, default: '' },
+  nombre: { type: String, default: '' },
+  size: { type: Number, default: 0 },
+  sizeOriginal: { type: Number, default: 0 }, // tamaño antes de comprimir
+  tipo: { type: String, default: '' },
+  subidoPor: { type: String, default: '' },
+  subidoEn: { type: Date, default: Date.now },
+}, { _id: true });
+
+// Acuerdo con el lead: correcciones pactadas y/o fecha de entrega comprometida.
+// fuente 'manual' = capturado desde el panel; 'fireflies' = extraído por IA de una sesión.
+const acuerdoSchema = new mongoose.Schema({
+  texto: { type: String, default: '' },          // correcciones / notas del acuerdo
+  fechaEntrega: { type: Date, default: null },   // fecha de entrega acordada
+  fuente: { type: String, enum: ['manual', 'fireflies'], default: 'manual' },
+  meetingId: { type: String, default: '' },
+  meetingTitle: { type: String, default: '' },
+  meetingDate: { type: Date, default: null },
+  autor: { type: String, default: '' },
+  creadoEn: { type: Date, default: Date.now },
+}, { _id: true });
+
 const seguimientoSchema = new mongoose.Schema({
   // Clave principal del tablero: la cotización pagada (misma fuente que Revenue/Pagos).
   quote: { type: mongoose.Schema.Types.ObjectId, ref: 'GeneratedQuote', default: null, index: true },
@@ -30,6 +56,7 @@ const seguimientoSchema = new mongoose.Schema({
   project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null, index: true },
   // Overrides manuales (opcionales; si están vacíos se usa el dato en vivo del pago/proyecto)
   nombre: { type: String, default: '' },   // nombre editable del cliente (para "S/T" o sin nombre)
+  prioritario: { type: Boolean, default: false }, // marcado a mano: sube al inicio del tablero
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {
@@ -39,6 +66,8 @@ const seguimientoSchema = new mongoose.Schema({
   },
   notas: [notaSchema],
   archivos: [archivoSchema],
+  comprobantes: [comprobanteSchema],
+  acuerdos: [acuerdoSchema],
 }, { timestamps: true });
 
 // Un seguimiento por cotización / pago / proyecto (parciales para permitir null)
