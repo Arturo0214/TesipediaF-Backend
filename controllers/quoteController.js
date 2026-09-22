@@ -1295,7 +1295,17 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   if (req.body.clientEmail !== undefined) quote.clientEmail = req.body.clientEmail;
   if (req.body.clientPhone !== undefined) quote.clientPhone = req.body.clientPhone;
 
+  // Update editable project fields (editor del visor de PDF)
+  for (const f of ['tituloTrabajo', 'tipoTrabajo', 'tipoServicio', 'carrera', 'area', 'nivelAcademico', 'extensionEstimada', 'tiempoEntrega', 'fechaEntrega', 'descripcionServicio', 'vendedor', 'metodoPago']) {
+    if (req.body[f] !== undefined) quote[f] = req.body[f];
+  }
+
   // Update price fields if provided (admin manual price editing)
+  const priceFields = ['precioBase', 'precioConDescuento', 'descuentoMonto', 'descuentoEfectivo', 'recargoMonto', 'recargoPorcentaje', 'precioConRecargo'];
+  let priceChanged = false;
+  for (const f of priceFields) {
+    if (req.body[f] !== undefined && Number(req.body[f]) !== Number(quote[f] || 0)) priceChanged = true;
+  }
   if (req.body.precioBase !== undefined) quote.precioBase = Number(req.body.precioBase);
   if (req.body.precioConDescuento !== undefined) quote.precioConDescuento = Number(req.body.precioConDescuento);
   if (req.body.descuentoMonto !== undefined) quote.descuentoMonto = Number(req.body.descuentoMonto);
@@ -1303,6 +1313,17 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   if (req.body.recargoMonto !== undefined) quote.recargoMonto = Number(req.body.recargoMonto);
   if (req.body.recargoPorcentaje !== undefined) quote.recargoPorcentaje = Number(req.body.recargoPorcentaje);
   if (req.body.precioConRecargo !== undefined) quote.precioConRecargo = Number(req.body.precioConRecargo);
+
+  // Si cambió el precio y la cotización no está pagada, regenerar el texto del
+  // esquema de pago (fuente de verdad de las parcialidades) con el total nuevo.
+  if (priceChanged && quote.status !== 'paid') {
+    try {
+      const totalEsquema = quote.precioConDescuento || quote.precioConRecargo || quote.precioBase || 0;
+      quote.esquemaPago = generarEsquemaPago(totalEsquema, quote.toObject());
+    } catch (e) {
+      console.warn('[UpdateGeneratedQuote] No se pudo regenerar esquema:', e.message);
+    }
+  }
 
   // Update status if provided
   if (newStatus) {
