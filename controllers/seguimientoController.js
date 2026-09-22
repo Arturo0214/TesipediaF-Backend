@@ -141,7 +141,7 @@ async function fetchCotizacionesIndex() {
   for (const q of all) {
     const item = {
       id: String(q._id),
-      folio: q.folio || (q.createdAt ? `COT-${String(new Date(q.createdAt).getTime()).slice(-6)}` : ''),
+      folio: q.folio || `COT-${String(q._id).slice(-6).toUpperCase()}`,
       titulo: q.tituloTrabajo || q.tipoTrabajo || 'Cotización',
       precio: q.precioConDescuento || q.precioConRecargo || q.precioBase || 0,
       status: q.status,

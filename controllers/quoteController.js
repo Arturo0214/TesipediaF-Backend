@@ -1,4 +1,5 @@
 import asyncHandler from 'express-async-handler';
+import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import Quote from '../models/Quote.js';
 import Notification from '../models/Notification.js';
@@ -1213,10 +1214,10 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
       || 0;
     quoteData.esquemaPago = generarEsquemaPago(totalEsquema, quoteData);
 
-    // Folio COT- persistido: el mismo que imprime el PDF, buscable en el panel.
-    if (!quoteData.folio || !/^COT-\d{4,8}$/.test(quoteData.folio)) {
-      quoteData.folio = `COT-${Date.now().toString().slice(-6)}`;
-    }
+    // Folio COT- = ID de la cotización (últimos 6 del _id): lo que imprime el PDF
+    // encuentra la cotización directo en el buscador del panel.
+    quoteData._id = new mongoose.Types.ObjectId();
+    quoteData.folio = `COT-${String(quoteData._id).slice(-6).toUpperCase()}`;
 
     console.log('Calculated quoteData to save:', quoteData);
 
@@ -1446,9 +1447,12 @@ export const generateAndUploadQuotePDF = async (req, res) => {
     if (data.recargoPorcentaje) data.recargoPorcentaje = Number(data.recargoPorcentaje) || 0;
     if (data.extensionEstimada) data.extensionEstimada = String(data.extensionEstimada || '');
 
-    // Folio estable: si no viene, se genera aquí y viaja al PDF (y al save si lo reenvían)
-    if (!data.folio || !/^COT-\d{4,8}$/.test(data.folio)) {
-      data.folio = `COT-${Date.now().toString().slice(-6)}`;
+    // Folio estable: preferir el del documento; si hay ID, derivarlo de ahí
+    if (!data.folio) {
+      const srcId = data._id || data.quoteId || data.id;
+      data.folio = srcId
+        ? `COT-${String(srcId).slice(-6).toUpperCase()}`
+        : `COT-${Date.now().toString().slice(-6)}`;
     }
 
     // 1. Generar el PDF en memoria
