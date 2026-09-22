@@ -1314,9 +1314,25 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
   if (req.body.recargoPorcentaje !== undefined) quote.recargoPorcentaje = Number(req.body.recargoPorcentaje);
   if (req.body.precioConRecargo !== undefined) quote.precioConRecargo = Number(req.body.precioConRecargo);
 
-  // Si cambió el precio y la cotización no está pagada, regenerar el texto del
-  // esquema de pago (fuente de verdad de las parcialidades) con el total nuevo.
-  if (priceChanged && quote.status !== 'paid') {
+  // Fechas de pago editables: si llega pagosCustom, el esquema se vuelve
+  // 'personalizado' con esas fechas/montos (los montos llegan PRE-descuento,
+  // igual que en el cotizador; generarEsquemaPago aplica descuentoEfectivo).
+  let scheduleChanged = false;
+  if (Array.isArray(req.body.pagosCustom)) {
+    const limpios = req.body.pagosCustom
+      .filter((x) => x && x.fecha && Number(x.monto) > 0)
+      .map((x) => ({ monto: Number(x.monto), fecha: String(x.fecha).slice(0, 10) }));
+    if (limpios.length) {
+      quote.pagosCustom = limpios;
+      quote.esquemaTipo = 'personalizado';
+      quote.markModified('pagosCustom');
+      scheduleChanged = true;
+    }
+  }
+
+  // Regenerar el texto del esquema (fuente de verdad de las parcialidades) si
+  // cambiaron las fechas de pago, o si cambió el precio y no está pagada.
+  if (scheduleChanged || (priceChanged && quote.status !== 'paid')) {
     try {
       const totalEsquema = quote.precioConDescuento || quote.precioConRecargo || quote.precioBase || 0;
       quote.esquemaPago = generarEsquemaPago(totalEsquema, quote.toObject());
