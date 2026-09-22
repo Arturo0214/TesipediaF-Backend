@@ -1214,10 +1214,10 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
       || 0;
     quoteData.esquemaPago = generarEsquemaPago(totalEsquema, quoteData);
 
-    // Folio COT- = ID de la cotización (últimos 6 del _id): lo que imprime el PDF
-    // encuentra la cotización directo en el buscador del panel.
-    quoteData._id = new mongoose.Types.ObjectId();
-    quoteData.folio = `COT-${String(quoteData._id).slice(-6).toUpperCase()}`;
+    // Folio COT- = publicId de la cotización (mismo uuid que Sofia vincula al lead
+    // en Supabase como leads.cotizacion_id). El PDF imprime COT-<primeros 8>.
+    quoteData.publicId = quoteData.publicId || uuidv4();
+    quoteData.folio = `COT-${String(quoteData.publicId).slice(0, 8).toUpperCase()}`;
 
     console.log('Calculated quoteData to save:', quoteData);
 
@@ -1447,11 +1447,10 @@ export const generateAndUploadQuotePDF = async (req, res) => {
     if (data.recargoPorcentaje) data.recargoPorcentaje = Number(data.recargoPorcentaje) || 0;
     if (data.extensionEstimada) data.extensionEstimada = String(data.extensionEstimada || '');
 
-    // Folio estable: preferir el del documento; si hay ID, derivarlo de ahí
+    // Folio estable: preferir el del documento; derivar del publicId si viene
     if (!data.folio) {
-      const srcId = data._id || data.quoteId || data.id;
-      data.folio = srcId
-        ? `COT-${String(srcId).slice(-6).toUpperCase()}`
+      data.folio = data.publicId
+        ? `COT-${String(data.publicId).slice(0, 8).toUpperCase()}`
         : `COT-${Date.now().toString().slice(-6)}`;
     }
 
