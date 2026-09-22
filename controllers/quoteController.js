@@ -1213,6 +1213,11 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
       || 0;
     quoteData.esquemaPago = generarEsquemaPago(totalEsquema, quoteData);
 
+    // Folio COT- persistido: el mismo que imprime el PDF, buscable en el panel.
+    if (!quoteData.folio || !/^COT-\d{4,8}$/.test(quoteData.folio)) {
+      quoteData.folio = `COT-${Date.now().toString().slice(-6)}`;
+    }
+
     console.log('Calculated quoteData to save:', quoteData);
 
     // Create new GeneratedQuote
@@ -1440,6 +1445,11 @@ export const generateAndUploadQuotePDF = async (req, res) => {
     if (data.descuentoEfectivo) data.descuentoEfectivo = Number(data.descuentoEfectivo) || 0;
     if (data.recargoPorcentaje) data.recargoPorcentaje = Number(data.recargoPorcentaje) || 0;
     if (data.extensionEstimada) data.extensionEstimada = String(data.extensionEstimada || '');
+
+    // Folio estable: si no viene, se genera aquí y viaja al PDF (y al save si lo reenvían)
+    if (!data.folio || !/^COT-\d{4,8}$/.test(data.folio)) {
+      data.folio = `COT-${Date.now().toString().slice(-6)}`;
+    }
 
     // 1. Generar el PDF en memoria
     step = 'generacion_pdf';

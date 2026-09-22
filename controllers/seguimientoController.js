@@ -133,7 +133,7 @@ async function fetchAtencionWhatsApp(phones) {
  * verificar que ninguna se quede fuera. */
 async function fetchCotizacionesIndex() {
   const all = await GeneratedQuote.find({})
-    .select('clientName clientPhone clientEmail tituloTrabajo tipoTrabajo precioConDescuento precioConRecargo precioBase status createdAt esquemaTipo esquemaPago')
+    .select('clientName clientPhone clientEmail tituloTrabajo tipoTrabajo precioConDescuento precioConRecargo precioBase status createdAt esquemaTipo esquemaPago folio')
     .sort({ createdAt: -1 })
     .lean();
   const byPhone = new Map();
@@ -141,6 +141,7 @@ async function fetchCotizacionesIndex() {
   for (const q of all) {
     const item = {
       id: String(q._id),
+      folio: q.folio || (q.createdAt ? `COT-${String(new Date(q.createdAt).getTime()).slice(-6)}` : ''),
       titulo: q.tituloTrabajo || q.tipoTrabajo || 'Cotización',
       precio: q.precioConDescuento || q.precioConRecargo || q.precioBase || 0,
       status: q.status,

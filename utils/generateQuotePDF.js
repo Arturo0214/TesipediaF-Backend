@@ -204,7 +204,7 @@ export const generateQuotePDF = async (data) => {
     };
 
     // Generar número de cotización
-    const quoteNumber = `COT-${Date.now().toString().slice(-6)}`;
+    const quoteNumber = data.folio || `COT-${Date.now().toString().slice(-6)}`;
 
     // Fecha actual
     const today = new Date();

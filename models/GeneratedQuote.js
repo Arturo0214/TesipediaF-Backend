@@ -154,6 +154,12 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        // Folio visible en el PDF (COT-XXXXXX). Persistido para poder buscar por él.
+        folio: {
+            type: String,
+            default: '',
+            index: true,
+        },
         status: {
             type: String,
             enum: ['pending', 'approved', 'rejected', 'paid', 'cancelled'],
