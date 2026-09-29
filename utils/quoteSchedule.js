@@ -118,3 +118,25 @@ export const buildInstallments = (q) => {
     paidAt: paidAtOf(0),
   }];
 };
+
+/**
+ * Parcialidades con la forma que consumen el dashboard de pagos y el panel del
+ * cliente: [{ number, amount, dueDate, label, status, paidAt }].
+ * Misma fuente de verdad (installmentStatuses) para admin y cliente.
+ */
+export const buildLabeledSchedule = (q) => {
+  const esquema = q.esquemaTipo ? normalizeEsquema(q.esquemaTipo) : normalizeEsquema(q.esquemaPago);
+  return buildInstallments(q).map((inst, idx) => ({
+    number: idx + 1,
+    amount: inst.amount,
+    dueDate: inst.fecha,
+    label: esquema === '50-50' ? ['1er pago (50%)', '2do pago (50%)'][idx]
+      : esquema === '33-33-34' ? ['1er pago (33%)', '2do pago (33%)', '3er pago (34%)'][idx]
+      : /^\d+-msi$/.test(esquema) ? `Mes ${idx + 1} (MSI)`
+      : /^\d+-quincenas$/.test(esquema) ? `Quincena ${idx + 1}`
+      : esquema === 'personalizado' ? `Pago ${idx + 1}`
+      : (idx === 0 ? 'Pago único' : `Pago ${idx + 1}`),
+    status: inst.status,
+    paidAt: inst.paidAt,
+  }));
+};

@@ -6,6 +6,7 @@ import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 import createNotification from '../utils/createNotification.js';
 import cloudinary from '../config/cloudinary.js';
 import { autoSyncProject } from './googleCalendarController.js';
+import { buildLabeledSchedule } from '../utils/quoteSchedule.js';
 
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
@@ -90,7 +91,23 @@ export const getClientProjects = asyncHandler(async (req, res) => {
         .populate('quote')
         .populate('generatedQuote')
         .populate('payment');
-    res.json(projects);
+
+    // Los proyectos que vienen de una cotización Sofia guardan el estado real de
+    // las parcialidades en generatedQuote.installmentStatuses (ahí escribe el admin
+    // al marcar pagado), no en Payment.schedule. Se reconstruye el schedule desde
+    // la cotización para que el cliente vea lo mismo que el admin.
+    const out = projects.map((proj) => {
+        const obj = proj.toObject();
+        if (obj.generatedQuote) {
+            const q = obj.generatedQuote;
+            const schedule = buildLabeledSchedule(q);
+            const total = q.precioConDescuento || q.precioConRecargo || q.precioBase
+                || obj.payment?.amount || 0;
+            obj.payment = { ...(obj.payment || {}), amount: total, schedule };
+        }
+        return obj;
+    });
+    res.json(out);
 });
 
 // Get single project

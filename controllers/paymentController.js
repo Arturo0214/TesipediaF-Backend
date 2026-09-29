@@ -14,7 +14,7 @@ import { createGuestPaymentSession, checkGuestPaymentStatus as checkGuestPayment
 import { autoCreateClientUser } from '../utils/autoCreateClient.js';
 import { autoSyncProject, autoSyncPaymentSchedule } from './googleCalendarController.js';
 import User from '../models/User.js';
-import { buildInstallments } from '../utils/quoteSchedule.js';
+import { buildInstallments, buildLabeledSchedule } from '../utils/quoteSchedule.js';
 
 
 // 💳 Crear sesión de pago con Stripe
@@ -1158,20 +1158,9 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       status: 'paid',
       esquema,
       esquemaRaw: q.esquemaPago || '',
-      // buildInstallments jala las FECHAS y montos reales del texto de la cotización
-      // (esquemaPago) y aplica los estados guardados. Fuente única con Revenue.
-      schedule: buildInstallments(q).map((inst, idx) => ({
-        number: idx + 1,
-        amount: inst.amount,
-        dueDate: inst.fecha,
-        label: esquema === '50-50' ? ['1er pago (50%)', '2do pago (50%)'][idx]
-          : esquema === '33-33-34' ? ['1er pago (33%)', '2do pago (33%)', '3er pago (34%)'][idx]
-          : /^\d+-msi$/.test(esquema) ? `Mes ${idx + 1} (MSI)`
-          : /^\d+-quincenas$/.test(esquema) ? `Quincena ${idx + 1}`
-          : esquema === 'personalizado' ? `Pago ${idx + 1}`
-          : (idx === 0 ? 'Pago único' : `Pago ${idx + 1}`),
-        status: inst.status,
-      })),
+      // buildLabeledSchedule jala las FECHAS y montos reales del texto de la cotización
+      // (esquemaPago) y aplica los estados guardados. Fuente única con Revenue y el panel del cliente.
+      schedule: buildLabeledSchedule(q),
       commission: getComision(q.vendedor, amount),
       date: payDate,
       dueDate: q.fechaEntrega || null,
