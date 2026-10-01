@@ -818,6 +818,52 @@ export const generateQuotePDF = async (data) => {
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10);
         doc.text('012180015479916039', margin + 4 + bbvaClabeW, bankY);
+    } else if (quoteData.metodoPago === 'tarjeta-banamex') {
+        // --- Datos Bancarios Banamex (Azul marino + logo) ---
+        const banamexNavy = [6, 49, 91]; // #06315B
+        const lightNavy = [235, 242, 250];
+
+        doc.setFillColor(...lightNavy);
+        doc.roundedRect(margin, yPos, ctaWidth, boxHeight, 2, 2, 'F');
+        doc.setDrawColor(...banamexNavy);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(margin, yPos, ctaWidth, boxHeight, 2, 2, 'S');
+
+        let bankY = yPos + 6;
+        const bankCenterX = margin + ctaWidth / 2;
+
+        const banamexLogoUrl = 'https://res.cloudinary.com/dbowaer8j/image/upload/f_png,c_limit,w_300/v1790881822/banamex-logo.svg';
+        const banamexLogo = await loadImage(banamexLogoUrl);
+        if (banamexLogo) {
+            // Logo 300x66 → proporción ~4.55:1
+            const logoW = 26;
+            const logoH = logoW / 4.545;
+            doc.addImage(banamexLogo, 'PNG', bankCenterX - logoW / 2, yPos + 2.5, logoW, logoH, undefined, 'FAST');
+            bankY = yPos + 12.5;
+        } else {
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            doc.setTextColor(...banamexNavy);
+            doc.text('Datos Bancarios Banamex', bankCenterX, bankY, { align: 'center' });
+            bankY += 5;
+        }
+
+        doc.setFontSize(9);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont('helvetica', 'normal');
+        doc.text('Beneficiario: ', margin + 4, bankY);
+        const bmxBeneW = doc.getTextWidth('Beneficiario: ');
+        doc.setFont('helvetica', 'bold');
+        doc.text('Arturo Suárez', margin + 4 + bmxBeneW, bankY);
+
+        bankY += 5;
+
+        doc.setFont('helvetica', 'normal');
+        doc.text('Tarjeta: ', margin + 4, bankY);
+        const bmxCardW = doc.getTextWidth('Tarjeta: ');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text('5204 1660 9537 7299', margin + 4 + bmxCardW, bankY);
     }
 
     // --- Tabla de Totales (Derecha) ---
