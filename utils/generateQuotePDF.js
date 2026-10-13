@@ -161,7 +161,7 @@ export const generateQuotePDF = async (data) => {
         recargoPorcentaje: recargoPorcentajeCalc,
         precioConDescuento: precioConDescuentoCalc,
         esquemaPago: generarEsquemaPago(precioConDescuentoCalc, data),
-        metodoPago: data.metodoPago || 'tarjeta-nu', // ← Forzamos default tarjeta NU
+        metodoPago: data.metodoPago || 'tarjeta-banamex', // ← Default: tarjeta Banamex
         tiempoEntrega: data.tiempoEntrega || '3 semanas',
         fechaEntrega: (() => {
             const fe = data.fechaEntrega || '';

@@ -431,7 +431,7 @@ export const getLeads = asyncHandler(async (req, res) => {
   const { campania } = req.query;
   if (campania && campania !== 'all') {
     if (campania === '__guias') {
-      andConditions.push('estado_sofia=in.(guia_explorando,guia_link_enviado,guia_pagada,guia_upsell)');
+      andConditions.push('estado_sofia=in.(guia_explorando,guia_handoff,guia_link_enviado,guia_pagada,guia_upsell)');
     } else {
       andConditions.push(`ad_campaign_name=eq.${encodeURIComponent(campania)}`);
     }
@@ -685,7 +685,7 @@ export const getLeadCampaigns = asyncHandler(async (req, res) => {
     // Conteo del embudo de guías (estado_sofia = guia_*)
     let guias = 0;
     try {
-      const gUrl = `${base}?select=wa_id&estado_sofia=in.(guia_explorando,guia_link_enviado,guia_pagada,guia_upsell)`;
+      const gUrl = `${base}?select=wa_id&estado_sofia=in.(guia_explorando,guia_handoff,guia_link_enviado,guia_pagada,guia_upsell)`;
       const gResp = await fetch(gUrl, { headers: { ...supabaseHeaders(), 'Prefer': 'count=exact', 'Range': '0-0' } });
       const h = gResp.headers.get('content-range');
       guias = h ? parseInt(h.match(/\/(\d+)/)?.[1] || '0') : 0;

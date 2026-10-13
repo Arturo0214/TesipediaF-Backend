@@ -161,7 +161,7 @@ export const getWhatsappGuideLeads = async (req, res) => {
   const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
   const KEY = process.env.SUPABASE_SERVICE_KEY || '';
   if (!SUPABASE_URL || !KEY) return res.status(503).json({ error: 'Supabase no configurado' });
-  const ESTADOS = ['guia_explorando', 'guia_link_enviado', 'guia_pagada', 'guia_upsell'];
+  const ESTADOS = ['guia_explorando', 'guia_handoff', 'guia_link_enviado', 'guia_pagada', 'guia_upsell'];
   try {
     const q = `estado_sofia=in.(${ESTADOS.join(',')})`;
     const sel = 'select=wa_id,nombre,estado_sofia,updated_at,ultimo_mensaje_preview';
