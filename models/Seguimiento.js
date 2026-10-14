@@ -56,7 +56,8 @@ const seguimientoSchema = new mongoose.Schema({
   project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null, index: true },
   // Overrides manuales (opcionales; si están vacíos se usa el dato en vivo del pago/proyecto)
   nombre: { type: String, default: '' },   // nombre editable del cliente (para "S/T" o sin nombre)
-  prioritario: { type: Boolean, default: false }, // marcado a mano: sube al inicio del tablero
+  prioritario: { type: Boolean, default: false }, // marcado a mano: sube al inicio del tablero (atención especial)
+  personal: { type: Boolean, default: false },    // proyecto PERSONAL de Arturo (lo marcan solo Arturo/Paula)
   entregado: { type: Boolean, default: false },   // marcado a mano: el proyecto ya se entregó
   entregadoEn: { type: Date, default: null },
   // Switch de cierre: pagos al 100% dejan el avance en 90%; el 10% restante se

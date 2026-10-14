@@ -161,7 +161,7 @@ async function fetchCotizacionesIndex() {
 export async function buildSeguimientoRows() {
   const [quotes, seguimientos] = await Promise.all([
     GeneratedQuote.find({ status: 'paid' })
-      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt')
+      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio')
       .lean(),
     Seguimiento.find({}).lean(),
   ]);
@@ -213,9 +213,12 @@ export async function buildSeguimientoRows() {
       cliente: seg?.nombre || q.clientName || 'Cliente',
       nombre: seg?.nombre || '',
       prioritario: !!seg?.prioritario,
+      personal: !!seg?.personal,
       entregado: !!seg?.entregado,
       entregadoEn: seg?.entregadoEn || null,
       correccionesListas: !!seg?.correccionesListas,
+      pdfUrl: q.pdfUrl || null,
+      folio: q.folio || '',
       celular,
       email,
       vendedor: seg?.vendedor || q.vendedor || '',
@@ -298,7 +301,7 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
@@ -306,6 +309,7 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
   if (estado !== undefined) doc.estado = estado;
   if (nombre !== undefined) doc.nombre = nombre;
   if (prioritario !== undefined) doc.prioritario = !!prioritario;
+  if (personal !== undefined) doc.personal = !!personal;
   if (entregado !== undefined) {
     doc.entregado = !!entregado;
     doc.entregadoEn = entregado ? new Date() : null;
