@@ -14,6 +14,14 @@ import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 const VALID_TYPES = ['quote', 'payment', 'project'];
 
 const last10 = (s) => String(s || '').replace(/\D/g, '').slice(-10);
+
+// "YYYY-MM-DD" a secas se interpretaría como medianoche UTC (= día ANTERIOR en
+// México); se ancla al mediodía CDMX para que la entrega caiga en el día correcto.
+const parseFechaEntrega = (f) => {
+  if (!f) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(f).trim())) return new Date(`${String(f).trim()}T12:00:00-06:00`);
+  return new Date(f);
+};
 const DAY = 24 * 60 * 60 * 1000;
 const diasDesde = (d) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / DAY) : null);
 
@@ -305,7 +313,7 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
-  if (fechaEntrega !== undefined) doc.fechaEntrega = fechaEntrega || null;
+  if (fechaEntrega !== undefined) doc.fechaEntrega = parseFechaEntrega(fechaEntrega);
   if (estado !== undefined) doc.estado = estado;
   if (nombre !== undefined) doc.nombre = nombre;
   if (prioritario !== undefined) doc.prioritario = !!prioritario;
@@ -447,14 +455,15 @@ export const addAcuerdo = asyncHandler(async (req, res) => {
   }
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
+  const fechaOk = parseFechaEntrega(fechaEntrega);
   doc.acuerdos.push({
     texto: (texto || '').trim(),
-    fechaEntrega: fechaEntrega ? new Date(fechaEntrega) : null,
+    fechaEntrega: fechaOk,
     fuente: 'manual',
     autor: req.user?.name || req.user?.nombre || 'admin',
     creadoEn: new Date(),
   });
-  if (fechaEntrega) doc.fechaEntrega = new Date(fechaEntrega);
+  if (fechaOk) doc.fechaEntrega = fechaOk;
   await doc.save();
   res.status(201).json({ acuerdos: doc.acuerdos, fechaEntrega: doc.fechaEntrega });
 });
