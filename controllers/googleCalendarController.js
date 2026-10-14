@@ -14,6 +14,7 @@ import {
     getCalendarClient,
 } from '../config/googleCalendar.js';
 import GoogleCalendarToken from '../models/GoogleCalendarToken.js';
+import createNotification from '../utils/createNotification.js';
 import Project from '../models/Project.js';
 
 const TZ = 'America/Mexico_City';
@@ -250,6 +251,22 @@ export const createCalendarEvent = asyncHandler(async (req, res) => {
         conferenceDataVersion: meet ? 1 : 0,
         sendUpdates: invitados.length ? 'all' : 'none', // Google avisa a los invitados por correo
     });
+
+    // Si alguien más (ej. Paula) agenda en el calendario de Arturo → notificarle
+    try {
+        const actor = req.user?.name || 'Alguien';
+        const superId = process.env.SUPER_ADMIN_ID;
+        if (admin === 'arturo' && superId && !/arturo/i.test(actor)) {
+            createNotification(req.app, {
+                user: superId,
+                type: 'calendario',
+                message: `📅 ${actor} te agendó: ${summary} (${startDate}${startTime ? ` ${startTime}` : ''})`,
+                data: { eventId: created.data.id },
+                link: '/admin/calendarios',
+                priority: 'high',
+            }).catch(() => {});
+        }
+    } catch { /* noop */ }
     res.status(201).json(created.data);
 });
 

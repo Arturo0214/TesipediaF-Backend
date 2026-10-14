@@ -12,6 +12,7 @@ const NOTIFICATION_TYPES = [
   'whatsapp',   // Mensajes entrantes de WhatsApp (leads)
   'lead',       // Nuevo lead creado / lead actualizado
   'seguimiento', // Cobranza: pagos vencidos / leads sin respuesta / sin seguimiento
+  'calendario',  // Eventos agendados en Google Calendar (ej. Paula agenda a Arturo)
   'alerta',
   'info',
 ];

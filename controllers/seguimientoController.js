@@ -9,6 +9,7 @@ import cloudinary from '../config/cloudinary.js';
 import supabaseAdmin from '../config/supabaseAdmin.js';
 import createNotification from '../utils/createNotification.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
+import notifyCambioProyecto from '../utils/notifyProyectos.js';
 
 /* ─────────────── helpers ─────────────── */
 const VALID_TYPES = ['quote', 'payment', 'project'];
@@ -296,6 +297,7 @@ export const addNota = asyncHandler(async (req, res) => {
   const autor = req.user?.name || req.user?.nombre || 'admin';
   doc.notas.push({ texto: texto.trim(), autor, fecha: new Date() });
   await doc.save();
+  if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: texto.startsWith('📨') ? 'dejó mensaje para el cliente 📨' : 'agregó una nota', priority: texto.startsWith('📨') ? 'high' : 'low' });
   res.status(201).json({ notas: doc.notas });
 });
 
@@ -335,6 +337,19 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
     doc.entregaEnviadaEn = entregaEnviada ? new Date() : null;
   }
   await doc.save();
+  // Notificar el cambio al otro (Arturo/Paula) + refresco en vivo de Proyectos
+  if (doc.quote) {
+    const cambios = [];
+    if (entregado !== undefined) cambios.push(entregado ? 'desahogó la entrega ✅' : 'desmarcó la entrega');
+    if (entregaEnviada !== undefined) cambios.push(entregaEnviada ? 'marcó ENVIADO al cliente 📤' : 'desmarcó el envío');
+    if (urgente !== undefined) cambios.push(urgente ? 'marcó URGENTE 🚨' : 'quitó URGENTE');
+    if (correccionesListas !== undefined) cambios.push(correccionesListas ? 'cerró correcciones' : 'reabrió correcciones');
+    if (fechaEntrega !== undefined) cambios.push('cambió la fecha de entrega');
+    if (prioritario !== undefined) cambios.push(prioritario ? 'marcó Prioritario ⭐' : 'quitó Prioritario');
+    if (personal !== undefined) cambios.push(personal ? 'marcó PERSONAL' : 'quitó PERSONAL');
+    const accion = cambios.join(', ') || 'actualizó el proyecto';
+    notifyCambioProyecto(req, { quoteId: doc.quote, accion, priority: (entregado !== undefined || urgente) ? 'high' : 'medium' });
+  }
   res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn, correccionesListas: doc.correccionesListas, entregaEnviada: doc.entregaEnviada });
 });
 
@@ -364,6 +379,14 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     subidoEn: new Date(),
   });
   await doc.save();
+  if (doc.quote) {
+    const rol = req.body?.rol;
+    notifyCambioProyecto(req, {
+      quoteId: doc.quote,
+      accion: rol === 'final' ? 'adjuntó archivo FINAL 📄' : 'cargó archivo de soporte 📎',
+      priority: rol === 'final' ? 'high' : 'medium',
+    });
+  }
   res.status(201).json({ archivos: doc.archivos });
 });
 
@@ -435,6 +458,7 @@ export const uploadComprobante = asyncHandler(async (req, res) => {
     subidoEn: new Date(),
   });
   await doc.save();
+  if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: 'adjuntó comprobante de pago 🧾', priority: 'low' });
   res.status(201).json({ comprobantes: doc.comprobantes });
 });
 
@@ -474,6 +498,7 @@ export const addAcuerdo = asyncHandler(async (req, res) => {
   });
   if (fechaOk) doc.fechaEntrega = fechaOk;
   await doc.save();
+  if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: fechaOk ? 'agendó una entrega 📦' : 'registró un acuerdo' });
   res.status(201).json({ acuerdos: doc.acuerdos, fechaEntrega: doc.fechaEntrega });
 });
 
