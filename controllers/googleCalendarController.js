@@ -132,6 +132,8 @@ export const disconnectAdmin = asyncHandler(async (req, res) => {
 });
 
 // GET /google/events?admin=arturo&timeMin=...&timeMax=...
+// Lee TODOS los calendarios visibles de la cuenta (no solo 'primary') y pagina
+// la API de Google (antes se cortaba en 250 eventos sin avisar).
 export const getCalendarEvents = asyncHandler(async (req, res) => {
     const adminKey = (req.query.admin || 'arturo').toLowerCase().trim();
     const { timeMin, timeMax } = req.query;
@@ -148,21 +150,71 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
         calendar = getCalendarClient();
     }
 
-    const events = await calendar.events.list({
-        calendarId: 'primary',
+    const range = {
         timeMin: timeMin || new Date().toISOString(),
         timeMax: timeMax || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        showDeleted: false,
-        singleEvents: true,
-        orderBy: 'startTime',
-    });
+    };
 
-    res.json(events.data);
+    // 1) Calendarios de la cuenta (primary + secundarios + suscritos)
+    let calendars = [{ id: 'primary', summary: 'Principal', primary: true, backgroundColor: '#3b82f6', accessRole: 'owner' }];
+    try {
+        const { data: calList } = await calendar.calendarList.list({ maxResults: 50 });
+        const visibles = (calList.items || []).filter((c) => c.selected !== false || c.primary);
+        if (visibles.length) calendars = visibles;
+    } catch (e) {
+        console.warn('[GCal] calendarList no disponible, usando primary:', e.message);
+    }
+
+    // 2) Eventos de cada calendario, con paginación completa
+    const items = [];
+    const calendarios = [];
+    for (const cal of calendars) {
+        calendarios.push({ id: cal.id, nombre: cal.summary, color: cal.backgroundColor || '#3b82f6', primary: !!cal.primary });
+        try {
+            let pageToken;
+            do {
+                const { data } = await calendar.events.list({
+                    calendarId: cal.id,
+                    ...range,
+                    showDeleted: false,
+                    singleEvents: true,
+                    orderBy: 'startTime',
+                    maxResults: 2500,
+                    pageToken,
+                });
+                for (const ev of (data.items || [])) {
+                    items.push({
+                        ...ev,
+                        calendarId: cal.id,
+                        calendarSummary: cal.summary,
+                        calendarColor: cal.backgroundColor || '#3b82f6',
+                        readOnly: cal.accessRole === 'reader' || cal.accessRole === 'freeBusyReader',
+                    });
+                }
+                pageToken = data.nextPageToken;
+            } while (pageToken);
+        } catch (e) {
+            console.warn(`[GCal] No se pudo leer el calendario "${cal.summary}":`, e.message);
+        }
+    }
+
+    items.sort((a, b) => new Date(a.start?.dateTime || a.start?.date || 0) - new Date(b.start?.dateTime || b.start?.date || 0));
+    res.json({ items, calendarios });
 });
 
-// POST /google/events — crear evento en calendario de un admin
+// Normaliza "a@x.com, b@y.com" o array → [{ email }]
+const parseAttendees = (raw) => {
+    const list = Array.isArray(raw) ? raw : String(raw || '').split(/[,;\s]+/);
+    return list
+        .map((e) => String(e || '').trim().toLowerCase())
+        .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
+        .map((email) => ({ email }));
+};
+
+// POST /google/events — crear evento/reunión en calendario de un admin
+// Soporta invitados (attendees) y link de Google Meet (meet: true).
 export const createCalendarEvent = asyncHandler(async (req, res) => {
-    const { adminKey, summary, description, startDate, endDate, startTime, colorId } = req.body;
+    const { adminKey, summary, description, startDate, endDate, startTime, colorId, attendees, meet } = req.body;
     const admin = (adminKey || 'arturo').toLowerCase().trim();
 
     const calendar = await getAdminCalendarClient(admin);
@@ -178,43 +230,68 @@ export const createCalendarEvent = asyncHandler(async (req, res) => {
         const endDt = endDate || startDate;
         const endTm = req.body.endTime || `${String(Number(startTime.split(':')[0]) + 1).padStart(2, '0')}:${startTime.split(':')[1]}`;
         event.end = { dateTime: `${endDt}T${endTm}:00`, timeZone: TZ };
+        event.reminders = { useDefault: false, overrides: [{ method: 'popup', minutes: 15 }] };
     } else {
         event.start = { date: startDate };
         event.end = { date: endDate || startDate };
     }
 
-    const created = await calendar.events.insert({ calendarId: 'primary', resource: event });
+    const invitados = parseAttendees(attendees);
+    if (invitados.length) event.attendees = invitados;
+    if (meet) {
+        event.conferenceData = {
+            createRequest: { requestId: `tsp-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+        };
+    }
+
+    const created = await calendar.events.insert({
+        calendarId: 'primary',
+        resource: event,
+        conferenceDataVersion: meet ? 1 : 0,
+        sendUpdates: invitados.length ? 'all' : 'none', // Google avisa a los invitados por correo
+    });
     res.status(201).json(created.data);
 });
 
-// PUT /google/events/:eventId — actualizar evento
+// PUT /google/events/:eventId — actualizar evento (en el calendario donde vive)
 export const updateCalendarEvent = asyncHandler(async (req, res) => {
     const { eventId } = req.params;
     const admin = (req.body.adminKey || 'arturo').toLowerCase().trim();
+    const calendarId = req.body.calendarId || 'primary';
 
     const calendar = await getAdminCalendarClient(admin);
 
-    const { summary, description, startDate, endDate, startTime, colorId } = req.body;
+    const { summary, description, startDate, endDate, startTime, colorId, attendees } = req.body;
     const event = { summary, description: description || '', colorId: colorId || '5' };
 
     if (startTime) {
-        event.start = { dateTime: `${startDate}T${startTime}:00`, timeZone: TZ };
+        // date: null limpia el valor anterior si el evento era de todo el día
+        event.start = { dateTime: `${startDate}T${startTime}:00`, timeZone: TZ, date: null };
         const endTm = req.body.endTime || `${String(Number(startTime.split(':')[0]) + 1).padStart(2, '0')}:${startTime.split(':')[1]}`;
-        event.end = { dateTime: `${endDate || startDate}T${endTm}:00`, timeZone: TZ };
+        event.end = { dateTime: `${endDate || startDate}T${endTm}:00`, timeZone: TZ, date: null };
     } else {
-        event.start = { date: startDate };
-        event.end = { date: endDate || startDate };
+        event.start = { date: startDate, dateTime: null };
+        event.end = { date: endDate || startDate, dateTime: null };
     }
 
-    const updated = await calendar.events.update({ calendarId: 'primary', eventId, resource: event });
+    const invitados = parseAttendees(attendees);
+    if (invitados.length) event.attendees = invitados;
+
+    const updated = await calendar.events.patch({
+        calendarId,
+        eventId,
+        resource: event,
+        sendUpdates: invitados.length ? 'all' : 'none',
+    });
     res.json(updated.data);
 });
 
-// DELETE /google/events/:eventId?admin=arturo
+// DELETE /google/events/:eventId?admin=arturo&calendarId=...
 export const deleteCalendarEvent = asyncHandler(async (req, res) => {
     const admin = (req.query.admin || 'arturo').toLowerCase().trim();
+    const calendarId = req.query.calendarId || 'primary';
     const calendar = await getAdminCalendarClient(admin);
-    await calendar.events.delete({ calendarId: 'primary', eventId: req.params.eventId });
+    await calendar.events.delete({ calendarId, eventId: req.params.eventId });
     await Project.findOneAndUpdate({ googleCalendarEventId: req.params.eventId }, { googleCalendarEventId: null });
     res.json({ success: true });
 });
