@@ -59,6 +59,10 @@ const seguimientoSchema = new mongoose.Schema({
   prioritario: { type: Boolean, default: false }, // marcado a mano: sube al inicio del tablero
   entregado: { type: Boolean, default: false },   // marcado a mano: el proyecto ya se entregó
   entregadoEn: { type: Date, default: null },
+  // Switch de cierre: pagos al 100% dejan el avance en 90%; el 10% restante se
+  // libera solo al prender este switch (correcciones terminadas o sin correcciones).
+  correccionesListas: { type: Boolean, default: false },
+  correccionesListasEn: { type: Date, default: null },
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {
