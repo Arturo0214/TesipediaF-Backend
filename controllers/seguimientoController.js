@@ -225,6 +225,8 @@ export async function buildSeguimientoRows() {
       entregado: !!seg?.entregado,
       entregadoEn: seg?.entregadoEn || null,
       correccionesListas: !!seg?.correccionesListas,
+      entregaEnviada: !!seg?.entregaEnviada,
+      entregaEnviadaEn: seg?.entregaEnviadaEn || null,
       pdfUrl: q.pdfUrl || null,
       folio: q.folio || '',
       celular,
@@ -309,7 +311,7 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal, entregaEnviada } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
@@ -326,8 +328,12 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
     doc.correccionesListas = !!correccionesListas;
     doc.correccionesListasEn = correccionesListas ? new Date() : null;
   }
+  if (entregaEnviada !== undefined) {
+    doc.entregaEnviada = !!entregaEnviada;
+    doc.entregaEnviadaEn = entregaEnviada ? new Date() : null;
+  }
   await doc.save();
-  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn, correccionesListas: doc.correccionesListas });
+  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn, correccionesListas: doc.correccionesListas, entregaEnviada: doc.entregaEnviada });
 });
 
 /* ─────────────── POST /:type/:id/archivo (upload Cloudinary) ─────────────── */
@@ -349,6 +355,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     url: result.secure_url,
     publicId: result.public_id,
     nombre: req.file.originalname,
+    rol: ['soporte', 'final'].includes(req.body?.rol) ? req.body.rol : '',
     size: req.file.size,
     tipo: req.file.mimetype,
     subidoPor: req.user?.name || req.user?.nombre || 'admin',

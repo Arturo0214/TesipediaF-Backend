@@ -17,6 +17,8 @@ const archivoSchema = new mongoose.Schema({
   url: { type: String, required: true },
   publicId: { type: String, default: '' },
   nombre: { type: String, default: '' },
+  // Rol en el flujo de entrega: 'soporte' (Paula) | 'final' (Arturo al desahogar)
+  rol: { type: String, default: '' },
   size: { type: Number, default: 0 },
   tipo: { type: String, default: '' },
   subidoPor: { type: String, default: '' },
@@ -64,6 +66,9 @@ const seguimientoSchema = new mongoose.Schema({
   // libera solo al prender este switch (correcciones terminadas o sin correcciones).
   correccionesListas: { type: Boolean, default: false },
   correccionesListasEn: { type: Date, default: null },
+  // Última milla: Paula marca si el archivo final YA se envió al cliente
+  entregaEnviada: { type: Boolean, default: false },
+  entregaEnviadaEn: { type: Date, default: null },
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {
