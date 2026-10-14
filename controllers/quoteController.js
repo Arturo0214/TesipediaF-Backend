@@ -1484,11 +1484,19 @@ export const generateAndUploadQuotePDF = async (req, res) => {
     if (data.recargoPorcentaje) data.recargoPorcentaje = Number(data.recargoPorcentaje) || 0;
     if (data.extensionEstimada) data.extensionEstimada = String(data.extensionEstimada || '');
 
-    // Folio estable: preferir el del documento; derivar del publicId si viene
+    // Folio estable: el número que imprime el PDF DEBE ser el mismo que queda
+    // guardado en la BD (antes se inventaba un COT-<timestamp> no buscable).
+    // Orden: folio explícito → cotización guardada (quoteId) → publicId → uuid nuevo.
+    if (!data.folio && data.quoteId && mongoose.isValidObjectId(data.quoteId)) {
+      const saved = await GeneratedQuote.findById(data.quoteId).select('folio publicId').lean();
+      if (saved) {
+        data.publicId = data.publicId || saved.publicId || '';
+        data.folio = saved.folio || (saved.publicId ? `COT-${String(saved.publicId).slice(0, 8).toUpperCase()}` : '');
+      }
+    }
     if (!data.folio) {
-      data.folio = data.publicId
-        ? `COT-${String(data.publicId).slice(0, 8).toUpperCase()}`
-        : `COT-${Date.now().toString().slice(-6)}`;
+      data.publicId = data.publicId || uuidv4();
+      data.folio = `COT-${String(data.publicId).slice(0, 8).toUpperCase()}`;
     }
 
     // 1. Generar el PDF en memoria
@@ -1561,6 +1569,9 @@ export const generateAndUploadQuotePDF = async (req, res) => {
       pdfUrl: uploadResult.secure_url,
       fallbackUrl: uploadResult.secure_url,
       publicId: uploadResult.public_id,
+      // Folio impreso en el PDF — el caller DEBE guardarlo junto con la cotización
+      folio: data.folio,
+      quotePublicId: data.publicId || '',
     });
   } catch (error) {
     console.error(`[QuotePDF] Error en paso "${step}":`, error.message, error.stack?.split('\n').slice(0, 3).join('\n'));
