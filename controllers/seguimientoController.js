@@ -222,6 +222,7 @@ export async function buildSeguimientoRows() {
       nombre: seg?.nombre || '',
       prioritario: !!seg?.prioritario,
       personal: !!seg?.personal,
+      urgente: !!seg?.urgente,
       entregado: !!seg?.entregado,
       entregadoEn: seg?.entregadoEn || null,
       correccionesListas: !!seg?.correccionesListas,
@@ -311,7 +312,7 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal, entregaEnviada } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal, entregaEnviada, urgente } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
@@ -320,6 +321,7 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
   if (nombre !== undefined) doc.nombre = nombre;
   if (prioritario !== undefined) doc.prioritario = !!prioritario;
   if (personal !== undefined) doc.personal = !!personal;
+  if (urgente !== undefined) doc.urgente = !!urgente;
   if (entregado !== undefined) {
     doc.entregado = !!entregado;
     doc.entregadoEn = entregado ? new Date() : null;
