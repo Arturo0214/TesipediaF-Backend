@@ -360,9 +360,18 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
 
+  // La extensión DEBE ir en el public_id de los archivos raw (Word, Excel, PDF…):
+  // sin ella Cloudinary sirve la URL sin extensión y el archivo "se convierte en
+  // otra cosa" al descargarlo. Un .docx sube y baja como .docx.
+  const ext = (String(req.file.originalname || '').match(/\.([a-z0-9]{1,8})$/i)?.[1] || '').toLowerCase();
+  const isImage = /^image\//i.test(req.file.mimetype || '');
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder: 'tesipedia/seguimientos', resource_type: 'auto', public_id: `seg_${id}_${Date.now()}` },
+      {
+        folder: 'tesipedia/seguimientos',
+        resource_type: isImage ? 'image' : 'raw',
+        public_id: `seg_${id}_${Date.now()}${!isImage && ext ? `.${ext}` : ''}`,
+      },
       (error, uploaded) => (error ? reject(error) : resolve(uploaded)),
     );
     stream.end(req.file.buffer);
