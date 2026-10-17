@@ -1205,6 +1205,11 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
       generatedBy: req.user ? req.user._id : null,
     };
 
+    // 🔒 Candado de venta PERSONAL: solo Arturo (superadmin) o Paula pueden activarlo.
+    // Cualquier otro origen (ruta con optionalAuth, Sofia, invitados) no puede marcarlo.
+    const puedeCandado = !!req.user && (req.user.role === 'superadmin' || /paula/i.test(req.user.name || ''));
+    quoteData.privado = !!quoteData.privado && puedeCandado;
+
     // 🧠 Fuente ÚNICA de verdad: el backend siempre recalcula el texto del esquema de pago
     // a partir de los datos estructurados (esquemaTipo, pagosCustom, fechas, descuento).
     // Así NINGÚN flujo (SalesQuote, cotizadora de WhatsApp, IA) puede desincronizar el esquema:
@@ -1248,19 +1253,24 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
     }
 
     // 📲 Notificar al equipo por WhatsApp (fire-and-forget)
-    notifyQuoteSent(quoteData).catch(err =>
-      console.error('[saveGeneratedQuote] WhatsApp notification error:', err.message)
-    );
+    // 🔒 EXCEPCIÓN: con el candado de venta PERSONAL no se avisa a nadie por WA
+    if (quoteData.privado) {
+      console.log('🔒 Cotización PERSONAL: notificaciones de WhatsApp suprimidas');
+    } else {
+      notifyQuoteSent(quoteData).catch(err =>
+        console.error('[saveGeneratedQuote] WhatsApp notification error:', err.message)
+      );
 
-    // 🆕 Notificar a seguimiento que llegó nuevo cliente
-    notifyNewClient({
-      clientName: quoteData.clientName,
-      clientPhone: quoteData.clientPhone,
-      tipoServicio: quoteData.tipoServicio,
-      source: 'Cotizador Sofia',
-    }).catch(err =>
-      console.error('[saveGeneratedQuote] New client notification error:', err.message)
-    );
+      // 🆕 Notificar a seguimiento que llegó nuevo cliente
+      notifyNewClient({
+        clientName: quoteData.clientName,
+        clientPhone: quoteData.clientPhone,
+        tipoServicio: quoteData.tipoServicio,
+        source: 'Cotizador Sofia',
+      }).catch(err =>
+        console.error('[saveGeneratedQuote] New client notification error:', err.message)
+      );
+    }
 
     res.status(201).json({
       success: true,
