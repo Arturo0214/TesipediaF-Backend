@@ -6,6 +6,7 @@ import Payment from '../models/Payment.js';
 import Project from '../models/Project.js';
 import Notification from '../models/Notification.js';
 import { marcarLeadPagado } from '../utils/leadPagadoGuard.js';
+import { filtroPrivado } from '../utils/ventasPrivadas.js';
 import emailSender from '../utils/emailSender.js';
 import GuestPayment from '../models/guestPayment.js';
 import { generateTrackingToken } from '../utils/tokenGenerator.js';
@@ -938,9 +939,11 @@ export const createProjectFromPayment = asyncHandler(async (req, res) => {
 // 📊 Dashboard combinado de pagos (admin) — Payments + GeneratedQuotes pagadas + GuestPayments
 export const getPaymentsDashboard = asyncHandler(async (req, res) => {
   const GeneratedQuote = (await import('../models/GeneratedQuote.js')).default;
+  // Ventas personales de Arturo: ocultas para admins que no sean Arturo/Paula
+  const noPriv = filtroPrivado(req.user);
 
   // 1. Get all Stripe/PayPal payments (non-manual)
-  const stripePayments = await Payment.find({ isManual: { $ne: true } })
+  const stripePayments = await Payment.find({ isManual: { $ne: true }, ...noPriv })
     .populate({
       path: 'order',
       select: 'title price user dueDate',
@@ -949,11 +952,11 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 });
 
   // 1b. Get all manual payments
-  const manualPayments = await Payment.find({ isManual: true })
+  const manualPayments = await Payment.find({ isManual: true, ...noPriv })
     .sort({ createdAt: -1 });
 
   // 2. Get all paid GeneratedQuotes (Sofia quotes)
-  const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
+  const paidQuotes = await GeneratedQuote.find({ status: 'paid', ...noPriv })
     .sort({ updatedAt: -1 });
 
   // Backfill paidAt para cotizaciones pagadas que no lo tienen (sin tocar updatedAt)

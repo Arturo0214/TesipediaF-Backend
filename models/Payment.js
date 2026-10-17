@@ -98,6 +98,11 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  // Venta PERSONAL de Arturo: solo superadmin y Paula la ven en Revenue/pagos
+  privado: {
+    type: Boolean,
+    default: false,
+  },
   notes: {
     type: String,
     default: '',

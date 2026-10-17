@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import GuestPayment from '../models/guestPayment.js';
 import stripe from '../config/stripe.js';
 import { fireCtwaEventByPhone } from '../utils/metaCapi.js';
+import { filtroPrivado } from '../utils/ventasPrivadas.js';
 import { parseDatesFromText } from '../utils/quoteSchedule.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import generateQuotePDF from '../utils/generateQuotePDF.js';
@@ -1275,7 +1276,8 @@ export const saveGeneratedQuote = asyncHandler(async (req, res) => {
 
 // 📋 Obtener todas las cotizaciones generadas (admin)
 export const getGeneratedQuotes = asyncHandler(async (req, res) => {
-  const quotes = await GeneratedQuote.find({}).sort({ createdAt: -1 }).populate('generatedBy', 'name email');
+  // Ventas personales de Arturo: ocultas para admins que no sean Arturo/Paula
+  const quotes = await GeneratedQuote.find(filtroPrivado(req.user)).sort({ createdAt: -1 }).populate('generatedBy', 'name email');
   res.json(quotes);
 });
 

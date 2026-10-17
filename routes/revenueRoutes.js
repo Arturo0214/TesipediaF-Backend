@@ -8,6 +8,7 @@ import GuestPayment from '../models/guestPayment.js';
 import Project from '../models/Project.js';
 import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
+import { filtroPrivado } from '../utils/ventasPrivadas.js';
 import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
 
@@ -24,8 +25,8 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   const { year } = req.query;
   const targetYear = parseInt(year) || new Date().getFullYear();
 
-  const paidQuotes = await GeneratedQuote.find({ status: 'paid' })
-    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt')
+  const paidQuotes = await GeneratedQuote.find({ status: 'paid', ...filtroPrivado(req.user) })
+    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt privado')
     .lean();
 
   // Proyecto vinculado: estatus (para "concluido"), avance, fecha de entrega, contacto y última nota.
@@ -140,6 +141,8 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
 // GET /revenue/dashboard — Dashboard principal de revenue
 // ═══════════════════════════════════════════════════
 router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
+  // Ventas personales: ocultas (listas Y totales) para admins que no sean Arturo/Paula
+  const noPriv = filtroPrivado(req.user);
   const { year, month } = req.query;
   const now = new Date();
   const targetYear = parseInt(year) || now.getFullYear();
@@ -168,13 +171,13 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   const aggregateIncome = async (dateRange) => {
     const [payments, sofia, guest] = await Promise.all([
       Payment.aggregate([
-        { $match: { status: 'completed' } },
+        { $match: { status: 'completed', ...noPriv } },
         { $addFields: { _effectiveDate: dateField } },
         { $match: { _effectiveDate: dateRange } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       GeneratedQuote.aggregate([
-        { $match: { status: 'paid' } },
+        { $match: { status: 'paid', ...noPriv } },
         { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
         { $match: { _effectiveDate: dateRange } },
         { $group: { _id: null, total: { $sum: '$_amount' }, count: { $sum: 1 } } }
@@ -192,7 +195,7 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
     // Solución simple: confiar en que la mayoría de pagos recientes son Sofia-only
     // y restar los pagos auto-generados del total de Payment
     const autoPayments = await Payment.aggregate([
-      { $match: { status: 'completed', notes: { $regex: /Auto-generado al marcar cotización generated/i } } },
+      { $match: { status: 'completed', ...noPriv, notes: { $regex: /Auto-generado al marcar cotización generated/i } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: dateRange } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
@@ -215,14 +218,14 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   // Ingresos por mes (para gráfica anual) — combinando las 3 fuentes
   const [payByMonth, sofiaByMonth, guestByMonth] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $match: { status: 'completed', ...noPriv, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { $month: '$_effectiveDate' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]),
     GeneratedQuote.aggregate([
-      { $match: { status: 'paid' } },
+      { $match: { status: 'paid', ...noPriv } },
       { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
       { $match: { _effectiveDate: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { $month: '$_effectiveDate' }, total: { $sum: '$_amount' }, count: { $sum: 1 } } },
@@ -284,13 +287,13 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   // ── Ingresos por vendedor este mes (Payment + Sofia) ──
   const [payVendedor, sofiaVendedor] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed', vendedor: { $ne: '' }, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $match: { status: 'completed', ...noPriv, vendedor: { $ne: '' }, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
       { $group: { _id: '$vendedor', total: { $sum: '$amount' }, count: { $sum: 1 } } },
     ]),
     GeneratedQuote.aggregate([
-      { $match: { status: 'paid', vendedor: { $ne: '' } } },
+      { $match: { status: 'paid', ...noPriv, vendedor: { $ne: '' } } },
       { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
       { $group: { _id: '$vendedor', total: { $sum: '$_amount' }, count: { $sum: 1 } } },
@@ -308,17 +311,17 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   // ── Pagos individuales del mes (Payment + Sofia) ──
   const [payRecent, sofiaRecent] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $match: { status: 'completed', ...noPriv, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-      { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, status: 1, _source: { $literal: 'payment' } } },
+      { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, status: 1, privado: 1, _source: { $literal: 'payment' } } },
       { $sort: { _effectiveDate: -1 } },
     ]),
     GeneratedQuote.aggregate([
-      { $match: { status: 'paid' } },
+      { $match: { status: 'paid', ...noPriv } },
       { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-      { $project: { clientName: 1, title: { $ifNull: ['$tituloTrabajo', '$tipoTrabajo'] }, amount: '$_amount', method: '$metodoPago', vendedor: 1, createdAt: 1, paymentDate: '$paidAt', status: 1, _source: { $literal: 'sofia' } } },
+      { $project: { clientName: 1, title: { $ifNull: ['$tituloTrabajo', '$tipoTrabajo'] }, amount: '$_amount', method: '$metodoPago', vendedor: 1, createdAt: 1, paymentDate: '$paidAt', status: 1, privado: 1, _source: { $literal: 'sofia' } } },
       { $sort: { _effectiveDate: -1 } },
     ]),
   ]);
@@ -330,11 +333,11 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
   // Total histórico (all-time) — todas las fuentes
   const [allTimePay, allTimeSofia, allTimeGuest] = await Promise.all([
     Payment.aggregate([
-      { $match: { status: 'completed', notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
+      { $match: { status: 'completed', ...noPriv, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
     GeneratedQuote.aggregate([
-      { $match: { status: 'paid' } },
+      { $match: { status: 'paid', ...noPriv } },
       { $addFields: { _amount: sofiaAmountField } },
       { $group: { _id: null, total: { $sum: '$_amount' }, count: { $sum: 1 } } }
     ]),
@@ -376,6 +379,41 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
     salesCount: completedPaymentsThisMonth,
     recentPayments,
   });
+}));
+
+// ═══════════════════════════════════════════════════
+// POST /revenue/privado — Marcar/desmarcar una venta como PERSONAL
+//   Solo el superadmin. source: 'sofia' (GeneratedQuote) | 'payment' (Payment)
+// ═══════════════════════════════════════════════════
+router.post('/privado', protect, adminOnly, asyncHandler(async (req, res) => {
+  if (req.user?.role !== 'superadmin') {
+    res.status(403);
+    throw new Error('Solo el superadmin puede marcar ventas personales');
+  }
+  const { source, id, privado } = req.body;
+  if (!id || !['sofia', 'payment'].includes(source)) {
+    res.status(400);
+    throw new Error('source (sofia|payment) e id son requeridos');
+  }
+  const Model = source === 'sofia' ? GeneratedQuote : Payment;
+  const doc = await Model.findByIdAndUpdate(id, { privado: !!privado }, { new: true })
+    .select('clientName tituloTrabajo tipoTrabajo privado');
+  if (!doc) { res.status(404); throw new Error('Venta no encontrada'); }
+  // Si es cotización, propagar al Payment auto-generado gemelo (sin esto se
+  // colaría en la sección Pagos: el auto no guarda el id, se liga por cliente+título)
+  if (source === 'sofia' && doc.clientName) {
+    const titulo = doc.tituloTrabajo || doc.tipoTrabajo || '';
+    await Payment.updateMany(
+      {
+        isManual: true,
+        notes: { $regex: /Auto-generado al marcar cotización generated/i },
+        clientName: doc.clientName,
+        ...(titulo ? { title: titulo } : {}),
+      },
+      { $set: { privado: !!privado } },
+    ).catch(() => {});
+  }
+  res.json({ _id: doc._id, clientName: doc.clientName, privado: doc.privado });
 }));
 
 // ═══════════════════════════════════════════════════

@@ -154,6 +154,11 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        // Venta PERSONAL de Arturo: solo superadmin y Paula la ven en Revenue/cotizaciones
+        privado: {
+            type: Boolean,
+            default: false,
+        },
         // Folio visible en el PDF (COT-XXXXXX). Persistido para poder buscar por él.
         folio: {
             type: String,
