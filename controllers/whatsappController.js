@@ -6,6 +6,7 @@
 import asyncHandler from 'express-async-handler';
 import cloudinary from '../config/cloudinary.js';
 import createNotification from '../utils/createNotification.js';
+import { filtrarLeadsPrivados, puedeVerVentasPrivadas } from '../utils/ventasPrivadas.js';
 import { execSync } from 'child_process';
 import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
@@ -587,7 +588,11 @@ export const getLeads = asyncHandler(async (req, res) => {
     }
   }
 
-  res.json({ leads: enriched, total, limit, offset, hasMore: offset + enriched.length < total });
+  // 🔒 Leads ligados a cotizaciones PERSONALES: solo Arturo/Paula los ven
+  const visibles = await filtrarLeadsPrivados(req.user, enriched);
+  const ocultos = enriched.length - visibles.length;
+
+  res.json({ leads: visibles, total: total - ocultos, limit, offset, hasMore: offset + enriched.length < total });
 });
 
 /**
@@ -603,7 +608,13 @@ export const getLeadByWaId = asyncHandler(async (req, res) => {
     throw new Error('Error al obtener lead');
   }
   const data = await response.json();
-  const lead = data[0] || null;
+  let lead = data[0] || null;
+
+  // 🔒 Lead de cotización PERSONAL: invisible para quien no sea Arturo/Paula
+  if (lead) {
+    const visibles = await filtrarLeadsPrivados(req.user, [lead]);
+    if (!visibles.length) { res.status(404); throw new Error('Lead no encontrado'); }
+  }
 
   // Ya NO reseteamos mensajes_sin_leer al abrir — solo se resetea cuando el admin RESPONDE
   res.json(lead);
@@ -1029,7 +1040,8 @@ export const getLeadsDiario = asyncHandler(async (req, res) => {
     res.status(resp.status);
     throw new Error(`Error de Supabase (leads-diario): ${err}`);
   }
-  const rows = await resp.json();
+  // 🔒 Leads de cotizaciones PERSONALES fuera del tablero para quien no sea Arturo/Paula
+  const rows = await filtrarLeadsPrivados(req.user, await resp.json());
 
   // ── Benchmark de compradores (últimos 90 días) ──
   let bench = null;

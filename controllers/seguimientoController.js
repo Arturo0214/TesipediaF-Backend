@@ -8,6 +8,7 @@ import Notification from '../models/Notification.js';
 import cloudinary from '../config/cloudinary.js';
 import supabaseAdmin from '../config/supabaseAdmin.js';
 import createNotification from '../utils/createNotification.js';
+import { filtroPrivado } from '../utils/ventasPrivadas.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 import notifyCambioProyecto from '../utils/notifyProyectos.js';
 
@@ -166,10 +167,14 @@ async function fetchCotizacionesIndex() {
 }
 
 /* ─────────────── núcleo del tablero ───────────────
- * Compartido entre GET /seguimientos, el sync de Fireflies y las alertas. */
-export async function buildSeguimientoRows() {
+ * Compartido entre GET /seguimientos, el sync de Fireflies y las alertas.
+ * `user`: si viene (petición HTTP), las cotizaciones PERSONALES se filtran
+ * para quien no sea Arturo/Paula. Los procesos internos (Fireflies, alertas
+ * que solo van al superadmin) no pasan user y ven todo. */
+export async function buildSeguimientoRows(user = null) {
+  const soloVisibles = user ? filtroPrivado(user) : {};
   const [quotes, seguimientos] = await Promise.all([
-    GeneratedQuote.find({ status: 'paid' })
+    GeneratedQuote.find({ status: 'paid', ...soloVisibles })
       .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio')
       .lean(),
     Seguimiento.find({}).lean(),
@@ -283,7 +288,7 @@ export async function buildSeguimientoRows() {
 
 /* ─────────────── GET /seguimientos ─────────────── */
 export const getSeguimientos = asyncHandler(async (req, res) => {
-  res.json(await buildSeguimientoRows());
+  res.json(await buildSeguimientoRows(req.user));
 });
 
 /* ─────────────── POST /:type/:id/nota ─────────────── */
