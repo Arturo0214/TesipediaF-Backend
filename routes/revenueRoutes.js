@@ -8,7 +8,7 @@ import GuestPayment from '../models/guestPayment.js';
 import Project from '../models/Project.js';
 import { fetchAllProviderCosts, allProviders, fetchAllCampaigns } from '../services/costProviders.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
-import { filtroPrivado } from '../utils/ventasPrivadas.js';
+import { filtroPrivado, puedeVerVentasPrivadas } from '../utils/ventasPrivadas.js';
 import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
 
@@ -386,9 +386,10 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
 //   Solo el superadmin. source: 'sofia' (GeneratedQuote) | 'payment' (Payment)
 // ═══════════════════════════════════════════════════
 router.post('/privado', protect, adminOnly, asyncHandler(async (req, res) => {
-  if (req.user?.role !== 'superadmin') {
+  // Mismo círculo que puede VERLAS: Arturo (superadmin) y Paula
+  if (!puedeVerVentasPrivadas(req.user)) {
     res.status(403);
-    throw new Error('Solo el superadmin puede marcar ventas personales');
+    throw new Error('Solo Arturo y Paula pueden marcar ventas personales');
   }
   const { source, id, privado } = req.body;
   if (!id || !['sofia', 'payment'].includes(source)) {
