@@ -91,6 +91,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
       client: q.clientName || 'Cliente',
       title: q.tituloTrabajo || q.tipoTrabajo || 'Proyecto',
       vendedor: q.vendedor || '',
+      privado: !!q.privado,                // 🔒 venta PERSONAL (solo llega a Arturo/Paula)
       // Contacto para llamar/escribir desde el desglose
       phone: info.phone || q.clientPhone || '',
       email: info.email || q.clientEmail || '',

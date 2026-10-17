@@ -141,8 +141,8 @@ async function fetchAtencionWhatsApp(phones) {
  * TODAS las cotizaciones (cualquier status) agrupadas por teléfono y email,
  * para mostrar en el tablero las cotizaciones disponibles de cada lead y
  * verificar que ninguna se quede fuera. */
-async function fetchCotizacionesIndex() {
-  const all = await GeneratedQuote.find({})
+async function fetchCotizacionesIndex(filtro = {}) {
+  const all = await GeneratedQuote.find(filtro)
     .select('clientName clientPhone clientEmail tituloTrabajo tipoTrabajo precioConDescuento precioConRecargo precioBase status createdAt esquemaTipo esquemaPago folio publicId')
     .sort({ createdAt: -1 })
     .lean();
@@ -175,7 +175,7 @@ export async function buildSeguimientoRows(user = null) {
   const soloVisibles = user ? filtroPrivado(user) : {};
   const [quotes, seguimientos] = await Promise.all([
     GeneratedQuote.find({ status: 'paid', ...soloVisibles })
-      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio')
+      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio privado')
       .lean(),
     Seguimiento.find({}).lean(),
   ]);
@@ -192,7 +192,7 @@ export async function buildSeguimientoRows(user = null) {
   const phones = quotes.map((q) => projByQuote.get(String(q._id))?.clientPhone || q.clientPhone || '');
   const [atencionMap, cotIndex] = await Promise.all([
     fetchAtencionWhatsApp(phones),
-    fetchCotizacionesIndex(),
+    fetchCotizacionesIndex(soloVisibles),
   ]);
 
   const rows = quotes.map((q) => {
@@ -227,6 +227,7 @@ export async function buildSeguimientoRows(user = null) {
       cliente: seg?.nombre || q.clientName || 'Cliente',
       nombre: seg?.nombre || '',
       prioritario: !!seg?.prioritario,
+      privado: !!q.privado, // 🔒 venta PERSONAL (solo llega a Arturo/Paula; para otros la fila ni existe)
       personal: !!seg?.personal,
       urgente: !!seg?.urgente,
       entregado: !!seg?.entregado,
