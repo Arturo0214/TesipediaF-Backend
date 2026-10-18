@@ -42,6 +42,11 @@ export const sendWhatsAppText = async (to, message) => {
     if (!response.ok) {
       const errorData = await response.text();
       console.error(`❌ WhatsApp API error enviando a ${to}:`, errorData);
+      // Ventana de 24h cerrada (el destinatario no ha escrito a la línea):
+      // el texto libre no se entrega → reintentar como PLANTILLA (sin ventana)
+      if (/131047|131026|re-?engagement/i.test(errorData)) {
+        return sendTemplateAviso(to, message);
+      }
       return { success: false, error: errorData };
     }
 
@@ -50,6 +55,39 @@ export const sendWhatsAppText = async (to, message) => {
     return { success: true, data: result };
   } catch (err) {
     console.error(`❌ Error enviando WhatsApp a ${to}:`, err.message);
+    return { success: false, error: err.message };
+  }
+};
+
+/**
+ * Fallback: aviso como plantilla UTILITY `aviso_panel` (no requiere ventana 24h).
+ * El cuerpo del aviso viaja aplanado en {{1}} (los parámetros no admiten saltos de línea).
+ */
+const sendTemplateAviso = async (to, message) => {
+  const flat = String(message).replace(/\s*\n+\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim().slice(0, 900);
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: to.replace(/\D/g, ''),
+        type: 'template',
+        template: {
+          name: 'aviso_panel',
+          language: { code: 'es_MX' },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: flat }] }],
+        },
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      console.error(`❌ Plantilla aviso_panel falló para ${to}:`, err.slice(0, 300));
+      return { success: false, error: err };
+    }
+    console.log(`✅ WhatsApp enviado a ${to} (plantilla aviso_panel — ventana cerrada)`);
+    return { success: true, data: await response.json() };
+  } catch (err) {
     return { success: false, error: err.message };
   }
 };
