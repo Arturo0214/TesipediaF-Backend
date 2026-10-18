@@ -13,6 +13,15 @@ const NOTIFICATION_NUMBERS = [
   '525512478395',
 ];
 
+// México: WhatsApp identifica a los móviles como 521XXXXXXXXXX. Meta dejó de
+// normalizar el "1" automáticamente: un envío a 52XXXXXXXXXX devuelve 200 pero
+// se descarta (la cuenta no existe). Se inserta el 1 siempre que falte.
+const normalizarMx = (to) => {
+  const d = String(to || '').replace(/\D/g, '');
+  if (/^52\d{10}$/.test(d) && !d.startsWith('521')) return `521${d.slice(2)}`;
+  return d;
+};
+
 /**
  * Enviar un mensaje de texto simple por WhatsApp
  * @param {string} to - Número de destino (con código de país, sin +)
@@ -24,7 +33,7 @@ export const sendWhatsAppText = async (to, message) => {
 
   const payload = {
     messaging_product: 'whatsapp',
-    to: to.replace(/\D/g, ''),
+    to: normalizarMx(to),
     type: 'text',
     text: { body: message },
   };
@@ -71,7 +80,7 @@ const sendTemplateAviso = async (to, message) => {
       headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
-        to: to.replace(/\D/g, ''),
+        to: normalizarMx(to),
         type: 'template',
         template: {
           name: 'aviso_panel',
