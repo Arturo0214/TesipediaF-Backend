@@ -22,7 +22,10 @@ const WA_PHONE_ID = process.env.WA_PHONE_ID || '978427788691495';
 const WA_TOKEN = process.env.WA_TOKEN || '';
 
 // Plantilla aprobada para enviar fuera de la ventana de 24h
-const WA_TEMPLATE_NAME = 'seguimiento_tesipedia';
+// v2: la plantilla original quedó huérfana en el índice de envío de Meta tras el
+// cambio de facturación (18-oct) — APPROVED en el WABA pero 132001 al enviar.
+// Se recreó idéntica como _v2. Override por env si hay que cambiarla sin deploy.
+const WA_TEMPLATE_NAME = process.env.WA_TEMPLATE_NAME || 'seguimiento_tesipedia_v2';
 const WA_TEMPLATE_LANG = 'es_MX';
 const HOURS_24 = 24 * 60 * 60 * 1000;
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
@@ -1908,7 +1911,7 @@ export const claimLead = asyncHandler(async (req, res) => {
  * Body opcional: { hours: 24 } — ventana de tiempo (default 24h)
  */
 export const sendReengagement = asyncHandler(async (req, res) => {
-  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123', '5215655588013'];
   const hours = Number(req.body?.hours) || 24;
 
   // 1. Obtener leads en bienvenida, calificando o cotizando de las ultimas N horas
@@ -2013,7 +2016,7 @@ const autoReminder = {
 
 // Funcion interna que ejecuta el ciclo de recordatorios
 async function runAutoReminder() {
-  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123', '5215655588013'];
   const since = new Date(Date.now() - autoReminder.staleMinutes * 60 * 1000).toISOString();
 
   try {
@@ -2365,7 +2368,7 @@ const autoRevival = {
  * @returns {Object} resultados del revival
  */
 async function runRevivalCore(options = {}) {
-  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123', '5215655588013'];
   const maxPerRun = options.maxPerRun || autoRevival.maxPerRun;
   const dryRun = options.dryRun || false;
   const allowedTiers = options.tiers || [3, 7, 14, 30];
@@ -3160,7 +3163,7 @@ const autoQuoteFollowUp = {
  * Core: busca leads con cotización enviada y manda seguimiento escalonado
  */
 async function runQuoteFollowUpCore(options = {}) {
-  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123', '5215655588013'];
   const maxPerRun = options.maxPerRun || autoQuoteFollowUp.maxPerRun;
   const dryRun = options.dryRun || false;
   const allowedTiers = options.tiers || [1, 3, 7, 14];
@@ -4325,7 +4328,7 @@ const calificacionFollowUp = {
 };
 
 async function runCalificacionFollowUp() {
-  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123'];
+  const ADMIN_IDS = ['5215583352096', '525561757123', '525512478395', '5215541004180', '5215561757123', '5215655588013'];
   const since = new Date(Date.now() - calificacionFollowUp.staleMinutes * 60 * 1000).toISOString();
 
   try {

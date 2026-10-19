@@ -11,6 +11,7 @@ const NOTIFICATION_NUMBERS = [
   '525583352096',
   '525561757123',
   '525512478395',
+  '5215655588013', // Paula
 ];
 
 // México: WhatsApp identifica a los móviles como 521XXXXXXXXXX. Meta dejó de
@@ -158,6 +159,7 @@ export const notifyQuoteSent = async (quoteData) => {
 const NEW_CLIENT_NOTIFY_NUMBERS = [
   '525583352096',
   '525512478395',
+  '5215655588013', // Paula
 ];
 
 export const notifyNewClient = async (clientData) => {
