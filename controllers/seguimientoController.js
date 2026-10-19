@@ -303,7 +303,8 @@ export const addNota = asyncHandler(async (req, res) => {
   const autor = req.user?.name || req.user?.nombre || 'admin';
   doc.notas.push({ texto: texto.trim(), autor, fecha: new Date() });
   await doc.save();
-  if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: texto.startsWith('📨') ? 'dejó mensaje para el cliente 📨' : 'agregó una nota', priority: texto.startsWith('📨') ? 'high' : 'low' });
+  // 💬 Comentario nuevo → badge en Proyectos + notificación a Arturo y Paula (nunca al autor)
+  if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: texto.startsWith('📨') ? 'dejó mensaje para el cliente 📨' : 'agregó un comentario 💬', priority: texto.startsWith('📨') ? 'high' : 'medium' });
   res.status(201).json({ notas: doc.notas });
 });
 
