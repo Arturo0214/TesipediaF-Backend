@@ -8,6 +8,9 @@ import Seguimiento from '../models/Seguimiento.js';
 import Resena from '../models/Resena.js';
 import { filtroPrivado, puedeVerVentasPrivadas } from '../utils/ventasPrivadas.js';
 import { buildSeguimientoRows } from '../controllers/seguimientoController.js';
+import upload from '../middleware/multer.js';
+import cloudinary from '../config/cloudinary.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 const router = express.Router();
 
@@ -231,18 +234,67 @@ router.get('/resenas', protect, adminOnly, asyncHandler(async (req, res) => {
   res.json({ total: resenas.length, resenas });
 }));
 
-router.post('/resenas', protect, adminOnly, asyncHandler(async (req, res) => {
-  const { cliente, texto, calificacion, fuente, servicio, destacada, fecha } = req.body;
-  if (!cliente || !texto) {
-    res.status(400);
-    throw new Error('cliente y texto son obligatorios');
+// Extrae el texto de la reseña desde la captura de WhatsApp (Haiku visión)
+async function extraerTextoDeCaptura(file) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !/^image\//i.test(file.mimetype || '')) return '';
+  try {
+    const anthropic = new Anthropic({ apiKey });
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: file.buffer.toString('base64') } },
+          {
+            type: 'text',
+            text: 'Esta es una captura de WhatsApp con la reseña/agradecimiento de un cliente de Tesipedia (asesoría de tesis). Extrae SOLO lo que escribió el cliente (sus mensajes, no las respuestas del asesor) como una cita limpia y fluida. Corrige saltos de línea pero no cambies sus palabras. Responde ÚNICAMENTE con el texto extraído, sin comillas ni explicaciones. Si no hay reseña visible responde con una cadena vacía.',
+          },
+        ],
+      }],
+    });
+    return (msg.content?.[0]?.text || '').trim();
+  } catch (e) {
+    console.error('Biblioteca: fallo extrayendo texto de reseña:', e.message);
+    return '';
   }
+}
+
+router.post('/resenas', protect, adminOnly, upload.single('file'), asyncHandler(async (req, res) => {
+  const { cliente, texto, calificacion, fuente, servicio, destacada, fecha } = req.body;
+  if (!cliente || (!texto && !req.file)) {
+    res.status(400);
+    throw new Error('Se necesita el nombre del cliente y la captura de la reseña');
+  }
+
+  let imagen = { url: '', publicId: '' };
+  let textoFinal = (texto || '').trim();
+
+  if (req.file) {
+    if (!/^image\//i.test(req.file.mimetype || '')) {
+      res.status(400);
+      throw new Error('La reseña debe ser una imagen (captura de WhatsApp)');
+    }
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'tesipedia/resenas', resource_type: 'image', public_id: `resena_${Date.now()}` },
+        (error, uploaded) => (error ? reject(error) : resolve(uploaded)),
+      );
+      stream.end(req.file.buffer);
+    });
+    imagen = { url: result.secure_url, publicId: result.public_id };
+    if (!textoFinal) textoFinal = await extraerTextoDeCaptura(req.file);
+  }
+
   const resena = await Resena.create({
-    cliente, texto,
+    cliente,
+    imagen,
+    texto: textoFinal,
     calificacion: calificacion || 5,
     fuente: fuente || 'whatsapp',
     servicio: servicio || '',
-    destacada: !!destacada,
+    destacada: destacada === true || destacada === 'true',
     fecha: fecha ? new Date(fecha) : new Date(),
     capturadaPor: req.user?.name || '',
   });
@@ -261,6 +313,9 @@ router.put('/resenas/:id', protect, adminOnly, asyncHandler(async (req, res) => 
 router.delete('/resenas/:id', protect, adminOnly, asyncHandler(async (req, res) => {
   const resena = await Resena.findByIdAndDelete(req.params.id);
   if (!resena) { res.status(404); throw new Error('Reseña no encontrada'); }
+  if (resena.imagen?.publicId) {
+    try { await cloudinary.uploader.destroy(resena.imagen.publicId); } catch { /* noop */ }
+  }
   res.json({ ok: true });
 }));
 
@@ -274,7 +329,7 @@ router.get('/contexto-ia', iaAuth, asyncHandler(async (req, res) => {
     GeneratedQuote.find({})
       .select('status paidAt precioConDescuento extensionEstimada tipoTrabajo tipoServicio area carrera tiempoEntrega esquemaTipo serviciosIncluidos createdAt')
       .lean(),
-    Resena.find({ visible: true }).sort({ destacada: -1, fecha: -1 }).limit(12).lean(),
+    Resena.find({ visible: true, texto: { $nin: ['', null] } }).sort({ destacada: -1, fecha: -1 }).limit(12).lean(),
   ]);
 
   const pagadas = quotes.filter((q) => q.status === 'paid' || q.paidAt);
