@@ -31,6 +31,13 @@ const WA_TEMPLATE_LANG = 'es_MX';
 const HOURS_24 = 24 * 60 * 60 * 1000;
 const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID;
 
+// Traducción de códigos internos → texto legible para el cliente (re-enganche/revival).
+// Sin esto, mensajes como "tu proyecto_1 de nivel_4" se filtran crudos al cliente.
+const _LBL_PROY = { proyecto_1: 'tesis', proyecto_2: 'tesina', proyecto_3: 'proyecto' };
+const _LBL_NIV = { nivel_1: 'licenciatura', nivel_2: 'maestria', nivel_3: 'doctorado', nivel_4: 'preparatoria', nivel_5: 'especialidad', nivel_6: 'diplomado' };
+const labelProyecto = (c) => _LBL_PROY[c] || (c && /^proyecto_/i.test(c) ? 'proyecto' : (c || 'tu proyecto'));
+const labelNivel = (c) => _LBL_NIV[c] || (c && /^nivel_/i.test(c) ? '' : (c || ''));
+
 /**
  * Helper: Genera un mensaje contextual de Sofia basado en el ultimo dato recabado del lead.
  * Flujo de calificacion: nombre → tipo_servicio → tipo_proyecto → nivel → carrera → tema → paginas → fecha_entrega
@@ -58,18 +65,19 @@ function buildSofiaContextualMessage(lead) {
     return `${saludo} Ya me comentaste que necesitas ${servicioLabel}. Ahora cuentame, que tipo de trabajo es? Por ejemplo: tesis, tesina, articulo cientifico, ensayo...`;
   }
 
-  const proyectoLabel = lead.tipo_proyecto || 'tu proyecto';
+  const proyectoLabel = labelProyecto(lead.tipo_proyecto);
+  const nivelLabel = labelNivel(lead.nivel);
 
   if (!lead.nivel) {
-    return `${saludo} Veo que estas trabajando en ${proyectoLabel.toLowerCase() === 'otro' ? 'tu proyecto' : 'tu ' + proyectoLabel.toLowerCase()}. De que nivel academico es? Preparatoria, licenciatura, maestria, especialidad, diplomado o doctorado?`;
+    return `${saludo} Veo que estas trabajando en tu ${proyectoLabel}. De que nivel academico es? Preparatoria, licenciatura, maestria, especialidad, diplomado o doctorado?`;
   }
 
   if (!lead.carrera) {
-    return `${saludo} Ya tengo que es ${proyectoLabel.toLowerCase()} de ${lead.nivel}. Que carrera o programa cursas?`;
+    return `${saludo} Ya tengo que es ${proyectoLabel}${nivelLabel ? ` de ${nivelLabel}` : ''}. Que carrera o programa cursas?`;
   }
 
   if (!lead.tema) {
-    return `${saludo} Excelente, ${lead.carrera} de ${lead.nivel}. Y cual es el tema de tu ${proyectoLabel.toLowerCase()}?`;
+    return `${saludo} Excelente, ${lead.carrera}${nivelLabel ? ` de ${nivelLabel}` : ''}. Y cual es el tema de tu ${proyectoLabel}?`;
   }
 
   if (!lead.paginas) {
@@ -77,7 +85,7 @@ function buildSofiaContextualMessage(lead) {
   }
 
   if (!lead.fecha_entrega) {
-    return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel.toLowerCase()} de ${lead.paginas} paginas?`;
+    return `${saludo} Ya casi tengo todo! Solo me falta saber: para cuando necesitas tu ${proyectoLabel} de ${lead.paginas} paginas?`;
   }
 
   // Tiene todos los datos — ahora sí decir que la cotización está lista
@@ -2336,7 +2344,7 @@ function buildRevivalMessage(lead, tier) {
   const tieneTema = !!lead.tema;
   const tieneProyecto = !!lead.tipo_proyecto;
   const servicioLabel = { servicio_1: 'redaccion completa', servicio_2: 'correccion de estilo', servicio_3: 'asesoria' }[lead.tipo_servicio] || '';
-  const proyectoLabel = (lead.tipo_proyecto || '').toLowerCase();
+  const proyectoLabel = labelProyecto(lead.tipo_proyecto);
 
   // ═══════════════════════════════
   // TIER 3 DÍAS — Mensaje suave, retomar conversación
