@@ -8,21 +8,27 @@ const SUPER_ADMIN_EMAIL = 'osvaldosuarezcruz@gmail.com';
 
 // Protege rutas normales
 export const protect = asyncHandler(async (req, res, next) => {
-  let token;
-
-  if (req.cookies.jwt) {
-    token = req.cookies.jwt;
-  } else if (req.headers.authorization?.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
+  // Probamos AMBAS fuentes y aceptamos la primera que verifique.
+  // El header Bearer va primero: es el token fresco que manda el SPA tras login.
+  // La cookie puede quedar obsoleta (p.ej. firmada con un JWT_SECRET anterior) o
+  // bloqueada en móvil por ser cross-site; NO debe tumbar un Bearer válido.
+  const candidatos = [];
+  if (req.headers.authorization?.startsWith('Bearer')) {
+    candidatos.push(req.headers.authorization.split(' ')[1]);
   }
+  if (req.cookies?.jwt) candidatos.push(req.cookies.jwt);
 
-  if (!token) {
+  if (!candidatos.length) {
     res.status(401);
     throw new Error('No autorizado: token no presente');
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    let decoded = null;
+    for (const t of candidatos) {
+      try { decoded = jwt.verify(t, process.env.JWT_SECRET); break; } catch { /* probar siguiente */ }
+    }
+    if (!decoded) throw new Error('ningún token válido');
     req.user = await User.findById(decoded.id).select('-password');
 
     if (!req.user) {
@@ -48,17 +54,19 @@ export const protect = asyncHandler(async (req, res, next) => {
 
 // Protege solo si hay token (sino, deja pasar)
 export const optionalAuth = asyncHandler(async (req, res, next) => {
-  let token;
-
-  if (req.cookies.jwt) {
-    token = req.cookies.jwt;
-  } else if (req.headers.authorization?.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
+  const candidatos = [];
+  if (req.headers.authorization?.startsWith('Bearer')) {
+    candidatos.push(req.headers.authorization.split(' ')[1]);
   }
+  if (req.cookies?.jwt) candidatos.push(req.cookies.jwt);
 
-  if (token) {
+  if (candidatos.length) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      let decoded = null;
+      for (const t of candidatos) {
+        try { decoded = jwt.verify(t, process.env.JWT_SECRET); break; } catch { /* siguiente */ }
+      }
+      if (!decoded) throw new Error('ningún token válido');
       req.user = await User.findById(decoded.id).select('-password');
 
       if (!req.user) {
