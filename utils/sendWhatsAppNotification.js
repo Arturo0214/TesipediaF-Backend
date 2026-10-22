@@ -193,4 +193,40 @@ export const notifyNewClient = async (clientData) => {
   return { sent, total: NEW_CLIENT_NOTIFY_NUMBERS.length };
 };
 
-export default { sendWhatsAppText, notifyQuoteSent, notifyNewClient };
+/**
+ * Notificar que un lead PIDIÓ HABLAR CON UN ASESOR (escalado manual o automático).
+ * Alta prioridad: es un lead caliente que quiere cerrar por teléfono/humano.
+ * @param {object} data - { clientName, clientPhone, motivo, resumen, origen }
+ */
+export const notifyAdvisorRequest = async (data) => {
+  const {
+    clientName = 'Cliente',
+    clientPhone = '',
+    motivo = 'Pidió hablar con un asesor',
+    resumen = '',
+    origen = 'WhatsApp',
+  } = data;
+
+  const message = [
+    `📞 *LEAD QUIERE ASESOR — ${origen}*`,
+    ``,
+    `👤 *${clientName}*`,
+    clientPhone ? `📱 ${clientPhone}` : null,
+    ``,
+    `🔔 ${motivo}`,
+    resumen ? `📋 ${resumen}` : null,
+    ``,
+    `⚡ Está en *Esperando aprobación* — contáctalo YA para cerrar.`,
+    ``,
+    `⏰ ${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`,
+  ].filter(Boolean).join('\n');
+
+  const results = await Promise.allSettled(
+    NEW_CLIENT_NOTIFY_NUMBERS.map(num => sendWhatsAppText(num, message))
+  );
+  const sent = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+  console.log(`📞 Notificación "quiere asesor" enviada a ${sent}/${NEW_CLIENT_NOTIFY_NUMBERS.length} números`);
+  return { sent, total: NEW_CLIENT_NOTIFY_NUMBERS.length };
+};
+
+export default { sendWhatsAppText, notifyQuoteSent, notifyNewClient, notifyAdvisorRequest };

@@ -13,6 +13,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import ffmpegPath from 'ffmpeg-static';
 import { sendCtwaEvent } from '../utils/metaCapi.js';
+import { notifyAdvisorRequest } from '../utils/sendWhatsAppNotification.js';
 import { leadYaPago } from '../utils/leadPagadoGuard.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 
@@ -672,6 +673,79 @@ export const toggleAutoPaused = asyncHandler(async (req, res) => {
   }
   const data = await response.json();
   res.json({ success: true, data });
+});
+
+/**
+ * PATCH /api/v1/whatsapp/leads/:waId/contact-advisor
+ * Escala un lead para que un asesor lo contacte: lo pasa a 'esperando_aprobacion',
+ * silencia a Sofia (modo_humano=true), pausa automatizaciones y avisa al equipo.
+ * Se usa desde el botón "Contactar asesor" del panel y desde el auto-escalado de Sofia.
+ */
+export const contactAdvisor = asyncHandler(async (req, res) => {
+  const { waId } = req.params;
+  const { motivo } = req.body || {};
+
+  // 1) Traer datos del lead para la notificación
+  let lead = {};
+  try {
+    const getUrl = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}&select=nombre,carrera,tipo_servicio,tipo_proyecto,nivel,estado_sofia&limit=1`;
+    const getResp = await fetch(getUrl, { headers: supabaseHeaders() });
+    if (getResp.ok) { const arr = await getResp.json(); lead = arr[0] || {}; }
+  } catch { /* noop */ }
+
+  // 2) Escalar: esperando_aprobacion + Sofia OFF + automatizaciones en pausa
+  const url = `${SUPABASE_URL}/rest/v1/leads?wa_id=eq.${waId}`;
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: supabaseHeaders(),
+    body: JSON.stringify({
+      estado_sofia: 'esperando_aprobacion',
+      modo_humano: true,
+      auto_paused: true,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    res.status(response.status);
+    throw new Error('Error al escalar el lead a asesor');
+  }
+  const data = await response.json();
+
+  // 3) Avisar al equipo por WhatsApp (alta prioridad)
+  const SERV = { servicio_1: 'Redacción completa', servicio_2: 'Correcciones' };
+  const PROY = { proyecto_1: 'Tesis', proyecto_2: 'Tesina', proyecto_3: 'Proyecto' };
+  const NIV = { nivel_1: 'Licenciatura', nivel_2: 'Maestría', nivel_3: 'Doctorado', nivel_4: 'Preparatoria', nivel_5: 'Especialidad', nivel_6: 'Diplomado' };
+  const resumen = [
+    SERV[lead.tipo_servicio] || lead.tipo_servicio,
+    PROY[lead.tipo_proyecto] || lead.tipo_proyecto,
+    lead.carrera,
+    NIV[lead.nivel] || lead.nivel,
+  ].filter(Boolean).join(' · ');
+  try {
+    await notifyAdvisorRequest({
+      clientName: lead.nombre || 'Cliente',
+      clientPhone: waId,
+      motivo: motivo || 'Pidió hablar con un asesor',
+      resumen,
+      origen: 'Panel',
+    });
+  } catch (e) { console.warn('⚠️ No se pudo notificar asesor por WhatsApp:', e.message); }
+
+  // 4) Notificación interna en el panel (badge + socket)
+  if (SUPER_ADMIN_ID) {
+    try {
+      await createNotification(req.app, {
+        user: SUPER_ADMIN_ID,
+        type: 'lead',
+        message: `📞 ${lead.nombre || 'Cliente'} quiere asesor — Esperando aprobación`,
+        data: { wa_id: waId, nombre: lead.nombre, motivo: motivo || '' },
+        link: '/admin/whatsapp',
+        priority: 'high',
+      });
+    } catch { /* noop */ }
+  }
+
+  res.json({ success: true, data, escalado: true });
 });
 
 /**

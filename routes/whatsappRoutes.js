@@ -42,12 +42,23 @@ import {
   updateLeadRevival,
   uploadRevivalFile,
   getLeadsDiario,
+  contactAdvisor,
 } from '../controllers/whatsappController.js';
 
 const router = express.Router();
 
 // ─── Rutas PÚBLICAS (sin auth) — webhooks llamados por n8n/Sofia ───
 router.post('/incoming-webhook', incomingMessageWebhook);
+
+// Auto-escalado desde Sofia (n8n): mismo handler que el botón, pero autenticado
+// por secreto interno en vez de JWT. Si el secreto no está configurado, se rechaza.
+router.post('/internal/contact-advisor/:waId', (req, res, next) => {
+  const secret = process.env.INTERNAL_API_SECRET;
+  if (!secret || req.get('x-internal-secret') !== secret) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  return next();
+}, contactAdvisor);
 
 // ─── Rutas protegidas (admin) ───
 router.use(protect);
@@ -78,6 +89,9 @@ router.patch('/leads/:waId/claim', claimLead);
 
 // Bloquear / desbloquear un contacto
 router.patch('/leads/:waId/block', toggleBlockLead);
+
+// Contactar asesor: escala el lead a 'esperando_aprobacion', silencia a Sofia y avisa al equipo
+router.patch('/leads/:waId/contact-advisor', contactAdvisor);
 
 // Enviar mensaje con soporte para archivo adjunto
 router.post('/send', upload.single('file'), sendMessage);
