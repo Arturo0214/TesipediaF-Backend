@@ -107,8 +107,10 @@ const register = asyncHandler(async (req, res) => {
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  // Buscar por email o por teléfono
-  let user = await User.findOne({ email: email?.toLowerCase() }).select('+password');
+  // Buscar por email o por teléfono.
+  // trim(): los teclados móviles suelen añadir un espacio al autocompletar el email → 401 falso.
+  const emailNorm = email?.toLowerCase().trim();
+  let user = await User.findOne({ email: emailNorm }).select('+password');
 
   // Si no se encontró por email, intentar buscar por teléfono.
   // Los wa_id de WhatsApp traen el "1" legado tras el 52 (5215510496845), pero el
