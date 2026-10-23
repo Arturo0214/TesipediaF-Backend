@@ -1139,6 +1139,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       date: p.createdAt,
       dueDate: p.order?.dueDate || null,
       vendedor: p.vendedor || '',
+      pagoFinalEntrega: !!p.pagoFinalEntrega,
     });
   }
 
@@ -1170,6 +1171,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       tipoServicio: q.tipoServicio || '',
       carrera: q.carrera || '',
       vendedor: q.vendedor || '',
+      pagoFinalEntrega: !!q.pagoFinalEntrega,
     });
   }
 
@@ -1192,6 +1194,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       date: g.createdAt,
       dueDate: g.quoteId?.dueDate || null,
       vendedor: g.vendedor || '',
+      pagoFinalEntrega: false,
     });
   }
 
@@ -1238,6 +1241,7 @@ export const getPaymentsDashboard = asyncHandler(async (req, res) => {
       dueDate: null,
       notes,
       vendedor: m.vendedor || '',
+      pagoFinalEntrega: !!m.pagoFinalEntrega,
     });
   }
 

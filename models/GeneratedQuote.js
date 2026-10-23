@@ -159,6 +159,12 @@ const generatedQuoteSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        // Acuerdo: el ÚLTIMO pago se hace hasta terminar el proyecto. Ese pago pendiente
+        // NO cuenta como vencido/por cobrar en cobranza (Seguimiento/Revenue) — es contra entrega.
+        pagoFinalEntrega: {
+            type: Boolean,
+            default: false,
+        },
         // Folio visible en el PDF (COT-XXXXXX). Persistido para poder buscar por él.
         folio: {
             type: String,

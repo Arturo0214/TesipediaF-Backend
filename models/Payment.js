@@ -103,6 +103,11 @@ const paymentSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  // Acuerdo: el último pago es contra entrega (hasta terminar el proyecto). No cuenta como vencido.
+  pagoFinalEntrega: {
+    type: Boolean,
+    default: false,
+  },
   notes: {
     type: String,
     default: '',

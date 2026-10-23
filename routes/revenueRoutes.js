@@ -26,7 +26,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
   const targetYear = parseInt(year) || new Date().getFullYear();
 
   const paidQuotes = await GeneratedQuote.find({ status: 'paid', ...filtroPrivado(req.user) })
-    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt privado')
+    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt privado pagoFinalEntrega')
     .lean();
 
   // Proyecto vinculado: estatus (para "concluido"), avance, fecha de entrega, contacto y última nota.
@@ -92,6 +92,7 @@ router.get('/cashflow', protect, adminOnly, asyncHandler(async (req, res) => {
       title: q.tituloTrabajo || q.tipoTrabajo || 'Proyecto',
       vendedor: q.vendedor || '',
       privado: !!q.privado,                // 🔒 venta PERSONAL (solo llega a Arturo/Paula)
+      pagoFinalEntrega: !!q.pagoFinalEntrega, // 📦 último pago contra entrega
       // Contacto para llamar/escribir desde el desglose
       phone: info.phone || q.clientPhone || '',
       email: info.email || q.clientEmail || '',
@@ -315,14 +316,14 @@ router.get('/dashboard', protect, adminOnly, asyncHandler(async (req, res) => {
       { $match: { status: 'completed', ...noPriv, notes: { $not: { $regex: /Auto-generado al marcar cotización generated/i } } } },
       { $addFields: { _effectiveDate: dateField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-      { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, status: 1, privado: 1, _source: { $literal: 'payment' } } },
+      { $project: { clientName: 1, title: 1, amount: 1, method: 1, vendedor: 1, createdAt: 1, paymentDate: 1, status: 1, privado: 1, pagoFinalEntrega: 1, _source: { $literal: 'payment' } } },
       { $sort: { _effectiveDate: -1 } },
     ]),
     GeneratedQuote.aggregate([
       { $match: { status: 'paid', ...noPriv } },
       { $addFields: { _effectiveDate: sofiaDateField, _amount: sofiaAmountField } },
       { $match: { _effectiveDate: { $gte: startOfMonth, $lte: endOfMonth } } },
-      { $project: { clientName: 1, title: { $ifNull: ['$tituloTrabajo', '$tipoTrabajo'] }, amount: '$_amount', method: '$metodoPago', vendedor: 1, createdAt: 1, paymentDate: '$paidAt', status: 1, privado: 1, _source: { $literal: 'sofia' } } },
+      { $project: { clientName: 1, title: { $ifNull: ['$tituloTrabajo', '$tipoTrabajo'] }, amount: '$_amount', method: '$metodoPago', vendedor: 1, createdAt: 1, paymentDate: '$paidAt', status: 1, privado: 1, pagoFinalEntrega: 1, _source: { $literal: 'sofia' } } },
       { $sort: { _effectiveDate: -1 } },
     ]),
   ]);
@@ -416,6 +417,37 @@ router.post('/privado', protect, adminOnly, asyncHandler(async (req, res) => {
     ).catch(() => {});
   }
   res.json({ _id: doc._id, clientName: doc.clientName, privado: doc.privado });
+}));
+
+// ═══════════════════════════════════════════════════
+// POST /revenue/pago-final-entrega — Marcar/desmarcar "último pago contra entrega"
+//   El último pago pendiente deja de contar como vencido/por cobrar en cobranza.
+//   source: 'sofia' (GeneratedQuote) | 'payment' (Payment)
+// ═══════════════════════════════════════════════════
+router.post('/pago-final-entrega', protect, adminOnly, asyncHandler(async (req, res) => {
+  const { source, id, pagoFinalEntrega } = req.body;
+  if (!id || !['sofia', 'payment'].includes(source)) {
+    res.status(400);
+    throw new Error('source (sofia|payment) e id son requeridos');
+  }
+  const Model = source === 'sofia' ? GeneratedQuote : Payment;
+  const doc = await Model.findByIdAndUpdate(id, { pagoFinalEntrega: !!pagoFinalEntrega }, { new: true })
+    .select('clientName tituloTrabajo tipoTrabajo pagoFinalEntrega');
+  if (!doc) { res.status(404); throw new Error('Venta no encontrada'); }
+  // Propagar al Payment gemelo auto-generado (igual que privado) para que Pagos coincida
+  if (source === 'sofia' && doc.clientName) {
+    const titulo = doc.tituloTrabajo || doc.tipoTrabajo || '';
+    await Payment.updateMany(
+      {
+        isManual: true,
+        notes: { $regex: /Auto-generado al marcar cotización generated/i },
+        clientName: doc.clientName,
+        ...(titulo ? { title: titulo } : {}),
+      },
+      { $set: { pagoFinalEntrega: !!pagoFinalEntrega } },
+    ).catch(() => {});
+  }
+  res.json({ _id: doc._id, clientName: doc.clientName, pagoFinalEntrega: doc.pagoFinalEntrega });
 }));
 
 // ═══════════════════════════════════════════════════

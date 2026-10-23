@@ -61,19 +61,48 @@ function reconcile(q) {
     };
   });
 
+  // ── Acuerdo "último pago contra entrega": el ÚLTIMO pago pendiente se difiere ──
+  // hasta terminar el proyecto, por lo que NO es cobranza vencida ni por cobrar.
+  let pendienteEntrega = 0;
+  if (q.pagoFinalEntrega) {
+    for (let i = schedule.length - 1; i >= 0; i--) {
+      const it = schedule[i];
+      if (it.status !== 'paid' && it.status !== 'lost') {
+        pendienteEntrega = it.amount;
+        porCobrar -= it.amount;
+        if (it.dueDate) {
+          const d = new Date(it.dueDate); d.setHours(0, 0, 0, 0);
+          if (d < hoy) nVencidas = Math.max(0, nVencidas - 1);
+        }
+        it.status = 'deferred'; // la UI lo muestra como "⏳ contra entrega"
+        it.deferred = true;
+        break;
+      }
+    }
+    // Recalcular el próximo vencimiento sin el pago diferido
+    proximoVencimiento = null;
+    for (const it of schedule) {
+      if (it.status !== 'paid' && it.status !== 'lost' && it.status !== 'deferred' && it.dueDate) {
+        const d = new Date(it.dueDate); d.setHours(0, 0, 0, 0);
+        if (!proximoVencimiento || d < proximoVencimiento) proximoVencimiento = d;
+      }
+    }
+  }
+
   return {
     montoTotal: total,
     pagado: cobrado,
-    // "Por cobrar" al estilo Pagos = todo lo no cobrado (incluye cartera perdida).
-    pendiente: porCobrar + perdido,
-    porCobrarActivo: porCobrar,
+    // "Por cobrar" al estilo Pagos = todo lo no cobrado (incluye cartera perdida y el diferido).
+    pendiente: porCobrar + perdido + pendienteEntrega,
+    porCobrarActivo: porCobrar,       // activo de cobranza (EXCLUYE el pago contra entrega)
+    pendienteEntrega,                 // último pago que se cobra al entregar (no es vencido)
     perdido,
     cobradoConAtraso,
     nParcialidades: schedule.length,
     nPagadas,
     nVencidas,
     proximoVencimiento,
-    liquidado: porCobrar < 0.5,
+    liquidado: (porCobrar + pendienteEntrega) < 0.5,
     schedule,
   };
 }
@@ -175,7 +204,7 @@ export async function buildSeguimientoRows(user = null) {
   const soloVisibles = user ? filtroPrivado(user) : {};
   const [quotes, seguimientos] = await Promise.all([
     GeneratedQuote.find({ status: 'paid', ...soloVisibles })
-      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio privado')
+      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio privado pagoFinalEntrega')
       .lean(),
     Seguimiento.find({}).lean(),
   ]);
@@ -228,6 +257,7 @@ export async function buildSeguimientoRows(user = null) {
       nombre: seg?.nombre || '',
       prioritario: !!seg?.prioritario,
       privado: !!q.privado, // 🔒 venta PERSONAL (solo llega a Arturo/Paula; para otros la fila ni existe)
+      pagoFinalEntrega: !!q.pagoFinalEntrega, // 📦 último pago contra entrega (no es cobranza vencida)
       personal: !!seg?.personal,
       urgente: !!seg?.urgente,
       entregado: !!seg?.entregado,
