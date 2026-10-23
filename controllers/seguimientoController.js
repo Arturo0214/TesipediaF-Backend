@@ -351,7 +351,7 @@ export const getSeguimientos = asyncHandler(async (req, res) => {
 // Paula teclea sin acentos; los nombres guardados sí los traen.
 const sinAcentosRegex = (q) => {
   const vocal = { a: '[aáàäâ]', e: '[eéèëê]', i: '[iíìïî]', o: '[oóòöô]', u: '[uúùüû]', n: '[nñ]', c: '[cç]' };
-  const base = q.normalize('NFD').replace(/[̀-ͯ]/g, ''); // quita acentos del término buscado
+  const base = q.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // quita acentos del término buscado
   const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');          // escapa metacaracteres
   const pattern = esc.replace(/[aeiouncAEIOUNC]/g, (ch) => vocal[ch.toLowerCase()] || ch);
   return new RegExp(pattern, 'i');
