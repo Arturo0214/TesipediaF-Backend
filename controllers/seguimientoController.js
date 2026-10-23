@@ -202,12 +202,21 @@ async function fetchCotizacionesIndex(filtro = {}) {
  * que solo van al superadmin) no pasan user y ven todo. */
 export async function buildSeguimientoRows(user = null) {
   const soloVisibles = user ? filtroPrivado(user) : {};
-  const [quotes, seguimientos] = await Promise.all([
-    GeneratedQuote.find({ status: 'paid', ...soloVisibles })
-      .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio privado pagoFinalEntrega')
-      .lean(),
-    Seguimiento.find({}).lean(),
-  ]);
+  const seguimientos = await Seguimiento.find({}).lean();
+  // Entregas agendadas a mano: Paula agenda entregas para clientes cuyo pago entró
+  // FUERA del flujo online (efectivo/transferencia), por lo que su cotización sigue
+  // en 'pending'. Esas filas DEBEN aparecer en el tablero aunque no estén 'paid', o
+  // la entrega "se pierde" (no sale en Hoy/Próximos). Se incluyen solo si tienen una
+  // fecha de entrega o un acuerdo agendado explícitamente.
+  const agendadaIds = seguimientos
+    .filter((s) => s.quote && (s.fechaEntrega || (s.acuerdos || []).length > 0))
+    .map((s) => s.quote);
+  const quotes = await GeneratedQuote.find({
+    ...soloVisibles,
+    $or: [{ status: 'paid' }, { _id: { $in: agendadaIds } }],
+  })
+    .select('clientName clientEmail clientPhone tituloTrabajo tipoTrabajo vendedor precioConDescuento precioConRecargo precioBase descuentoEfectivo esquemaPago esquemaTipo pagosCustom installmentStatuses installmentPaidAt paidAt updatedAt createdAt pdfUrl folio privado pagoFinalEntrega status')
+    .lean();
 
   const quoteIds = quotes.map((q) => q._id);
   const projects = quoteIds.length
@@ -227,7 +236,18 @@ export async function buildSeguimientoRows(user = null) {
   const rows = quotes.map((q) => {
     const proj = projByQuote.get(String(q._id));
     const seg = segByQuote.get(String(q._id));
+    const esPaid = q.status === 'paid';
     const rec = reconcile(q);
+    // Fila de SOLO entrega (cotización no marcada 'paid'): rastreamos su entrega pero
+    // NO la tratamos como cobranza — no conocemos su estado de pago real, así que no
+    // debe inflar "Falta de pago" ni cartera vencida.
+    if (!esPaid) {
+      Object.assign(rec, {
+        pagado: 0, pendiente: 0, porCobrarActivo: 0, pendienteEntrega: 0,
+        perdido: 0, cobradoConAtraso: 0, nPagadas: 0, nVencidas: 0,
+        proximoVencimiento: null, liquidado: false,
+      });
+    }
     const celular = proj?.clientPhone || q.clientPhone || '';
     const email = proj?.clientEmail || q.clientEmail || '';
 
@@ -258,6 +278,7 @@ export async function buildSeguimientoRows(user = null) {
       prioritario: !!seg?.prioritario,
       privado: !!q.privado, // 🔒 venta PERSONAL (solo llega a Arturo/Paula; para otros la fila ni existe)
       pagoFinalEntrega: !!q.pagoFinalEntrega, // 📦 último pago contra entrega (no es cobranza vencida)
+      agendadaManual: !esPaid, // 📦 entrega agendada a mano sobre cotización no pagada (solo rastreo de entrega)
       personal: !!seg?.personal,
       urgente: !!seg?.urgente,
       entregado: !!seg?.entregado,
@@ -320,6 +341,34 @@ export async function buildSeguimientoRows(user = null) {
 /* ─────────────── GET /seguimientos ─────────────── */
 export const getSeguimientos = asyncHandler(async (req, res) => {
   res.json(await buildSeguimientoRows(req.user));
+});
+
+/* ─────────────── GET /seguimientos/buscar-lead?q= ───────────────
+ * Busca cotizaciones de CUALQUIER status (no solo pagadas) para poder agendar una
+ * entrega a un cliente que pagó por fuera del flujo online. Sin esto el selector de
+ * "+ Entrega" solo ve las 'paid' y Paula no encuentra al lead. */
+export const buscarLead = asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) { res.json([]); return; }
+  const soloVisibles = filtroPrivado(req.user);
+  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const digits = q.replace(/\D/g, '');
+  const or = [{ clientName: rx }, { tituloTrabajo: rx }, { tipoTrabajo: rx }];
+  if (digits.length >= 4) or.push({ clientPhone: new RegExp(digits) });
+  const quotes = await GeneratedQuote.find({ ...soloVisibles, $or: or })
+    .select('clientName tituloTrabajo tipoTrabajo clientPhone status createdAt precioConDescuento precioConRecargo precioBase')
+    .sort({ createdAt: -1 })
+    .limit(12)
+    .lean();
+  res.json(quotes.map((x) => ({
+    id: String(x._id),
+    cliente: x.clientName || 'Cliente',
+    title: x.tituloTrabajo || x.tipoTrabajo || '',
+    celular: x.clientPhone || '',
+    status: x.status,
+    paid: x.status === 'paid',
+    monto: x.precioConDescuento || x.precioConRecargo || x.precioBase || 0,
+  })));
 });
 
 /* ─────────────── POST /:type/:id/nota ─────────────── */

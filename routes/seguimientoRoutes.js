@@ -3,6 +3,7 @@ import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
 import {
   getSeguimientos,
+  buscarLead,
   addNota,
   deleteNota,
   updateSeguimiento,
@@ -22,6 +23,8 @@ router.use(protect);
 router.use(adminOnly);
 
 router.get('/', getSeguimientos);
+// Buscar lead por nombre/teléfono en cualquier status (para agendar entregas manuales)
+router.get('/buscar-lead', buscarLead);
 // Fireflies: importar acuerdos de sesiones recientes (Haiku extrae fechas/correcciones)
 router.post('/fireflies/sync', syncFireflies);
 router.patch('/:type/:id', updateSeguimiento);
