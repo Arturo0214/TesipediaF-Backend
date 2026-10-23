@@ -347,11 +347,21 @@ export const getSeguimientos = asyncHandler(async (req, res) => {
  * Busca cotizaciones de CUALQUIER status (no solo pagadas) para poder agendar una
  * entrega a un cliente que pagó por fuera del flujo online. Sin esto el selector de
  * "+ Entrega" solo ve las 'paid' y Paula no encuentra al lead. */
+// Regex insensible a acentos Y mayúsculas: "ceon" matchea "Ceón", "garcia" → "García".
+// Paula teclea sin acentos; los nombres guardados sí los traen.
+const sinAcentosRegex = (q) => {
+  const vocal = { a: '[aáàäâ]', e: '[eéèëê]', i: '[iíìïî]', o: '[oóòöô]', u: '[uúùüû]', n: '[nñ]', c: '[cç]' };
+  const base = q.normalize('NFD').replace(/[̀-ͯ]/g, ''); // quita acentos del término buscado
+  const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');          // escapa metacaracteres
+  const pattern = esc.replace(/[aeiouncAEIOUNC]/g, (ch) => vocal[ch.toLowerCase()] || ch);
+  return new RegExp(pattern, 'i');
+};
+
 export const buscarLead = asyncHandler(async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) { res.json([]); return; }
   const soloVisibles = filtroPrivado(req.user);
-  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const rx = sinAcentosRegex(q);
   const digits = q.replace(/\D/g, '');
   const or = [{ clientName: rx }, { tituloTrabajo: rx }, { tipoTrabajo: rx }];
   if (digits.length >= 4) or.push({ clientPhone: new RegExp(digits) });
