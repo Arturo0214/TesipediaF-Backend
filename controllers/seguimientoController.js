@@ -606,7 +606,19 @@ export const addAcuerdo = asyncHandler(async (req, res) => {
     autor: req.user?.name || req.user?.nombre || 'admin',
     creadoEn: new Date(),
   });
-  if (fechaOk) doc.fechaEntrega = fechaOk;
+  if (fechaOk) {
+    doc.fechaEntrega = fechaOk;
+    // Agendar una entrega con fecha de HOY/FUTURO = hay trabajo pendiente otra vez.
+    // Si el proyecto estaba marcado entregado/enviado o con correcciones cerradas, se
+    // REABRE para que la entrega vuelva a aparecer en Hoy/Mañana (antes quedaba oculta
+    // porque la fila se calculaba como "completado" y el tablero la filtraba).
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    if (fechaOk >= hoy) {
+      doc.entregado = false; doc.entregadoEn = null;
+      doc.entregaEnviada = false; doc.entregaEnviadaEn = null;
+      doc.correccionesListas = false; doc.correccionesListasEn = null;
+    }
+  }
   await doc.save();
   if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: fechaOk ? 'agendó una entrega 📦' : 'registró un acuerdo' });
   res.status(201).json({ acuerdos: doc.acuerdos, fechaEntrega: doc.fechaEntrega });
