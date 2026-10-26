@@ -149,6 +149,8 @@ export const getMyDocuments = asyncHandler(async (req, res) => {
     numPages: d.numPages,
     visiblePages: d.status === 'unlocked' ? d.cleanPages.length : d.pages.length,
     locked: d.status !== 'unlocked',
+    createdAt: d.createdAt,        // fecha de subida (para la línea de tiempo del proyecto)
+    updatedAt: d.updatedAt,
   })));
 });
 
