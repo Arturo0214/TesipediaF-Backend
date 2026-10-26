@@ -1,6 +1,13 @@
 import JSZip from 'jszip';
 import sharp from 'sharp';
 import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileP = promisify(execFile);
+const CLOUDINARY_LIMIT = 10 * 1024 * 1024; // 10 MB
 
 /**
  * Comprime archivos antes de subirlos a Cloudinary (tope de 10 MB en el plan free).
@@ -14,11 +21,45 @@ const OFFICE_EXT = /\.(docx|pptx|xlsx)$/i;
 export const compressForUpload = async (buffer, originalname = '') => {
   try {
     if (OFFICE_EXT.test(originalname || '')) return await compressOffice(buffer);
+    // PDFs grandes: recomprimir con Ghostscript (mantiene texto seleccionable)
+    if (/\.pdf$/i.test(originalname || '') && buffer.length > 8 * 1024 * 1024) return await compressPdf(buffer);
   } catch (err) {
     console.warn('[compressUpload] no se pudo comprimir, se sube original:', err.message);
   }
   return { buffer, compressed: false };
 };
+
+/* ─────────── PDF con Ghostscript ─────────── */
+async function runGs(inPath, outPath, preset) {
+  await execFileP('gs', [
+    '-sDEVICE=pdfwrite', '-dCompatibilityLevel=1.5', `-dPDFSETTINGS=/${preset}`,
+    '-dNOPAUSE', '-dQUIET', '-dBATCH', '-dDetectDuplicateImages=true',
+    `-sOutputFile=${outPath}`, inPath,
+  ], { timeout: 180000 });
+}
+
+async function compressPdf(buffer) {
+  const base = path.join(os.tmpdir(), `gspdf_${Date.now()}_${Math.round(Math.random() * 1e6)}`);
+  const inPath = `${base}_in.pdf`, outPath = `${base}_out.pdf`;
+  try {
+    await fs.writeFile(inPath, buffer);
+    // /ebook (150dpi). Si sigue pasado de 10 MB, escalar a /screen (72dpi).
+    await runGs(inPath, outPath, 'ebook');
+    let out = await fs.readFile(outPath).catch(() => null);
+    if (out && out.length > CLOUDINARY_LIMIT) {
+      await runGs(inPath, outPath, 'screen');
+      const out2 = await fs.readFile(outPath).catch(() => null);
+      if (out2 && out2.length < out.length) out = out2;
+    }
+    if (out && out.length > 0 && out.length < buffer.length) return { buffer: out, compressed: true, from: buffer.length, to: out.length };
+    return { buffer, compressed: false };
+  } catch (e) {
+    console.warn('[compressUpload] Ghostscript no disponible/falló:', e.message);
+    return { buffer, compressed: false };
+  } finally {
+    fs.unlink(inPath).catch(() => {}); fs.unlink(outPath).catch(() => {});
+  }
+}
 
 async function compressOffice(buffer) {
   const zip = await JSZip.loadAsync(buffer);

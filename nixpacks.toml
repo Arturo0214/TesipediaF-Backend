@@ -1,0 +1,3 @@
+# Instala Ghostscript (gs) para comprimir PDFs grandes antes de subirlos a Cloudinary.
+[phases.setup]
+aptPkgs = ["ghostscript"]
