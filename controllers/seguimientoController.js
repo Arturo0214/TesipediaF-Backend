@@ -11,6 +11,7 @@ import createNotification from '../utils/createNotification.js';
 import { filtroPrivado } from '../utils/ventasPrivadas.js';
 import { buildInstallments, normalizeEsquema } from '../utils/quoteSchedule.js';
 import notifyCambioProyecto from '../utils/notifyProyectos.js';
+import { compressForUpload } from '../utils/compressUpload.js';
 
 /* ─────────────── helpers ─────────────── */
 const VALID_TYPES = ['quote', 'payment', 'project'];
@@ -461,6 +462,10 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
   // otra cosa" al descargarlo. Un .docx sube y baja como .docx.
   const ext = (String(req.file.originalname || '').match(/\.([a-z0-9]{1,8})$/i)?.[1] || '').toLowerCase();
   const isImage = /^image\//i.test(req.file.mimetype || '');
+  // Comprimir antes de subir (p.ej. .docx con fuentes embebidas de 19 MB → <1 MB),
+  // para no pegar con el tope de 10 MB de Cloudinary.
+  const { buffer: upBuffer, compressed, from, to } = await compressForUpload(req.file.buffer, req.file.originalname);
+  if (compressed) console.log(`[uploadArchivo] comprimido ${(from / 1048576).toFixed(1)}→${(to / 1048576).toFixed(1)} MB: ${req.file.originalname}`);
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
@@ -470,7 +475,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
       },
       (error, uploaded) => (error ? reject(error) : resolve(uploaded)),
     );
-    stream.end(req.file.buffer);
+    stream.end(upBuffer);
   });
 
   doc.archivos.push({
@@ -478,7 +483,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     publicId: result.public_id,
     nombre: req.file.originalname,
     rol: ['soporte', 'final'].includes(req.body?.rol) ? req.body.rol : '',
-    size: req.file.size,
+    size: upBuffer.length,
     tipo: req.file.mimetype,
     subidoPor: req.user?.name || req.user?.nombre || 'admin',
     subidoEn: new Date(),
