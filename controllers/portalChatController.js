@@ -2,6 +2,21 @@ import asyncHandler from 'express-async-handler';
 import PortalMessage from '../models/PortalMessage.js';
 import User from '../models/User.js';
 import { ensureClientAccess } from '../utils/clientAccess.js';
+import { encryptSecret } from '../utils/secretBox.js';
+
+/* ═════════ PORTAL — cuenta ═════════ */
+// POST /portal/change-password { actual, nueva }
+export const changeMyPassword = asyncHandler(async (req, res) => {
+  const { actual, nueva } = req.body || {};
+  if (!nueva || String(nueva).length < 6) { res.status(400); throw new Error('La nueva contraseña debe tener al menos 6 caracteres'); }
+  const user = await User.findById(req.user._id).select('+password +accessPassword');
+  if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
+  if (actual && !(await user.matchPassword(actual))) { res.status(400); throw new Error('Tu contraseña actual no es correcta'); }
+  user.password = nueva;
+  user.accessPassword = encryptSecret(nueva);
+  await user.save();
+  res.json({ ok: true });
+});
 
 const shape = (m) => ({
   id: String(m._id), from: m.from, authorName: m.authorName,

@@ -5,7 +5,7 @@ import {
   uploadClientDocument, unlockClientDocument, listClientDocumentsAdmin,
   deleteClientDocument, getMyDocuments, getDocumentForClient,
 } from '../controllers/clientDocumentController.js';
-import { getMyMessages, sendMyMessage, myUnread } from '../controllers/portalChatController.js';
+import { getMyMessages, sendMyMessage, myUnread, changeMyPassword } from '../controllers/portalChatController.js';
 
 /* ── Admin: subir/procesar/liberar documentos protegidos ── */
 export const adminRouter = express.Router();
@@ -24,5 +24,6 @@ portalRouter.get('/documents/:id', getDocumentForClient);
 portalRouter.get('/messages', getMyMessages);
 portalRouter.get('/messages/unread', myUnread);
 portalRouter.post('/messages', sendMyMessage);
+portalRouter.post('/change-password', changeMyPassword);
 
 export default { adminRouter, portalRouter };
