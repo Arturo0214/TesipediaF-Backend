@@ -75,11 +75,12 @@ const redactPage = (ctx, textContent, viewport) => {
   lines.sort((a, b) => a.y - b.y);
   ctx.fillStyle = '#10151f';
   lines.forEach((L, i) => {
-    // patrón determinista: tapa líneas en posiciones 0,2,3 de cada 5 (~60%), deja 1 y 4 legibles
+    // Censura ligera (~40%): tapa posiciones 1 y 3 de cada 5 líneas. El documento se
+    // lee como real pero NUNCA completo — faltan fragmentos hasta que el cliente pague.
     const m = i % 5;
-    if (m === 0 || m === 2 || m === 3) {
+    if (m === 1 || m === 3) {
       const h = L.h; const w = (L.maxX - L.minX);
-      if (w > 4) ctx.fillRect(L.minX - 3, L.y - h, w + 6, h * 1.25);
+      if (w > 4) ctx.fillRect(L.minX - 3, L.y - h, w + 6, h * 1.2);
     }
   });
 };
