@@ -58,6 +58,32 @@ export const findReferencesStartPage = async (pdf) => {
   return null;
 };
 
+// Censura estilo "documento confidencial": tapa ~60% de las líneas con barras negras,
+// agrupando el texto por línea. Aunque capturen la pantalla, no tienen el texto completo.
+const redactPage = (ctx, textContent, viewport) => {
+  const items = (textContent.items || []).filter((it) => it.str && it.str.trim());
+  const lines = [];
+  for (const it of items) {
+    const tx = pdfjs.Util.transform(viewport.transform, it.transform);
+    const x = tx[4], y = tx[5];
+    const hh = Math.hypot(tx[2], tx[3]) || (it.height * viewport.scale) || 12;
+    const w = (it.width || 0) * viewport.scale;
+    let line = lines.find((L) => Math.abs(L.y - y) < hh * 0.6);
+    if (!line) lines.push({ y, h: hh, minX: x, maxX: x + w });
+    else { line.minX = Math.min(line.minX, x); line.maxX = Math.max(line.maxX, x + w); line.h = Math.max(line.h, hh); }
+  }
+  lines.sort((a, b) => a.y - b.y);
+  ctx.fillStyle = '#10151f';
+  lines.forEach((L, i) => {
+    // patrón determinista: tapa líneas en posiciones 0,2,3 de cada 5 (~60%), deja 1 y 4 legibles
+    const m = i % 5;
+    if (m === 0 || m === 2 || m === 3) {
+      const h = L.h; const w = (L.maxX - L.minX);
+      if (w > 4) ctx.fillRect(L.minX - 3, L.y - h, w + 6, h * 1.25);
+    }
+  });
+};
+
 const bakeWatermark = (ctx, w, h, text) => {
   if (!text) return;
   ctx.save();
@@ -81,7 +107,7 @@ const bakeWatermark = (ctx, w, h, text) => {
  * Renderiza páginas a PNG. { scale, watermark, fromPage, toPage }.
  * Devuelve [{ buffer, width, height, page }].
  */
-export const renderToImages = async (buffer, { scale = 1.6, watermark = '', fromPage = 1, toPage = null } = {}) => {
+export const renderToImages = async (buffer, { scale = 2.1, watermark = '', redact = false, fromPage = 1, toPage = null } = {}) => {
   const pdf = await loadPdf(buffer);
   const last = toPage ? Math.min(toPage, pdf.numPages) : pdf.numPages;
   const out = [];
@@ -93,8 +119,9 @@ export const renderToImages = async (buffer, { scale = 1.6, watermark = '', from
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvasContext: ctx, viewport, canvasFactory }).promise;
+    if (redact) { const tc = await page.getTextContent(); redactPage(ctx, tc, viewport); }
     bakeWatermark(ctx, canvas.width, canvas.height, watermark);
-    out.push({ buffer: canvas.toBuffer('image/jpeg', 0.82), width: canvas.width, height: canvas.height, page: i });
+    out.push({ buffer: canvas.toBuffer('image/jpeg', 0.92), width: canvas.width, height: canvas.height, page: i });
   }
   try { await pdf.destroy(); } catch { /* noop */ }
   return out;
@@ -111,7 +138,7 @@ export const buildLockedPreview = async (buffer, { watermark = 'TESIPEDIA · MUE
   const refStartPage = await findReferencesStartPage(pdf);
   try { await pdf.destroy(); } catch { /* noop */ }
   const toPage = refStartPage ? refStartPage - 1 : numPages; // cortar antes de referencias
-  const images = await renderToImages(buffer, { watermark, toPage });
+  const images = await renderToImages(buffer, { watermark, redact: true, toPage });
   return { numPages, refStartPage, images };
 };
 

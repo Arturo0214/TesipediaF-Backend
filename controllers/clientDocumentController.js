@@ -1,7 +1,21 @@
 import asyncHandler from 'express-async-handler';
 import cloudinary from '../config/cloudinary.js';
 import ClientDocument from '../models/ClientDocument.js';
+import GeneratedQuote from '../models/GeneratedQuote.js';
 import { ensureClientAccess } from '../utils/clientAccess.js';
+import { buildInstallments } from '../utils/quoteSchedule.js';
+
+// Estado de pago del documento (según su cotización ligada).
+// Regla del cliente: si NO ha pagado nada → no puede ver. Si pagó → ve con marca de agua.
+async function estadoPago(doc) {
+  if (!doc.quote) return { pagado: 0, total: 0, haPagado: true, liquidado: false }; // sin cotización ligada: no bloquear
+  const q = await GeneratedQuote.findById(doc.quote).lean();
+  if (!q) return { pagado: 0, total: 0, haPagado: true, liquidado: false };
+  const insts = buildInstallments(q);
+  const pagado = insts.filter((i) => i.status === 'paid').reduce((t, i) => t + (i.amount || 0), 0);
+  const total = insts.reduce((t, i) => t + (i.amount || 0), 0);
+  return { pagado, total, haPagado: pagado > 0.5, liquidado: total > 0 && pagado >= total - 0.5 };
+}
 
 // pdfProtect usa @napi-rs/canvas (binario nativo): carga DIFERIDA para que un fallo
 // de carga del binario no tumbe todo el servidor al arrancar — solo afecta el
@@ -144,24 +158,39 @@ export const deleteClientDocument = asyncHandler(async (req, res) => {
 // GET /portal/documents  → lista los documentos del cliente logueado
 export const getMyDocuments = asyncHandler(async (req, res) => {
   const docs = await ClientDocument.find({ client: req.user._id }).sort({ createdAt: -1 }).lean();
-  res.json(docs.map((d) => ({
-    id: String(d._id), title: d.title, status: d.status,
-    numPages: d.numPages,
-    visiblePages: d.status === 'unlocked' ? d.cleanPages.length : d.pages.length,
-    locked: d.status !== 'unlocked',
-    createdAt: d.createdAt,        // fecha de subida (para la línea de tiempo del proyecto)
-    updatedAt: d.updatedAt,
-  })));
+  const out = await Promise.all(docs.map(async (d) => {
+    const pago = await estadoPago(d);
+    return {
+      id: String(d._id), title: d.title, status: d.status,
+      numPages: d.numPages,
+      visiblePages: d.status === 'unlocked' ? d.cleanPages.length : d.pages.length,
+      locked: d.status !== 'unlocked',
+      cannotView: !pago.haPagado,   // si no ha pagado NADA, no puede ver el documento
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    };
+  }));
+  res.json(out);
 });
 
 // GET /portal/documents/:id  → páginas (URLs firmadas) según estado + descarga si liberado
 export const getDocumentForClient = asyncHandler(async (req, res) => {
   const doc = await ClientDocument.findOne({ _id: req.params.id, client: req.user._id }).lean();
   if (!doc) { res.status(404); throw new Error('Documento no encontrado'); }
+  const pago = await estadoPago(doc);
+  // Candado por pago: si no ha pagado nada, NO puede ver el documento
+  if (!pago.haPagado) {
+    res.json({
+      id: String(doc._id), title: doc.title, status: doc.status, locked: true, cannotView: true,
+      numPages: doc.numPages, pages: [], download: null,
+      message: 'Realiza tu primer pago para desbloquear la lectura de tu documento.',
+    });
+    return;
+  }
   const unlocked = doc.status === 'unlocked';
   const src = unlocked ? doc.cleanPages : doc.pages;
   res.json({
-    id: String(doc._id), title: doc.title, status: doc.status, locked: !unlocked,
+    id: String(doc._id), title: doc.title, status: doc.status, locked: !unlocked, cannotView: false,
     numPages: doc.numPages,
     watermark: unlocked ? '' : doc.watermark,
     pages: src.map((p) => ({ page: p.page, width: p.width, height: p.height, url: signedUrl(p.publicId, 'image') })),
