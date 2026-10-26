@@ -50,6 +50,7 @@ import noticiasRoutes from './routes/noticiasRoutes.js';
 import bibliotecaRoutes from './routes/bibliotecaRoutes.js';
 import clientAccessRoutes from './routes/clientAccessRoutes.js';
 import { adminRouter as clientDocsAdminRouter, portalRouter as portalRouter } from './routes/clientDocumentRoutes.js';
+import clientChatRoutes from './routes/clientChatRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 import { startResolveCampaignsCron } from './cron/resolveCampaignsCron.js';
@@ -198,6 +199,7 @@ app.use('/biblioteca', bibliotecaRoutes);
 app.use('/client-access', clientAccessRoutes);
 app.use('/client-docs', clientDocsAdminRouter);
 app.use('/portal', portalRouter);
+app.use('/client-chat', clientChatRoutes);
 
 // Middlewares de error
 app.use(notFound);
