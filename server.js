@@ -48,6 +48,8 @@ import detectorRoutes from './routes/detectorRoutes.js';
 import guiasStoreRoutes from './routes/guiasStoreRoutes.js';
 import noticiasRoutes from './routes/noticiasRoutes.js';
 import bibliotecaRoutes from './routes/bibliotecaRoutes.js';
+import clientAccessRoutes from './routes/clientAccessRoutes.js';
+import { adminRouter as clientDocsAdminRouter, portalRouter as portalRouter } from './routes/clientDocumentRoutes.js';
 import { startRevenueSyncCron } from './cron/revenueSyncCron.js';
 import { startPaymentReminderCron } from './cron/paymentReminderCron.js';
 import { startResolveCampaignsCron } from './cron/resolveCampaignsCron.js';
@@ -193,6 +195,9 @@ app.use('/detector', detectorRoutes);
 app.use('/guias', guiasStoreRoutes);
 app.use('/noticias', noticiasRoutes);
 app.use('/biblioteca', bibliotecaRoutes);
+app.use('/client-access', clientAccessRoutes);
+app.use('/client-docs', clientDocsAdminRouter);
+app.use('/portal', portalRouter);
 
 // Middlewares de error
 app.use(notFound);

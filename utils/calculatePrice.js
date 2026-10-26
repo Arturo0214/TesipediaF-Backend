@@ -5,46 +5,50 @@ const calculatePrice = (areaEstudios, nivelEstudios, extension, fechaEntrega, pa
   const isArticulo = taskType && taskType.toLowerCase().includes('artículo');
 
   // Determinar precio por página según tipo, área y nivel
-  // PRECIOS BASE AL 100% (Modalidad Tesipedia)
+  // PRECIOS BASE AL 100% (Modalidad Tesipedia / integral).
+  // RECALIBRADO 2026-10-24 a precios REALES: mediana de lo vendido ($101/pág) +
+  // lo más cotizado ($110/pág) → base ~$105/pág en Licenciatura integral. Antes la
+  // tabla estaba ~2x inflada ($220/pág) vs lo que de verdad se cobra. La corrección
+  // (×0.5) cae en ~$52/pág, dentro del rango real vendido ($51-70).
   if (isArticulo) {
-    // Precios especiales para Artículos Científicos
+    // Precios especiales para Artículos Científicos (premium)
     switch (nivelEstudios) {
       case 'Preparatoria':
-        precioPorPagina = isSaludOrMath ? 300 : 270;
+        precioPorPagina = isSaludOrMath ? 145 : 130;
         break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 380 : 350;
+        precioPorPagina = isSaludOrMath ? 180 : 165;
         break;
       case 'Maestría':
       case 'Especialidad':
       case 'Diplomado':
-        precioPorPagina = isSaludOrMath ? 450 : 410;
+        precioPorPagina = isSaludOrMath ? 215 : 195;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 520 : 480;
+        precioPorPagina = isSaludOrMath ? 250 : 230;
         break;
       default:
-        precioPorPagina = 450;
+        precioPorPagina = 195;
     }
   } else {
     // Precios estándar para Tesis, Tesinas, etc.
     switch (nivelEstudios) {
       case 'Preparatoria':
-        precioPorPagina = isSaludOrMath ? 200 : 170;
+        precioPorPagina = isSaludOrMath ? 95 : 82;
         break;
       case 'Licenciatura':
-        precioPorPagina = isSaludOrMath ? 250 : 220;
+        precioPorPagina = isSaludOrMath ? 120 : 105;
         break;
       case 'Maestría':
       case 'Especialidad':
       case 'Diplomado':
-        precioPorPagina = isSaludOrMath ? 300 : 270;
+        precioPorPagina = isSaludOrMath ? 145 : 128;
         break;
       case 'Doctorado':
-        precioPorPagina = isSaludOrMath ? 350 : 320;
+        precioPorPagina = isSaludOrMath ? 165 : 150;
         break;
       default:
-        precioPorPagina = 300;
+        precioPorPagina = 128;
     }
   }
 

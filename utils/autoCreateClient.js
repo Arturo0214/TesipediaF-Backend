@@ -5,6 +5,8 @@
  */
 import User from '../models/User.js';
 import { sendWhatsAppText } from './sendWhatsAppNotification.js';
+import { encryptSecret } from './secretBox.js';
+import { nextSeq } from '../models/Counter.js';
 
 /**
  * Genera una contraseña genérica basada en el nombre del cliente
@@ -85,12 +87,18 @@ export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhon
       existingUser.phone = phoneFormatted;
       await existingUser.save();
     }
+    // Asignar número de cliente si aún no tiene (cuentas viejas)
+    if (!existingUser.clientNumber) {
+      existingUser.clientNumber = await nextSeq('clientNumber', 1000);
+      await existingUser.save();
+    }
     const loginId = actualEmail ? existingUser.email : (existingUser.phone || existingUser.email);
     return { user: existingUser, isNew: false, password: null, loginIdentifier: loginId };
   }
 
   // Crear nuevo usuario
   const password = manualPassword || generateGenericPassword(clientName);
+  const clientNumber = await nextSeq('clientNumber', 1000);
 
   const newUser = await User.create({
     name: clientName || 'Cliente',
@@ -99,6 +107,9 @@ export const autoCreateClientUser = async ({ clientName, clientEmail, clientPhon
     password,
     role: 'cliente',
     isActive: true,
+    clientNumber,
+    // Guardada CIFRADA para que el equipo la pueda revelar luego (portal del cliente)
+    accessPassword: encryptSecret(password),
   });
 
   // El identificador de login: si tiene email real usa email, si no usa teléfono

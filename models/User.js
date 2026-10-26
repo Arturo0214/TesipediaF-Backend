@@ -43,6 +43,13 @@ const userSchema = new mongoose.Schema(
     },
     resetPasswordToken: String,              // 🆕 Token hashed
     resetPasswordExpires: Date,              // 🆕 Fecha de expiración
+
+    // 🔑 Portal del cliente: contraseña autogenerada guardada CIFRADA (AES-GCM, utils/secretBox)
+    // para que el equipo la pueda revelar y decirle al cliente "entra aquí con esto".
+    // El login real sigue validando contra `password` (bcrypt); esto es solo para mostrarla.
+    accessPassword: { type: String, select: false, default: '' },
+    // Número de cliente amigable ("Cliente #1234") asignado al crear la cuenta.
+    clientNumber: { type: Number, index: true },
   },
   {
     timestamps: true,
