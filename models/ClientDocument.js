@@ -35,6 +35,10 @@ const clientDocumentSchema = new mongoose.Schema(
       publicId: { type: String, default: '' },
       bytes: { type: Number, default: 0 },
     },
+    viewPdf: {                                          // PDF de VISTA protegido (marca agua + censura + sin referencias)
+      publicId: { type: String, default: '' },
+      bytes: { type: Number, default: 0 },
+    },
 
     uploadedBy: { type: String, default: '' },
     unlockedAt: { type: Date, default: null },

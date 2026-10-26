@@ -8,6 +8,7 @@
  */
 import { createCanvas } from '@napi-rs/canvas';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { PDFDocument as PDFLibDoc, StandardFonts, rgb, degrees } from 'pdf-lib';
 
 // Factory de canvas para que pdf.js renderice en Node (@napi-rs/canvas, prebuilt)
 const canvasFactory = {
@@ -152,4 +153,60 @@ export const buildCleanImages = async (buffer) => {
   return { numPages, images };
 };
 
-export default { findReferencesStartPage, renderToImages, buildLockedPreview, buildCleanImages };
+/**
+ * Genera el PDF de VISTA protegida (PDF real, no imágenes):
+ *  - quita las páginas de referencias/bibliografía,
+ *  - TAPA ~40% de las líneas con barras negras sobre el texto,
+ *  - hornea la marca de agua diagonal.
+ * El visor lo renderiza SIN capa de texto (no seleccionable) y sin descarga.
+ * @returns { numPages, refStartPage, pdf: Buffer }
+ */
+export const buildViewPdf = async (buffer, { watermark = 'TESIPEDIA' } = {}) => {
+  const src = await loadPdf(buffer);
+  const numPages = src.numPages;
+  const refStartPage = await findReferencesStartPage(src);
+  const lastPage = refStartPage ? refStartPage - 1 : numPages;
+
+  // Recolectar barras de censura por página (coords PDF, origen abajo-izquierda)
+  const redactByPage = {};
+  for (let i = 1; i <= lastPage; i++) {
+    const page = await src.getPage(i);
+    const tc = await page.getTextContent();
+    const items = (tc.items || []).filter((it) => it.str && it.str.trim());
+    const lines = [];
+    for (const it of items) {
+      const x = it.transform[4], y = it.transform[5];
+      const h = Math.hypot(it.transform[2], it.transform[3]) || it.height || 11;
+      const w = it.width || 0;
+      let L = lines.find((l) => Math.abs(l.y - y) < h * 0.6);
+      if (!L) lines.push({ y, h, minX: x, maxX: x + w });
+      else { L.minX = Math.min(L.minX, x); L.maxX = Math.max(L.maxX, x + w); L.h = Math.max(L.h, h); }
+    }
+    lines.sort((a, b) => b.y - a.y); // de arriba hacia abajo
+    const rects = [];
+    lines.forEach((L, idx) => {
+      const m = idx % 5;
+      if (m === 1 || m === 3) { const w = L.maxX - L.minX; if (w > 4) rects.push({ x: L.minX - 3, y: L.y - L.h * 0.25, w: w + 6, h: L.h * 1.2 }); }
+    });
+    redactByPage[i] = rects;
+  }
+  try { await src.destroy(); } catch { /* noop */ }
+
+  const out = await PDFLibDoc.load(buffer);
+  if (refStartPage) { for (let i = out.getPageCount() - 1; i >= refStartPage - 1; i--) out.removePage(i); }
+  const font = await out.embedFont(StandardFonts.Helvetica);
+  out.getPages().forEach((page, idx) => {
+    const { width, height } = page.getSize();
+    for (const r of (redactByPage[idx + 1] || [])) page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgb(0.06, 0.08, 0.12) });
+    // marca de agua diagonal repetida
+    const size = Math.max(22, Math.round(width / 20));
+    for (let yy = -height * 0.1; yy < height * 1.1; yy += size * 5) {
+      for (let xx = -width * 0.1; xx < width * 1.1; xx += size * 12) {
+        page.drawText(watermark, { x: xx, y: yy, size, font, color: rgb(0.15, 0.3, 0.75), opacity: 0.1, rotate: degrees(28) });
+      }
+    }
+  });
+  return { numPages, refStartPage, pdf: Buffer.from(await out.save()) };
+};
+
+export default { findReferencesStartPage, renderToImages, buildLockedPreview, buildCleanImages, buildViewPdf };

@@ -42,20 +42,17 @@ const destroyAssets = async (publicIds, resource_type = 'image') => {
   }
 };
 
-/* ─────────── procesar + guardar (estado BLOQUEADO) ─────────── */
+/* ─────────── procesar + guardar (estado BLOQUEADO) ───────────
+ * Genera un PDF de vista protegido (marca de agua + censura + sin referencias)
+ * y guarda también el original limpio para descarga al liberar. */
 async function processLocked(docId, pdfBuffer, watermark) {
-  const { buildLockedPreview } = await loadPdfProtect();
-  const { numPages, refStartPage, images } = await buildLockedPreview(pdfBuffer, { watermark });
-  const folder = `tesipedia/client-docs/${docId}/preview`;
-  const pages = [];
-  for (const img of images) {
-    const r = await uploadBuffer(img.buffer, { folder, resource_type: 'image', format: 'jpg' });
-    pages.push({ publicId: r.public_id, width: img.width, height: img.height, page: img.page });
-  }
-  // original limpio (para descarga al liberar)
+  const { buildViewPdf } = await loadPdfProtect();
+  const { numPages, refStartPage, pdf } = await buildViewPdf(pdfBuffer, { watermark });
+  const view = await uploadBuffer(pdf, { folder: `tesipedia/client-docs/${docId}/view`, resource_type: 'raw', format: 'pdf' });
   const orig = await uploadBuffer(pdfBuffer, { folder: `tesipedia/client-docs/${docId}`, resource_type: 'raw', format: 'pdf' });
   await ClientDocument.findByIdAndUpdate(docId, {
-    status: 'locked', numPages, refStartPage, pages,
+    status: 'locked', numPages, refStartPage, pages: [],
+    viewPdf: { publicId: view.public_id, bytes: pdf.length },
     original: { publicId: orig.public_id, bytes: pdfBuffer.length },
     error: '',
   });
@@ -100,31 +97,15 @@ export const uploadClientDocument = asyncHandler(async (req, res) => {
   });
 });
 
-// POST /client-docs/:id/unlock  → genera imágenes limpias + habilita descarga del original
+// POST /client-docs/:id/unlock  → libera: el cliente ve/descarga el PDF original limpio
 export const unlockClientDocument = asyncHandler(async (req, res) => {
   const doc = await ClientDocument.findById(req.params.id);
   if (!doc) { res.status(404); throw new Error('Documento no encontrado'); }
   if (!doc.original?.publicId) { res.status(400); throw new Error('No hay original para liberar'); }
-
-  // Descargar el original desde Cloudinary para re-renderizar limpio
-  const url = signedUrl(doc.original.publicId, 'raw');
-  const resp = await fetch(url);
-  if (!resp.ok) { res.status(500); throw new Error('No se pudo leer el original'); }
-  const pdfBuffer = Buffer.from(await resp.arrayBuffer());
-
-  const { buildCleanImages } = await loadPdfProtect();
-  const { images } = await buildCleanImages(pdfBuffer);
-  const folder = `tesipedia/client-docs/${doc._id}/clean`;
-  const cleanPages = [];
-  for (const img of images) {
-    const r = await uploadBuffer(img.buffer, { folder, resource_type: 'image', format: 'jpg' });
-    cleanPages.push({ publicId: r.public_id, width: img.width, height: img.height, page: img.page });
-  }
-  doc.cleanPages = cleanPages;
   doc.status = 'unlocked';
   doc.unlockedAt = new Date();
   await doc.save();
-  res.json({ id: String(doc._id), status: doc.status, cleanPages: cleanPages.length });
+  res.json({ id: String(doc._id), status: doc.status });
 });
 
 // GET /client-docs?quoteId=&projectId=&clientId=   (admin: listar)
@@ -147,8 +128,8 @@ export const listClientDocumentsAdmin = asyncHandler(async (req, res) => {
 export const deleteClientDocument = asyncHandler(async (req, res) => {
   const doc = await ClientDocument.findById(req.params.id);
   if (!doc) { res.status(404); throw new Error('No encontrado'); }
-  await destroyAssets([...doc.pages, ...doc.cleanPages].map((p) => p.publicId), 'image');
-  await destroyAssets([doc.original?.publicId], 'raw');
+  await destroyAssets([...(doc.pages || []), ...(doc.cleanPages || [])].map((p) => p.publicId), 'image');
+  await destroyAssets([doc.original?.publicId, doc.viewPdf?.publicId], 'raw');
   await doc.deleteOne();
   res.json({ ok: true });
 });
@@ -163,7 +144,7 @@ export const getMyDocuments = asyncHandler(async (req, res) => {
     return {
       id: String(d._id), title: d.title, status: d.status,
       numPages: d.numPages,
-      visiblePages: d.status === 'unlocked' ? d.cleanPages.length : d.pages.length,
+      visiblePages: d.status === 'unlocked' ? d.numPages : (d.refStartPage ? d.refStartPage - 1 : d.numPages),
       locked: d.status !== 'unlocked',
       cannotView: !pago.haPagado,   // si no ha pagado NADA, no puede ver el documento
       createdAt: d.createdAt,
@@ -188,12 +169,12 @@ export const getDocumentForClient = asyncHandler(async (req, res) => {
     return;
   }
   const unlocked = doc.status === 'unlocked';
-  const src = unlocked ? doc.cleanPages : doc.pages;
+  // Liberado → PDF limpio (original). Bloqueado → PDF de vista protegido (marca agua + censura + sin refs).
+  const viewId = unlocked ? (doc.original?.publicId) : (doc.viewPdf?.publicId || doc.original?.publicId);
   res.json({
     id: String(doc._id), title: doc.title, status: doc.status, locked: !unlocked, cannotView: false,
     numPages: doc.numPages,
-    watermark: unlocked ? '' : doc.watermark,
-    pages: src.map((p) => ({ page: p.page, width: p.width, height: p.height, url: signedUrl(p.publicId, 'image') })),
+    pdfUrl: viewId ? signedUrl(viewId, 'raw') : null,
     download: unlocked && doc.original?.publicId ? signedUrl(doc.original.publicId, 'raw') : null,
   });
 });
