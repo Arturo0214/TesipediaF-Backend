@@ -593,11 +593,15 @@ export const deleteComprobante = asyncHandler(async (req, res) => {
 export const addAcuerdo = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
   const { texto, fechaEntrega } = req.body;
+  console.log('[addAcuerdo] IN', { type, id, fechaEntrega, texto: String(texto || '').slice(0, 60), user: req.user?.name || req.user?.nombre });
   if ((!texto || !texto.trim()) && !fechaEntrega) {
     res.status(400); throw new Error('El acuerdo necesita correcciones o una fecha de entrega');
   }
   const doc = await resolveDoc(type, id);
-  if (!doc) { res.status(400); throw new Error('id inválido'); }
+  if (!doc) {
+    console.warn('[addAcuerdo] ❌ id inválido / resolveDoc null', { type, id });
+    res.status(400); throw new Error('id inválido');
+  }
   const fechaOk = parseFechaEntrega(fechaEntrega);
   doc.acuerdos.push({
     texto: (texto || '').trim(),
@@ -620,6 +624,7 @@ export const addAcuerdo = asyncHandler(async (req, res) => {
     }
   }
   await doc.save();
+  console.log('[addAcuerdo] ✅ guardado', { segId: String(doc._id), quote: String(doc.quote || ''), fechaEntrega: doc.fechaEntrega, nAcuerdos: doc.acuerdos.length });
   if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: fechaOk ? 'agendó una entrega 📦' : 'registró un acuerdo' });
   res.status(201).json({ acuerdos: doc.acuerdos, fechaEntrega: doc.fechaEntrega });
 });
