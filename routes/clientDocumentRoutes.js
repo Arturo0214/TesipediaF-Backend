@@ -3,7 +3,7 @@ import { protect, adminOnly } from '../middleware/authMiddleware.js';
 import upload from '../middleware/multer.js';
 import {
   uploadClientDocument, unlockClientDocument, listClientDocumentsAdmin,
-  deleteClientDocument, getMyDocuments, getDocumentForClient,
+  deleteClientDocument, getMyDocuments, getDocumentForClient, getMyFinalFiles,
 } from '../controllers/clientDocumentController.js';
 import { getMyMessages, sendMyMessage, myUnread, changeMyPassword } from '../controllers/portalChatController.js';
 
@@ -19,6 +19,7 @@ adminRouter.delete('/:id', deleteClientDocument);
 export const portalRouter = express.Router();
 portalRouter.use(protect);
 portalRouter.get('/documents', getMyDocuments);
+portalRouter.get('/final-files', getMyFinalFiles);
 portalRouter.get('/documents/:id', getDocumentForClient);
 // Mini-chat del cliente con el equipo
 portalRouter.get('/messages', getMyMessages);

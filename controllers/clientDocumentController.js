@@ -2,6 +2,8 @@ import asyncHandler from 'express-async-handler';
 import cloudinary from '../config/cloudinary.js';
 import ClientDocument from '../models/ClientDocument.js';
 import GeneratedQuote from '../models/GeneratedQuote.js';
+import Project from '../models/Project.js';
+import Seguimiento from '../models/Seguimiento.js';
 import { ensureClientAccess } from '../utils/clientAccess.js';
 import { buildInstallments } from '../utils/quoteSchedule.js';
 
@@ -154,6 +156,72 @@ export const getMyDocuments = asyncHandler(async (req, res) => {
   res.json(out);
 });
 
+// GET /portal/final-files → documentos FINALES subidos por el equipo en el board de
+// Proyectos (modelo Seguimiento, rol: 'final'). Se liberan al cliente SIN marca de agua
+// a partir de su SEGUNDO pago (2+ parcialidades pagadas) o si ya liquidó. Antes: bloqueados.
+// Puente que antes no existía: el board guardaba los finales pero nunca llegaban al portal.
+const asAttachment = (url) =>
+  url && url.includes('/upload/') ? url.replace('/upload/', '/upload/fl_attachment/') : url;
+
+const contarPagadas = async (seg) => {
+  // Preferir las parcialidades de la cotización (ahí marca el admin el estado real).
+  if (seg.quote) {
+    const q = await GeneratedQuote.findById(seg.quote).lean();
+    if (q) {
+      const insts = buildInstallments(q);
+      const paidCount = insts.filter((i) => i.status === 'paid').length;
+      const total = insts.reduce((t, i) => t + (i.amount || 0), 0);
+      const paid = insts.filter((i) => i.status === 'paid').reduce((t, i) => t + (i.amount || 0), 0);
+      return { paidCount, liquidado: total > 0 && paid >= total - 0.5 };
+    }
+  }
+  // Fallback: calendario del pago ligado al proyecto.
+  if (seg.project) {
+    const p = await Project.findById(seg.project).populate('payment', 'schedule amount').lean();
+    const sched = p?.payment?.schedule || [];
+    const paidCount = sched.filter((s) => s.status === 'paid').length;
+    const total = sched.reduce((t, s) => t + (s.amount || 0), 0);
+    const paid = sched.filter((s) => s.status === 'paid').reduce((t, s) => t + (s.amount || 0), 0);
+    return { paidCount, liquidado: total > 0 && paid >= total - 0.5 };
+  }
+  return { paidCount: 0, liquidado: false };
+};
+
+export const getMyFinalFiles = asyncHandler(async (req, res) => {
+  const projects = await Project.find({ client: req.user._id }).select('_id generatedQuote').lean();
+  const quoteIds = projects.map((p) => p.generatedQuote).filter(Boolean);
+  const projectIds = projects.map((p) => p._id);
+  if (!quoteIds.length && !projectIds.length) return res.json([]);
+
+  const segs = await Seguimiento.find({
+    $or: [{ quote: { $in: quoteIds } }, { project: { $in: projectIds } }],
+  }).lean();
+
+  const out = [];
+  for (const seg of segs) {
+    const finales = (seg.archivos || []).filter((a) => a.rol === 'final');
+    if (!finales.length) continue;
+    const { paidCount, liquidado } = await contarPagadas(seg);
+    const unlocked = paidCount >= 2 || liquidado;
+    finales.forEach((a, idx) => {
+      const ext = (a.nombre || '').split('.').pop()?.toLowerCase() || '';
+      out.push({
+        id: `seg:${seg._id}:${idx}`,
+        title: a.nombre || 'Documento final',
+        ext,
+        tipo: a.tipo || '',
+        createdAt: a.subidoEn || seg.updatedAt,
+        isBoardFile: true,
+        locked: !unlocked,
+        download: unlocked ? asAttachment(a.url) : null,
+        message: unlocked ? '' : 'Disponible sin marca de agua al realizar tu segundo pago.',
+      });
+    });
+  }
+  out.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(out);
+});
+
 // GET /portal/documents/:id  → páginas (URLs firmadas) según estado + descarga si liberado
 export const getDocumentForClient = asyncHandler(async (req, res) => {
   const doc = await ClientDocument.findOne({ _id: req.params.id, client: req.user._id }).lean();
@@ -181,5 +249,5 @@ export const getDocumentForClient = asyncHandler(async (req, res) => {
 
 export default {
   uploadClientDocument, unlockClientDocument, listClientDocumentsAdmin,
-  deleteClientDocument, getMyDocuments, getDocumentForClient,
+  deleteClientDocument, getMyDocuments, getDocumentForClient, getMyFinalFiles,
 };

@@ -1355,6 +1355,18 @@ export const updateGeneratedQuote = asyncHandler(async (req, res) => {
     }
   }
 
+  // Si se EDITAN las fechas de pago de una cotización que YA estaba pagada, la fecha
+  // de cierre (paidAt) debe seguir al nuevo primer pago. Si no, Revenue y la lista de
+  // Pagos agrupan por el paidAt viejo y la venta se queda en el mes anterior
+  // (bug: Julián pagó el 1-nov pero seguía como venta de octubre).
+  if (req.body.paidAt !== undefined) {
+    const d = new Date(req.body.paidAt);
+    if (!isNaN(d.getTime())) quote.paidAt = d;
+  } else if (scheduleChanged && quote.status === 'paid') {
+    const fechasTexto = parseDatesFromText(quote.esquemaPago);
+    if (fechasTexto[0]) quote.paidAt = fechasTexto[0];
+  }
+
   // Update status if provided
   if (newStatus) {
     quote.status = newStatus;
