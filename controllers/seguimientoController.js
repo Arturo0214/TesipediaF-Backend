@@ -391,7 +391,8 @@ export const addNota = asyncHandler(async (req, res) => {
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   const autor = req.user?.name || req.user?.nombre || 'admin';
-  doc.notas.push({ texto: texto.trim(), autor, fecha: new Date() });
+  const entregaNota = Number.isInteger(Number(req.body?.entrega)) ? Number(req.body.entrega) : null;
+  doc.notas.push({ texto: texto.trim(), autor, fecha: new Date(), entrega: entregaNota });
   await doc.save();
   // 💬 Comentario nuevo → badge en Proyectos + notificación a Arturo y Paula (nunca al autor)
   if (doc.quote) notifyCambioProyecto(req, { quoteId: doc.quote, accion: texto.startsWith('📨') ? 'dejó mensaje para el cliente 📨' : 'agregó un comentario 💬', priority: texto.startsWith('📨') ? 'high' : 'medium' });
@@ -487,6 +488,7 @@ export const uploadArchivo = asyncHandler(async (req, res) => {
     tipo: req.file.mimetype,
     subidoPor: req.user?.name || req.user?.nombre || 'admin',
     subidoEn: new Date(),
+    entrega: Number.isInteger(Number(req.body?.entrega)) ? Number(req.body.entrega) : null,
   });
   await doc.save();
   if (doc.quote) {
@@ -609,6 +611,7 @@ export const addAcuerdo = asyncHandler(async (req, res) => {
     fuente: 'manual',
     autor: req.user?.name || req.user?.nombre || 'admin',
     creadoEn: new Date(),
+    entrega: Number.isInteger(Number(req.body?.entrega)) ? Number(req.body.entrega) : null,
   });
   if (fechaOk) {
     doc.fechaEntrega = fechaOk;

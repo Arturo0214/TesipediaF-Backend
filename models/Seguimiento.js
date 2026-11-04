@@ -11,6 +11,7 @@ const notaSchema = new mongoose.Schema({
   texto: { type: String, required: true, trim: true },
   fecha: { type: Date, default: Date.now },
   autor: { type: String, default: '' },
+  entrega: { type: Number, default: null }, // n.º de entrega (parcialidad) a la que pertenece
 }, { _id: true });
 
 const archivoSchema = new mongoose.Schema({
@@ -23,6 +24,7 @@ const archivoSchema = new mongoose.Schema({
   tipo: { type: String, default: '' },
   subidoPor: { type: String, default: '' },
   subidoEn: { type: Date, default: Date.now },
+  entrega: { type: Number, default: null }, // n.º de entrega (parcialidad) a la que pertenece
 }, { _id: true });
 
 // Comprobante de pago ligado a UNA parcialidad (installmentIdx = índice en installmentStatuses).
@@ -49,6 +51,7 @@ const acuerdoSchema = new mongoose.Schema({
   meetingDate: { type: Date, default: null },
   autor: { type: String, default: '' },
   creadoEn: { type: Date, default: Date.now },
+  entrega: { type: Number, default: null }, // n.º de entrega (parcialidad) a la que pertenece
 }, { _id: true });
 
 const seguimientoSchema = new mongoose.Schema({
