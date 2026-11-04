@@ -710,6 +710,10 @@ export const contactAdvisor = asyncHandler(async (req, res) => {
       estado_sofia: 'esperando_aprobacion',
       modo_humano: true,
       auto_paused: true,
+      // 🆕 Persistir el MOTIVO del escalado en el lead. Antes solo viajaba en la
+      // notificación (pasajera) y se perdía: al abrir el chat el equipo no sabía
+      // por qué el cliente pedía asesor y parecía una cotización normal.
+      motivo_intervencion: motivo || 'Pidió hablar con un asesor',
       updated_at: new Date().toISOString(),
     }),
   });
