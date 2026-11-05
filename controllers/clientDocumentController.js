@@ -148,7 +148,7 @@ export const getMyDocuments = asyncHandler(async (req, res) => {
       numPages: d.numPages,
       visiblePages: d.status === 'unlocked' ? d.numPages : (d.refStartPage ? d.refStartPage - 1 : d.numPages),
       locked: d.status !== 'unlocked',
-      cannotView: !pago.haPagado,   // si no ha pagado NADA, no puede ver el documento
+      cannotView: d.status !== 'unlocked' && !pago.haPagado,   // liberado = siempre visible; si no, requiere pago
       createdAt: d.createdAt,
       updatedAt: d.updatedAt,
     };
@@ -163,6 +163,16 @@ export const getMyDocuments = asyncHandler(async (req, res) => {
 const asAttachment = (url) =>
   url && url.includes('/upload/') ? url.replace('/upload/', '/upload/fl_attachment/') : url;
 
+// Etiqueta de entrega para el cliente (mismo modelo que el admin): el 1er pago es
+// adelanto, 1ª entrega = 2º pago…; 101,102… = Correcciones 1,2…; null = 1ª entrega.
+const ORD_ENT_FF = ['', '1ª', '2ª', '3ª', '4ª', '5ª', '6ª', '7ª', '8ª', '9ª', '10ª'];
+const labelEntrega = (value, nPagos) => {
+  const v = value == null ? 1 : Number(value);
+  if (v >= 101) return `Correcciones ${v - 100}`;
+  const numEnt = nPagos <= 1 ? 1 : nPagos - 1;
+  return numEnt === 1 ? 'Entrega' : `${ORD_ENT_FF[v] || `${v}ª`} entrega`;
+};
+
 const contarPagadas = async (seg) => {
   // Preferir las parcialidades de la cotización (ahí marca el admin el estado real).
   if (seg.quote) {
@@ -172,7 +182,7 @@ const contarPagadas = async (seg) => {
       const paidCount = insts.filter((i) => i.status === 'paid').length;
       const total = insts.reduce((t, i) => t + (i.amount || 0), 0);
       const paid = insts.filter((i) => i.status === 'paid').reduce((t, i) => t + (i.amount || 0), 0);
-      return { paidCount, liquidado: total > 0 && paid >= total - 0.5 };
+      return { paidCount, liquidado: total > 0 && paid >= total - 0.5, nPagos: insts.length };
     }
   }
   // Fallback: calendario del pago ligado al proyecto.
@@ -182,9 +192,9 @@ const contarPagadas = async (seg) => {
     const paidCount = sched.filter((s) => s.status === 'paid').length;
     const total = sched.reduce((t, s) => t + (s.amount || 0), 0);
     const paid = sched.filter((s) => s.status === 'paid').reduce((t, s) => t + (s.amount || 0), 0);
-    return { paidCount, liquidado: total > 0 && paid >= total - 0.5 };
+    return { paidCount, liquidado: total > 0 && paid >= total - 0.5, nPagos: sched.length };
   }
-  return { paidCount: 0, liquidado: false };
+  return { paidCount: 0, liquidado: false, nPagos: 1 };
 };
 
 export const getMyFinalFiles = asyncHandler(async (req, res) => {
@@ -201,15 +211,19 @@ export const getMyFinalFiles = asyncHandler(async (req, res) => {
   for (const seg of segs) {
     const finales = (seg.archivos || []).filter((a) => a.rol === 'final');
     if (!finales.length) continue;
-    const { paidCount, liquidado } = await contarPagadas(seg);
-    const unlocked = paidCount >= 2 || liquidado;
+    const { paidCount, liquidado, nPagos } = await contarPagadas(seg);
+    const unlocked = seg.docLiberado || paidCount >= 2 || liquidado;
     finales.forEach((a, idx) => {
       const ext = (a.nombre || '').split('.').pop()?.toLowerCase() || '';
+      const editable = ['doc', 'docx', 'rtf', 'odt'].includes(ext);
       out.push({
         id: `seg:${seg._id}:${idx}`,
         title: a.nombre || 'Documento final',
         ext,
         tipo: a.tipo || '',
+        editable,
+        entrega: a.entrega ?? 1,
+        entregaLabel: labelEntrega(a.entrega, nPagos),
         createdAt: a.subidoEn || seg.updatedAt,
         isBoardFile: true,
         locked: !unlocked,
@@ -227,8 +241,9 @@ export const getDocumentForClient = asyncHandler(async (req, res) => {
   const doc = await ClientDocument.findOne({ _id: req.params.id, client: req.user._id }).lean();
   if (!doc) { res.status(404); throw new Error('Documento no encontrado'); }
   const pago = await estadoPago(doc);
-  // Candado por pago: si no ha pagado nada, NO puede ver el documento
-  if (!pago.haPagado) {
+  // Candado por pago: si no ha pagado nada, NO puede ver el documento (salvo que ya
+  // esté liberado/unlocked por el equipo).
+  if (!pago.haPagado && doc.status !== 'unlocked') {
     res.json({
       id: String(doc._id), title: doc.title, status: doc.status, locked: true, cannotView: true,
       numPages: doc.numPages, pages: [], download: null,

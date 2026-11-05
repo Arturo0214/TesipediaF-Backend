@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import GeneratedQuote from '../models/GeneratedQuote.js';
 import Project from '../models/Project.js';
 import Seguimiento from '../models/Seguimiento.js';
+import ClientDocument from '../models/ClientDocument.js';
 import Notification from '../models/Notification.js';
 import cloudinary from '../config/cloudinary.js';
 import supabaseAdmin from '../config/supabaseAdmin.js';
@@ -287,6 +288,8 @@ export async function buildSeguimientoRows(user = null) {
       correccionesListas: !!seg?.correccionesListas,
       entregaEnviada: !!seg?.entregaEnviada,
       entregaEnviadaEn: seg?.entregaEnviadaEn || null,
+      docLiberado: !!seg?.docLiberado,
+      docLiberadoEn: seg?.docLiberadoEn || null,
       pdfUrl: q.pdfUrl || null,
       folio: q.folio || '',
       celular,
@@ -412,7 +415,7 @@ export const deleteNota = asyncHandler(async (req, res) => {
 /* ─────────────── PATCH /:type/:id (overrides manuales) ─────────────── */
 export const updateSeguimiento = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
-  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal, entregaEnviada, urgente } = req.body;
+  const { vendedor, fechaEntrega, estado, nombre, prioritario, entregado, correccionesListas, personal, entregaEnviada, urgente, docLiberado } = req.body;
   const doc = await resolveDoc(type, id);
   if (!doc) { res.status(400); throw new Error('id inválido'); }
   if (vendedor !== undefined) doc.vendedor = vendedor;
@@ -434,6 +437,27 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
     doc.entregaEnviada = !!entregaEnviada;
     doc.entregaEnviadaEn = entregaEnviada ? new Date() : null;
   }
+  if (docLiberado !== undefined) {
+    doc.docLiberado = !!docLiberado;
+    doc.docLiberadoEn = docLiberado ? new Date() : null;
+    // Reflejar en los documentos protegidos del cliente: liberar (unlocked = sin marca
+    // de agua, sin censura, con bibliografía, descargable) o re-bloquear.
+    if (doc.quote) {
+      try {
+        if (docLiberado) {
+          await ClientDocument.updateMany(
+            { quote: doc.quote, 'original.publicId': { $exists: true, $ne: '' } },
+            { $set: { status: 'unlocked', unlockedAt: new Date() } }
+          );
+        } else {
+          await ClientDocument.updateMany(
+            { quote: doc.quote, status: 'unlocked' },
+            { $set: { status: 'locked' } }
+          );
+        }
+      } catch (e) { console.warn('[updateSeguimiento] No se pudieron actualizar ClientDocuments:', e.message); }
+    }
+  }
   await doc.save();
   // Notificar el cambio al otro (Arturo/Paula) + refresco en vivo de Proyectos
   if (doc.quote) {
@@ -445,10 +469,11 @@ export const updateSeguimiento = asyncHandler(async (req, res) => {
     if (fechaEntrega !== undefined) cambios.push('cambió la fecha de entrega');
     if (prioritario !== undefined) cambios.push(prioritario ? 'marcó Prioritario ⭐' : 'quitó Prioritario');
     if (personal !== undefined) cambios.push(personal ? 'marcó PERSONAL' : 'quitó PERSONAL');
+    if (docLiberado !== undefined) cambios.push(docLiberado ? 'liberó el documento al cliente 🔓' : 're-bloqueó el documento');
     const accion = cambios.join(', ') || 'actualizó el proyecto';
     notifyCambioProyecto(req, { quoteId: doc.quote, accion, priority: (entregado !== undefined || urgente) ? 'high' : 'medium' });
   }
-  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn, correccionesListas: doc.correccionesListas, entregaEnviada: doc.entregaEnviada });
+  res.json({ vendedor: doc.vendedor, fechaEntrega: doc.fechaEntrega, estado: doc.estado, nombre: doc.nombre, prioritario: doc.prioritario, entregado: doc.entregado, entregadoEn: doc.entregadoEn, correccionesListas: doc.correccionesListas, entregaEnviada: doc.entregaEnviada, docLiberado: doc.docLiberado, docLiberadoEn: doc.docLiberadoEn });
 });
 
 /* ─────────────── POST /:type/:id/archivo (upload Cloudinary) ─────────────── */

@@ -73,6 +73,11 @@ const seguimientoSchema = new mongoose.Schema({
   // Última milla: Paula marca si el archivo final YA se envió al cliente
   entregaEnviada: { type: Boolean, default: false },
   entregaEnviadaEn: { type: Date, default: null },
+  // 🔓 Liberar documento al cliente: al prenderlo, se desbloquean sus documentos
+  // protegidos (sin marca de agua, sin censura, con bibliografía, descargables) y se
+  // habilita la versión editable. Lo marca el equipo cuando el cliente ya pagó.
+  docLiberado: { type: Boolean, default: false },
+  docLiberadoEn: { type: Date, default: null },
   vendedor: { type: String, default: '' },
   fechaEntrega: { type: Date, default: null },
   estado: {
