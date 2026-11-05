@@ -166,11 +166,11 @@ const asAttachment = (url) =>
 // Etiqueta de entrega para el cliente (mismo modelo que el admin): el 1er pago es
 // adelanto, 1ª entrega = 2º pago…; 101,102… = Correcciones 1,2…; null = 1ª entrega.
 const ORD_ENT_FF = ['', '1ª', '2ª', '3ª', '4ª', '5ª', '6ª', '7ª', '8ª', '9ª', '10ª'];
-const labelEntrega = (value, nPagos) => {
+const labelEntrega = (value) => {
   const v = value == null ? 1 : Number(value);
   if (v >= 101) return `Correcciones ${v - 100}`;
-  const numEnt = nPagos <= 1 ? 1 : nPagos - 1;
-  return numEnt === 1 ? 'Entrega' : `${ORD_ENT_FF[v] || `${v}ª`} entrega`;
+  // Siempre numerada: 1ª entrega = 2º pago, 2ª entrega = 3er pago…
+  return `${ORD_ENT_FF[v] || `${v}ª`} entrega`;
 };
 
 const contarPagadas = async (seg) => {
